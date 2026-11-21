@@ -40,6 +40,9 @@
 | `AUTH_SECRET` | ✅ | `openssl rand -hex 32` (تغييره يُلغي كل الجلسات والرموز) |
 | `DASHBOARD_PASSWORD` | ✅ | كلمة مرور اللوحة، 12 حرفاً على الأقل |
 | `CRON_SECRET` | ✅ | `openssl rand -hex 32`، و Vercel يرسله تلقائياً مع مهام cron |
+| `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHAT_ID` | مستحسن | الإشعارات على تلكرام، وكود الدخول بخطوتين |
+| `TWO_FACTOR` | | `off` لإطفاء كود الدخول عند الطوارئ |
+| `CANARY_USERNAME` | | حساب عام يُفحص به كل مصدر يومياً (افتراضياً `instagram`) |
 | `OWNER_EMAIL` | مستحسن | إيميلك، وتُشارَك معه الشيتات الجديدة |
 | `APP_URL` | مستحسن | رابط النشر النهائي، مثل `https://scrapers.vercel.app` |
 | `APIFY_TOKEN` | للاكتشاف | من حسابك في Apify |

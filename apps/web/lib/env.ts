@@ -25,6 +25,7 @@ export function integrationStatus() {
     graph: !!(process.env.IG_BUSINESS_ACCOUNT_ID && process.env.IG_GRAPH_TOKEN),
     ai: !!process.env.ANTHROPIC_API_KEY,
     sheets: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+    telegram: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
     cron: !!process.env.CRON_SECRET,
   };
 }

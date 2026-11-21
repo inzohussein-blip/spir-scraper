@@ -1,5 +1,6 @@
 export * from "./extract/index.js";
 export * from "./normalize.js";
+export * from "./notify.js";
 export * from "./pipeline/router.js";
 export * from "./pipeline/service.js";
 export * from "./scoring.js";

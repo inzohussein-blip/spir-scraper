@@ -20,7 +20,18 @@ const SOURCE_CAPABILITY: Record<Exclude<Source["type"], "upload">, Capability> =
   hashtag: "hashtag_posters",
 };
 
+export type ProviderHealthEvent =
+  | {
+      provider: ProviderId;
+      status: "down";
+      reason: "rate_limited" | "blocked" | "budget";
+      message: string;
+    }
+  | { provider: ProviderId; status: "up" };
+
 export interface RouterOptions {
+  /** Called when a provider starts resting and when it works again. */
+  onHealth?: (e: ProviderHealthEvent) => void;
   /** How long a provider rests after a 429 or a block. */
   cooldownMs?: number;
   now?: () => number;
@@ -35,6 +46,8 @@ export interface RouterOptions {
 export class ProviderRouter {
   private readonly cooldownUntil = new Map<ProviderId, number>();
   private readonly nextSlot = new Map<ProviderId, number>();
+  private readonly down = new Set<ProviderId>();
+  private readonly onHealth: ((e: ProviderHealthEvent) => void) | undefined;
   private readonly cooldownMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -44,6 +57,7 @@ export class ProviderRouter {
     opts: RouterOptions = {},
   ) {
     this.cooldownMs = opts.cooldownMs ?? 15 * 60_000;
+    this.onHealth = opts.onHealth;
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
@@ -65,15 +79,25 @@ export class ProviderRouter {
   }
 
   private rest(p: Provider, err: unknown): boolean {
-    if (
-      err instanceof RateLimitedError ||
-      err instanceof BlockedError ||
-      err instanceof BudgetExceededError
-    ) {
-      this.cooldownUntil.set(p.id, this.now() + this.cooldownMs);
-      return true;
+    const reason =
+      err instanceof RateLimitedError
+        ? "rate_limited"
+        : err instanceof BlockedError
+          ? "blocked"
+          : err instanceof BudgetExceededError
+            ? "budget"
+            : null;
+    if (!reason) return false;
+    this.cooldownUntil.set(p.id, this.now() + this.cooldownMs);
+    if (!this.down.has(p.id)) {
+      this.down.add(p.id);
+      this.onHealth?.({ provider: p.id, status: "down", reason, message: (err as Error).message });
     }
-    return false;
+    return true;
+  }
+
+  private ok(p: Provider) {
+    if (this.down.delete(p.id)) this.onHealth?.({ provider: p.id, status: "up" });
   }
 
   supports(cap: Capability): boolean {
@@ -85,7 +109,9 @@ export class ProviderRouter {
     for (const p of this.available("profile")) {
       await this.throttle(p);
       try {
-        return { profile: await p.getProfile(username), provider: p.id };
+        const profile = await p.getProfile(username);
+        this.ok(p);
+        return { profile, provider: p.id };
       } catch (err) {
         if (err instanceof NotFoundError) throw err;
         if (!this.rest(p, err)) errors.push(`${p.id}: ${(err as Error).message}`);
@@ -112,6 +138,7 @@ export class ProviderRouter {
           out.add(u.toLowerCase());
           if (out.size >= limit) break;
         }
+        this.ok(p);
         return { usernames: [...out], provider: p.id };
       } catch (err) {
         this.rest(p, err);

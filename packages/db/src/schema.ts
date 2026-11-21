@@ -161,3 +161,47 @@ export type NewProfile = typeof profiles.$inferInsert;
 export type Lead = typeof leads.$inferSelect;
 export type NewLead = typeof leads.$inferInsert;
 export type Suppression = typeof suppression.$inferSelect;
+
+/** Who did what and from where: logins, failed logins and changes (dashboard "النشاط"). */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** owner | api:<key name> | mcp | system */
+    actor: text("actor").notNull(),
+    action: text("action").notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    ip: text("ip"),
+  },
+  (t) => [
+    index("audit_action_at_idx").on(t.action, t.at.desc()),
+    index("audit_at_idx").on(t.at.desc()),
+  ],
+);
+
+/** Bell notifications in the dashboard, also pushed to Telegram when configured. */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** job | provider | budget | ai | security | system */
+    type: text("type").notNull(),
+    /** info | ok | warn | bad */
+    level: text("level").notNull().default("info"),
+    title: text("title").notNull(),
+    body: text("body"),
+    url: text("url"),
+    /** Same key within 30 minutes is not repeated. */
+    dedupeKey: text("dedupe_key"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("notifications_at_idx").on(t.at.desc()),
+    index("notifications_key_idx").on(t.dedupeKey, t.at.desc()),
+  ],
+);
+
+export type AuditEntry = typeof auditLog.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;

@@ -49,6 +49,8 @@ export async function createTestRuntime(
     scorer?: Scorer;
     sheetsRequest?: GoogleRequest;
     owner?: string;
+    env?: Record<string, string>;
+    telegramFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   } = {},
 ): Promise<TestRuntime> {
   const pg = new PGlite();
@@ -63,12 +65,13 @@ export async function createTestRuntime(
   boss.on("error", () => {});
   await boss.start();
   const runtime = await createRuntime(
-    { SUPPRESSION_PEPPER: "test", OWNER_EMAIL: opts.owner ?? "owner@example.com" },
+    { SUPPRESSION_PEPPER: "test", OWNER_EMAIL: opts.owner ?? "owner@example.com", ...opts.env },
     {
       db,
       boss,
       providers: opts.providers ?? [fakeWorker],
       scorer: opts.scorer ?? null,
+      ...(opts.telegramFetch ? { telegramFetch: opts.telegramFetch } : {}),
       ...(opts.sheetsRequest
         ? { sheetsRequest: opts.sheetsRequest, sheetsEmail: "sa@test.iam" }
         : {}),

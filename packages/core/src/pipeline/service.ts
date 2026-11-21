@@ -1,5 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
-import { type AnyDb, apiKeys, jobs, leads, profiles, projects, suppression } from "@scrapers/db";
+import {
+  type AnyDb,
+  apiKeys,
+  auditLog,
+  jobs,
+  leads,
+  notifications,
+  profiles,
+  projects,
+  suppression,
+} from "@scrapers/db";
 import {
   and,
   desc,
@@ -16,6 +26,7 @@ import {
 } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { extractContact } from "../extract/index.js";
+import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
 import { NotFoundError, type RawProfile, type Source } from "../types.js";
@@ -95,8 +106,55 @@ export function createScrapers(deps: {
   config: ScrapersConfig;
   /** Optional AI scorer (needs ANTHROPIC_API_KEY). */
   scorer?: Scorer | undefined;
+  /** Extra places notifications go, e.g. Telegram. */
+  sinks?: NotificationSink[];
+  /** Public dashboard URL, used to build links in notifications. */
+  appUrl?: string;
 }) {
   const { db, boss, router, config, scorer } = deps;
+  const sinks = deps.sinks ?? [];
+
+  /** Stores a bell notification (deduplicated for 30 minutes) and forwards it to the sinks. */
+  async function notify(n: NotificationInput): Promise<boolean> {
+    const key = n.key ?? `${n.type}:${n.title}`;
+    const since = new Date(Date.now() - 30 * 60_000);
+    const [recent] = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(and(eq(notifications.dedupeKey, key), gte(notifications.at, since)))
+      .limit(1);
+    if (recent) return false;
+    const clean: NotificationInput = {
+      ...n,
+      title: redactSecrets(n.title).slice(0, 140),
+      ...(n.body ? { body: redactSecrets(n.body).slice(0, 600) } : {}),
+    };
+    await db.insert(notifications).values({
+      type: clean.type,
+      level: clean.level,
+      title: clean.title,
+      body: clean.body ?? null,
+      url: clean.url ?? null,
+      dedupeKey: key,
+    });
+    const link =
+      clean.url && deps.appUrl ? `${deps.appUrl.replace(/\/$/, "")}${clean.url}` : undefined;
+    for (const sink of sinks) {
+      await sink
+        .send({ ...clean, ...(link ? { link } : {}) })
+        .catch((err) => console.error("[notify]", redactSecrets(String(err))));
+    }
+    return true;
+  }
+
+  async function jobLabel(jobId: string) {
+    const [row] = await db
+      .select({ sourceUrl: jobs.sourceUrl, counts: jobs.counts, project: projects.name })
+      .from(jobs)
+      .innerJoin(projects, eq(projects.id, jobs.projectId))
+      .where(eq(jobs.id, jobId));
+    return row;
+  }
   const maxLimit = config.maxJobLimit ?? 1000;
 
   async function bump(jobId: string, delta: Record<string, number>) {
@@ -116,7 +174,7 @@ export function createScrapers(deps: {
 
   /** Marks a running job done once every discovered account is accounted for. */
   async function finishIfComplete(jobId: string) {
-    await db
+    const finished = await db
       .update(jobs)
       .set({ status: "done", finishedAt: new Date() })
       .where(
@@ -126,7 +184,20 @@ export function createScrapers(deps: {
           sql`coalesce((${jobs.counts}->>'enriched')::int, 0) + coalesce((${jobs.counts}->>'skipped')::int, 0)
             + coalesce((${jobs.counts}->>'failed')::int, 0) >= coalesce((${jobs.counts}->>'discovered')::int, 0)`,
         ),
-      );
+      )
+      .returning({ id: jobs.id });
+    if (finished.length === 0) return;
+    const j = await jobLabel(jobId);
+    if (!j) return;
+    const c = j.counts;
+    await notify({
+      type: "job",
+      level: (c.failed ?? 0) > (c.enriched ?? 0) ? "warn" : "ok",
+      title: `انتهت مهمة ${j.project}`,
+      body: `${j.sourceUrl}\nمكتشفة ${c.discovered ?? 0} · جُلبت ${c.enriched ?? 0} · بوسيلة تواصل ${c.leads ?? 0} · فشلت ${c.failed ?? 0}`,
+      url: `/jobs/${jobId}`,
+      key: `job-done:${jobId}`,
+    });
   }
 
   async function isSuppressed(
@@ -193,6 +264,15 @@ export function createScrapers(deps: {
         .update(jobs)
         .set({ status: "failed", error: (err as Error).message, finishedAt: new Date() })
         .where(eq(jobs.id, job.id));
+      const label = await jobLabel(job.id);
+      await notify({
+        type: "job",
+        level: "bad",
+        title: `فشلت مهمة ${label?.project ?? ""}`.trim(),
+        body: `${job.sourceUrl}\n${(err as Error).message}`,
+        url: `/jobs/${job.id}`,
+        key: `job-failed:${job.id}`,
+      });
       return;
     }
 
@@ -296,6 +376,14 @@ export function createScrapers(deps: {
       const scores = await scorer.collectBatch(batchId);
       if (!scores) continue;
       await saveScores(scores);
+      await notify({
+        type: "ai",
+        level: "ok",
+        title: "اكتمل التقييم بالذكاء الاصطناعي",
+        body: `قُيّم ${scores.size} حساباً`,
+        url: `/jobs/${j.id}`,
+        key: `ai-batch:${batchId}`,
+      });
       await db
         .update(jobs)
         .set({
@@ -516,6 +604,108 @@ export function createScrapers(deps: {
     },
 
     drain,
+    notify,
+
+    /** Numbers for the overview page, including leads per day for the last 7 days. */
+    async overviewStats() {
+      const since = new Date(Date.now() - 7 * 86_400_000);
+      const [totals] = await db
+        .select({
+          leads: sql<number>`count(*)::int`,
+          withContact: sql<number>`count(*) filter (where ${leads.email} is not null or ${leads.phoneE164} is not null or ${leads.phoneRaw} is not null)::int`,
+          scored: sql<number>`count(*) filter (where ${leads.aiScore} is not null)::int`,
+        })
+        .from(leads);
+      const [jobTotals] = await db
+        .select({
+          active: sql<number>`count(*) filter (where ${jobs.status} in ('queued', 'running'))::int`,
+          today: sql<number>`count(*) filter (where ${jobs.createdAt} >= date_trunc('day', now()))::int`,
+          failed7d: sql<number>`count(*) filter (where ${jobs.status} = 'failed' and ${jobs.createdAt} >= ${since.toISOString()}::timestamptz)::int`,
+        })
+        .from(jobs);
+      const days = await db
+        .select({
+          day: sql<string>`to_char(date_trunc('day', ${leads.createdAt}), 'YYYY-MM-DD')`,
+          n: sql<number>`count(*)::int`,
+        })
+        .from(leads)
+        .where(gte(leads.createdAt, since))
+        .groupBy(sql`1`);
+      const byDay = new Map(days.map((d) => [d.day, d.n]));
+      const series = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(Date.now() - (6 - i) * 86_400_000).toISOString().slice(0, 10);
+        return { day: d, leads: byDay.get(d) ?? 0 };
+      });
+      return {
+        leads: totals?.leads ?? 0,
+        withContact: totals?.withContact ?? 0,
+        scored: totals?.scored ?? 0,
+        activeJobs: jobTotals?.active ?? 0,
+        jobsToday: jobTotals?.today ?? 0,
+        failedJobs7d: jobTotals?.failed7d ?? 0,
+        series,
+      };
+    },
+
+    async listNotifications(limit = 30) {
+      return db
+        .select()
+        .from(notifications)
+        .orderBy(desc(notifications.at))
+        .limit(Math.min(limit, 200));
+    },
+
+    async unreadNotifications() {
+      const [row] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(notifications)
+        .where(isNull(notifications.readAt));
+      return row?.n ?? 0;
+    },
+
+    async markNotificationsRead() {
+      await db
+        .update(notifications)
+        .set({ readAt: new Date() })
+        .where(isNull(notifications.readAt));
+    },
+
+    /** Records an action in the activity log. Secrets in the detail are redacted. */
+    async audit(entry: {
+      actor: string;
+      action: string;
+      detail?: Record<string, unknown>;
+      ip?: string | null;
+    }) {
+      const detail = entry.detail
+        ? (JSON.parse(redactSecrets(JSON.stringify(entry.detail))) as Record<string, unknown>)
+        : null;
+      await db
+        .insert(auditLog)
+        .values({ actor: entry.actor, action: entry.action, detail, ip: entry.ip ?? null });
+    },
+
+    async listAudit(opts: { limit?: number; action?: string } = {}) {
+      return db
+        .select()
+        .from(auditLog)
+        .where(opts.action ? eq(auditLog.action, opts.action) : undefined)
+        .orderBy(desc(auditLog.at))
+        .limit(Math.min(opts.limit ?? 100, 500));
+    },
+
+    /** Failed logins in the last window, for this IP and in total (lockout). */
+    async failedLogins(ip: string | null, windowMs = 10 * 60_000) {
+      const since = new Date(Date.now() - windowMs);
+      const [row] = await db
+        .select({
+          all: sql<number>`count(*)::int`,
+          mine: sql<number>`count(*) filter (where ${auditLog.ip} = ${ip ?? ""})::int`,
+        })
+        .from(auditLog)
+        .where(and(eq(auditLog.action, "login.failed"), gte(auditLog.at, since)));
+      return { ip: row?.mine ?? 0, all: row?.all ?? 0 };
+    },
 
     async getProject(projectId: string) {
       const [p] = await db.select().from(projects).where(eq(projects.id, projectId));

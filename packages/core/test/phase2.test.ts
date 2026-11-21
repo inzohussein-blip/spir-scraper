@@ -143,3 +143,27 @@ describe("API keys and lookups", () => {
     }
   });
 });
+
+describe("overview stats", () => {
+  it("counts leads, contacts, jobs and a 7-day series", async () => {
+    const t = await setup([worker()]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(names(8)), limit: 10 });
+      while ((await t.scrapers.drain({ budgetMs: 5_000 })).activeJobs > 0);
+      const s = await t.scrapers.overviewStats();
+      expect(s).toMatchObject({
+        leads: 8,
+        withContact: 4,
+        scored: 0,
+        activeJobs: 0,
+        jobsToday: 1,
+        failedJobs7d: 0,
+      });
+      expect(s.series).toHaveLength(7);
+      expect(s.series.at(-1)?.leads).toBe(8);
+    } finally {
+      await t.close();
+    }
+  });
+});

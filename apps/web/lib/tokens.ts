@@ -5,7 +5,7 @@ import { jwtVerify, SignJWT } from "jose";
  * Stateless signed tokens (HS256) for the dashboard session and the OAuth
  * flow claude.ai uses to connect. Rotating AUTH_SECRET revokes all of them.
  */
-export type TokenType = "session" | "client" | "code" | "access" | "refresh";
+export type TokenType = "session" | "login" | "client" | "code" | "access" | "refresh";
 
 const ISSUER = "scrapers";
 

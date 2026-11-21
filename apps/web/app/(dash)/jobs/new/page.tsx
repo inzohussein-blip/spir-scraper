@@ -39,7 +39,7 @@ export default async function NewJob({
           </Select>
         </Field>
 
-        <fieldset className="space-y-4 rounded-lg border border-[var(--line)] p-4">
+        <fieldset className="space-y-4 rounded-lg border border-line p-4">
           <legend className="px-1 text-sm font-medium">المصدر: اختر طريقة واحدة</legend>
           <Field
             label="رابط حساب منافس أو منشور أو هاشتاق"
@@ -63,7 +63,7 @@ export default async function NewJob({
               <option value="hashtag">هاشتاق</option>
             </Select>
           </Field>
-          <div className="text-center text-xs text-[var(--muted)]">أو</div>
+          <div className="text-center text-xs text-muted">أو</div>
           <Field label="ملف CSV بالمعرّفات" hint="عمود username أو روابط حسابات. مجاني دائماً.">
             <input name="csv" type="file" accept=".csv,text/csv" className="text-sm" />
           </Field>

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { Button, Card, Notice } from "@/components/ui";
+import { audit } from "@/lib/audit";
 import { hasSession } from "@/lib/auth";
 import { authSecret } from "@/lib/env";
 import { sign, verify } from "@/lib/tokens";
@@ -54,6 +55,7 @@ export default async function Authorize({ searchParams }: { searchParams: Promis
       { cid: p.client_id.slice(-16), redirect_uri: p.redirect_uri, challenge: p.code_challenge },
       300,
     );
+    await audit("oauth.approve", { client: ok.client.name, redirect: p.redirect_uri });
     const target = new URL(p.redirect_uri);
     target.searchParams.set("code", code);
     if (p.state) target.searchParams.set("state", p.state);
@@ -76,7 +78,7 @@ export default async function Authorize({ searchParams }: { searchParams: Promis
           يطلب <strong>{v.client.name}</strong> الوصول إلى Scrapers: بدء المهام، وقراءة العملاء،
           والتصدير.
         </p>
-        <p className="ltr mb-6 truncate text-xs text-[var(--muted)]">{p.redirect_uri}</p>
+        <p className="ltr mb-6 truncate text-xs text-muted">{p.redirect_uri}</p>
         <div className="flex gap-3">
           <form action={approve}>
             <Button type="submit">سماح</Button>

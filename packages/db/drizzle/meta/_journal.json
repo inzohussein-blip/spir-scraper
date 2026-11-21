@@ -15,6 +15,20 @@
       "when": 1795271918741,
       "tag": "0001_enable_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795290177176,
+      "tag": "0002_audit_and_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795290177821,
+      "tag": "0003_rls_audit_notifications",
+      "breakpoints": true
     }
   ]
 }

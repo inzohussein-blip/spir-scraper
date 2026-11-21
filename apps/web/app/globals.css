@@ -1,37 +1,219 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
-  --color-brand: oklch(0.55 0.17 262);
-  --color-brand-soft: oklch(0.95 0.03 262);
+/* IBM Plex Sans Arabic (Arabic + Latin, OFL), self-hosted so every device renders the same. */
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/plex-arabic-400.woff2") format("woff2");
+  unicode-range:
+    U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0898-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/plex-arabic-500.woff2") format("woff2");
+  unicode-range:
+    U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0898-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/plex-arabic-600.woff2") format("woff2");
+  unicode-range:
+    U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0898-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/plex-arabic-700.woff2") format("woff2");
+  unicode-range:
+    U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0898-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/plex-latin-400.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/plex-latin-500.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/plex-latin-600.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Plex Arabic";
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/plex-latin-700.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* Design tokens shared with the Spir bot panel. */
 :root {
+  --bg: #f6f7fb;
+  --bg-2: #eef0f6;
+  --surface: #ffffff;
+  --surface-2: #f8f9fc;
+  --border: #e4e7ef;
+  --border-strong: #d3d8e4;
+  --text: #121826;
+  --text-2: #4a5468;
+  --muted: #7b8498;
+  --accent: #5b5bf7;
+  --accent-2: #7c6cff;
+  --accent-soft: #ecebff;
+  --accent-text: #ffffff;
+  --ok: #0f9f6e;
+  --ok-soft: #e3f6ee;
+  --warn: #c27a00;
+  --warn-soft: #fdf1da;
+  --bad: #d63d4b;
+  --bad-soft: #fde8ea;
+  --info: #2f7de1;
+  --info-soft: #e5f0fd;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
   color-scheme: light;
-  --bg: oklch(0.985 0 0);
-  --card: #fff;
-  --fg: oklch(0.21 0.02 262);
-  --muted: oklch(0.55 0.02 262);
-  --line: oklch(0.92 0.01 262);
 }
-
+:root[data-theme="dark"] {
+  --bg: #0b0d13;
+  --bg-2: #10131b;
+  --surface: #141822;
+  --surface-2: #191e2a;
+  --border: #232938;
+  --border-strong: #2e3547;
+  --text: #e8ebf3;
+  --text-2: #b4bccc;
+  --muted: #828ba0;
+  --accent: #7b7bff;
+  --accent-2: #9a8cff;
+  --accent-soft: #23234a;
+  --accent-text: #0b0d13;
+  --ok: #34d39a;
+  --ok-soft: #10302a;
+  --warn: #f2b84b;
+  --warn-soft: #382a10;
+  --bad: #ff6b78;
+  --bad-soft: #3a1a20;
+  --info: #6aa8ff;
+  --info-soft: #14284a;
+  --shadow-sm: none;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 10px 30px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    --bg: #0b0d13;
+    --bg-2: #10131b;
+    --surface: #141822;
+    --surface-2: #191e2a;
+    --border: #232938;
+    --border-strong: #2e3547;
+    --text: #e8ebf3;
+    --text-2: #b4bccc;
+    --muted: #828ba0;
+    --accent: #7b7bff;
+    --accent-2: #9a8cff;
+    --accent-soft: #23234a;
+    --accent-text: #0b0d13;
+    --ok: #34d39a;
+    --ok-soft: #10302a;
+    --warn: #f2b84b;
+    --warn-soft: #382a10;
+    --bad: #ff6b78;
+    --bad-soft: #3a1a20;
+    --info: #6aa8ff;
+    --info-soft: #14284a;
+    --shadow-sm: none;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 10px 30px rgba(0, 0, 0, 0.35);
     color-scheme: dark;
-    --bg: oklch(0.17 0.01 262);
-    --card: oklch(0.21 0.015 262);
-    --fg: oklch(0.95 0.01 262);
-    --muted: oklch(0.7 0.02 262);
-    --line: oklch(0.3 0.02 262);
   }
 }
 
+@theme inline {
+  --font-sans: "Plex Arabic", "IBM Plex Sans Arabic", "Segoe UI", Tahoma, system-ui, sans-serif;
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-fg-2: var(--text-2);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+}
+
+html,
 body {
   background: var(--bg);
-  color: var(--fg);
+  color: var(--text);
+}
+body {
+  font-size: 14.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  /* Fixed-width digits so tables and counters do not jump. */
+  font-variant-numeric: tabular-nums;
+}
+h1,
+h2,
+h3,
+b,
+strong {
+  font-weight: 650;
 }
 
 .ltr {
   direction: ltr;
-  unicode-bidi: isolate;
+  unicode-bidi: plaintext;
+  text-align: left;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.pulse {
+  animation: pulse-dot 2s infinite;
 }

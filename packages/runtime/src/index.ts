@@ -2,7 +2,9 @@ import { AnthropicScorer } from "@scrapers/ai";
 import {
   createScrapers,
   type LeadFilters,
+  type NotificationSink,
   type Provider,
+  type ProviderHealthEvent,
   ProviderRouter,
   type Scorer,
   type Scrapers,
@@ -17,8 +19,11 @@ import {
   toCsv,
   toXlsx,
 } from "@scrapers/exporters";
-import { providersFromEnv } from "@scrapers/providers";
+import { ApifyProvider, providersFromEnv } from "@scrapers/providers";
 import { PgBoss } from "pg-boss";
+import { type FetchLike, TelegramNotifier } from "./telegram.js";
+
+export * from "./telegram.js";
 
 export type ExportFormat = "csv" | "xlsx" | "sheet";
 
@@ -43,6 +48,10 @@ export interface Runtime {
   /** Service-account email to share spreadsheets with, when Sheets is configured. */
   sheetsEmail: string | null;
   exportLeads(req: ExportRequest): Promise<ExportResult>;
+  /** Telegram channel to the owner (notifications, login codes), when configured. */
+  telegram: TelegramNotifier | null;
+  /** Daily check: free-credit level and whether each provider still answers. */
+  healthCheck(): Promise<{ provider: string; ok: boolean; detail: string }[]>;
   close(): Promise<void>;
 }
 
@@ -55,6 +64,8 @@ export interface RuntimeOverrides {
   sheetsEmail?: string;
   /** Serverless hosts (Vercel): no background supervision or cron inside pg-boss. */
   serverless?: boolean;
+  sinks?: NotificationSink[];
+  telegramFetch?: FetchLike;
   onClose?: () => Promise<void>;
 }
 
@@ -92,11 +103,26 @@ export async function createRuntime(
       ? undefined
       : (o.scorer ?? (env.ANTHROPIC_API_KEY ? new AnthropicScorer() : undefined));
 
+  const telegram =
+    env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
+      ? new TelegramNotifier(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID, o.telegramFetch)
+      : null;
+  const providers = o.providers ?? providersFromEnv(env);
+  const REASONS = {
+    rate_limited: "تجاوز حد الطلبات",
+    blocked: "محجوب أو يطلب تسجيل دخول",
+    budget: "انتهى الرصيد",
+  } as const;
+  let onHealth = (_e: ProviderHealthEvent) => {};
+  const router = new ProviderRouter(providers, { onHealth: (e) => onHealth(e) });
+
   const scrapers = createScrapers({
     db,
     boss,
-    router: new ProviderRouter(o.providers ?? providersFromEnv(env)),
+    router,
     scorer,
+    sinks: [...(telegram ? [telegram] : []), ...(o.sinks ?? [])],
+    ...(env.APP_URL ? { appUrl: env.APP_URL } : {}),
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,
       maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 1000),
@@ -104,6 +130,26 @@ export async function createRuntime(
     },
   });
   await scrapers.init();
+  onHealth = (e) => {
+    const sent =
+      e.status === "down"
+        ? scrapers.notify({
+            type: e.reason === "budget" ? "budget" : "provider",
+            level: e.reason === "budget" ? "warn" : "bad",
+            title: `المصدر ${e.provider}: ${REASONS[e.reason]}`,
+            body: `${e.message}\nتنتقل المهام للمصدر التالي، وتُعاد المحاولة بعد 15 دقيقة.`,
+            url: "/settings",
+            key: `provider-down:${e.provider}`,
+          })
+        : scrapers.notify({
+            type: "provider",
+            level: "ok",
+            title: `المصدر ${e.provider} رجع يشتغل`,
+            url: "/settings",
+            key: `provider-up:${e.provider}`,
+          });
+    sent.catch(() => {});
+  };
 
   let sheets: { request: GoogleRequest; email: string } | null = null;
   if (o.sheetsRequest)
@@ -165,6 +211,54 @@ export async function createRuntime(
         ...(owner.includes("@") ? { shareWith: owner } : {}),
       });
       return { kind: "sheet", count: rows.length, ...result };
+    },
+
+    telegram,
+
+    async healthCheck() {
+      const results: { provider: string; ok: boolean; detail: string }[] = [];
+      const canary = env.CANARY_USERNAME || "instagram";
+      for (const p of providers) {
+        if (p instanceof ApifyProvider) {
+          // Checking the credit is free; fetching a profile would spend it.
+          try {
+            const left = await p.remainingBudgetUsd();
+            results.push({
+              provider: p.id,
+              ok: left > 0.5,
+              detail: `$${left.toFixed(2)} remaining this month`,
+            });
+            if (left <= 0.5) {
+              await scrapers.notify({
+                type: "budget",
+                level: "warn",
+                title: "رصيد Apify قارب على النفاد",
+                body: `المتبقي هذا الشهر ≈ $${left.toFixed(2)}`,
+                url: "/settings",
+                key: "apify-budget-low",
+              });
+            }
+          } catch (err) {
+            results.push({ provider: p.id, ok: false, detail: (err as Error).message });
+          }
+          continue;
+        }
+        try {
+          await p.getProfile(canary);
+          results.push({ provider: p.id, ok: true, detail: `@${canary} fetched` });
+        } catch (err) {
+          results.push({ provider: p.id, ok: false, detail: (err as Error).message });
+          await scrapers.notify({
+            type: "provider",
+            level: "bad",
+            title: `الفحص اليومي: المصدر ${p.id} لا يعمل`,
+            body: (err as Error).message,
+            url: "/settings",
+            key: `canary:${p.id}`,
+          });
+        }
+      }
+      return results;
     },
 
     async close() {

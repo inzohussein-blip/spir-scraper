@@ -1,46 +1,30 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { logout } from "@/app/actions";
+import { Shell } from "@/components/shell";
 import { requireSession } from "@/lib/auth";
+import { getRuntime } from "@/lib/runtime";
 
 export const dynamic = "force-dynamic";
 
-const NAV = [
-  { href: "/", label: "الرئيسية" },
-  { href: "/jobs/new", label: "مهمة جديدة" },
-  { href: "/leads", label: "العملاء" },
-  { href: "/settings", label: "الإعدادات" },
-];
-
 export default async function DashLayout({ children }: { children: ReactNode }) {
   await requireSession();
+  const rt = await getRuntime();
+  const [unread, projects, jobs] = await Promise.all([
+    rt.scrapers.unreadNotifications(),
+    rt.scrapers.listProjects(),
+    rt.scrapers.listJobs({ limit: 10 }),
+  ]);
   return (
-    <div className="min-h-dvh">
-      <header className="sticky top-0 z-10 border-b border-[var(--line)] bg-[var(--card)]/90 backdrop-blur">
-        <nav className="mx-auto flex max-w-6xl flex-wrap items-center gap-1 px-4 py-3">
-          <Link href="/" className="me-4 text-lg font-bold text-brand">
-            Scrapers
-          </Link>
-          {NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className="rounded-lg px-3 py-1.5 text-sm hover:bg-brand-soft hover:text-brand"
-            >
-              {n.label}
-            </Link>
-          ))}
-          <form action={logout} className="ms-auto">
-            <button
-              type="submit"
-              className="rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] hover:text-red-600"
-            >
-              خروج
-            </button>
-          </form>
-        </nav>
-      </header>
-      <main className="mx-auto max-w-6xl space-y-6 px-4 py-6">{children}</main>
-    </div>
+    <Shell
+      logout={logout}
+      data={{
+        unread,
+        activeJobs: jobs.filter((j) => j.status === "queued" || j.status === "running").length,
+        projects: projects.map((p) => ({ id: p.id, name: p.name })),
+        jobs: jobs.map((j) => ({ id: j.id, label: j.sourceUrl, status: j.status })),
+      }}
+    >
+      {children}
+    </Shell>
   );
 }

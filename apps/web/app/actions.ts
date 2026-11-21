@@ -9,7 +9,18 @@ import {
 } from "@scrapers/core";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { checkPassword, endSession, requireSession, startSession } from "@/lib/auth";
+import { audit, clientIp } from "@/lib/audit";
+import {
+  checkLoginCode,
+  checkPassword,
+  endSession,
+  MAX_TRIES_PER_IP,
+  MAX_TRIES_TOTAL,
+  requireSession,
+  sendLoginCode,
+  startSession,
+  twoFactorEnabled,
+} from "@/lib/auth";
 import { scheduleDrain } from "@/lib/drain";
 import { getRuntime } from "@/lib/runtime";
 
@@ -28,14 +39,52 @@ const fail = (err: unknown): ActionState => ({
   error: err instanceof SourceError ? err.message : (err as Error).message || "حدث خطأ",
 });
 
+const safeNext = (next: string) => (next.startsWith("/") && !next.startsWith("//") ? next : "/");
+
+/** Refuses when too many wrong tries happened recently (per IP and in total). */
+async function lockedOut(): Promise<boolean> {
+  const tries = await (await getRuntime()).scrapers.failedLogins(await clientIp());
+  return tries.ip >= MAX_TRIES_PER_IP || tries.all >= MAX_TRIES_TOTAL;
+}
+
+const LOCKED = "محاولات خاطئة كثيرة. حاول بعد 10 دقائق.";
+
 export async function login(_: ActionState, form: FormData): Promise<ActionState> {
-  if (!checkPassword(str(form, "password"))) return { error: "كلمة المرور غير صحيحة" };
+  if (await lockedOut()) return { error: LOCKED };
+  if (!checkPassword(str(form, "password"))) {
+    await audit("login.failed", { stage: "password" }, "anonymous");
+    return { error: "كلمة المرور غير صحيحة" };
+  }
+  const next = safeNext(str(form, "next"));
+  if (await twoFactorEnabled()) {
+    try {
+      await sendLoginCode(next);
+    } catch (err) {
+      return { error: `تعذّر إرسال الكود على تلكرام: ${(err as Error).message}` };
+    }
+    await audit("login.code_sent", undefined, "anonymous");
+    redirect("/login/verify");
+  }
   await startSession();
-  const next = str(form, "next");
-  redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+  await audit("login.ok");
+  redirect(next);
+}
+
+export async function verifyLoginCode(_: ActionState, form: FormData): Promise<ActionState> {
+  if (await lockedOut()) return { error: LOCKED };
+  const result = await checkLoginCode(str(form, "code"));
+  if (result === "expired") return { error: "انتهت صلاحية الكود. سجّل الدخول من جديد." };
+  if (result === null) {
+    await audit("login.failed", { stage: "telegram_code" }, "anonymous");
+    return { error: "الكود غير صحيح" };
+  }
+  await startSession();
+  await audit("login.ok", { twoFactor: true });
+  redirect(result);
 }
 
 export async function logout() {
+  await audit("logout");
   await endSession();
   redirect("/login");
 }
@@ -57,6 +106,7 @@ export async function createProject(_: ActionState, form: FormData): Promise<Act
   } catch (err) {
     return fail(err);
   }
+  await audit("project.create", { name });
   revalidatePath("/");
   return { message: "أُنشئ المشروع" };
 }
@@ -95,6 +145,7 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
     }
     const { job } = await rt.scrapers.startJob({ projectId: str(form, "project"), source, limit });
     jobId = job.id;
+    await audit("job.start", { jobId, source: source.url, limit });
   } catch (err) {
     return fail(err);
   }
@@ -105,6 +156,7 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
 export async function cancelJob(jobId: string) {
   await requireSession();
   await (await getRuntime()).scrapers.cancelJob(jobId);
+  await audit("job.cancel", { jobId });
   revalidatePath(`/jobs/${jobId}`);
 }
 
@@ -168,6 +220,7 @@ export async function exportToSheet(_: ActionState, form: FormData): Promise<Act
       },
     });
     if (r.kind !== "sheet") return { error: "نتيجة غير متوقعة" };
+    await audit("export.sheet", { spreadsheetId: r.spreadsheetId, written: r.written });
     return { message: `كُتب ${r.written} عميلاً في تبويب «${r.tab}»`, url: r.url };
   } catch (err) {
     return fail(err);
@@ -182,6 +235,7 @@ export async function suppress(_: ActionState, form: FormData): Promise<ActionSt
     return { error: "بيانات ناقصة" };
   try {
     await (await getRuntime()).scrapers.suppress(kind, value, "dashboard");
+    await audit("suppress", { kind });
   } catch (err) {
     return fail(err);
   }
@@ -195,6 +249,7 @@ export async function createKey(_: ActionState, form: FormData): Promise<ActionS
   const scopes: ("read" | "write")[] = form.get("write") === "on" ? ["read", "write"] : ["read"];
   try {
     const k = await (await getRuntime()).scrapers.createApiKey(name, scopes);
+    await audit("key.create", { name, scopes });
     revalidatePath("/settings");
     return { message: "انسخ المفتاح الآن، فلن يظهر مرة أخرى.", secret: k.key };
   } catch (err) {
@@ -205,5 +260,33 @@ export async function createKey(_: ActionState, form: FormData): Promise<ActionS
 export async function revokeKey(id: string) {
   await requireSession();
   await (await getRuntime()).scrapers.revokeApiKey(id);
+  await audit("key.revoke", { id });
   revalidatePath("/settings");
+}
+
+export async function markAllRead() {
+  await requireSession();
+  await (await getRuntime()).scrapers.markNotificationsRead();
+  revalidatePath("/", "layout");
+}
+
+export async function sendTestNotification(): Promise<ActionState> {
+  await requireSession();
+  const rt = await getRuntime();
+  if (!rt.telegram) return { error: "تلكرام غير مضبوط" };
+  try {
+    await rt.telegram.sendText("✅ <b>Scrapers</b>: الإشعارات تعمل.");
+  } catch (err) {
+    return fail(err);
+  }
+  return { message: "أُرسلت رسالة تجربة إلى تلكرام" };
+}
+
+export async function checkProviders(): Promise<ActionState> {
+  await requireSession();
+  const results = await (await getRuntime()).healthCheck();
+  revalidatePath("/", "layout");
+  if (results.length === 0) return { error: "لا يوجد مصدر مفعّل" };
+  const lines = results.map((r) => `${r.ok ? "✓" : "✗"} ${r.provider}: ${r.detail}`).join(" · ");
+  return results.every((r) => r.ok) ? { message: lines } : { error: lines };
 }

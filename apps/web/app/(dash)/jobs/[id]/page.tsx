@@ -4,9 +4,11 @@ import { notFound } from "next/navigation";
 import { buildReport, cancelJob, exportToSheet, scoreJob } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { Icon, type IconName } from "@/components/icons";
 import {
   Button,
   Card,
+  cx,
   Field,
   fmtDate,
   fmtNum,
@@ -14,12 +16,49 @@ import {
   Notice,
   Progress,
   Select,
-  Stat,
   StatusBadge,
   Textarea,
 } from "@/components/ui";
 import { integrationStatus } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
+
+type StepState = "done" | "active" | "idle" | "failed";
+
+/** The job's path, like the bot panel's flow map: each stage with its count and state. */
+function Flow({
+  steps,
+}: {
+  steps: { label: string; icon: IconName; value: string; state: StepState; note?: string }[];
+}) {
+  const ring: Record<StepState, string> = {
+    done: "border-ok/40 bg-ok-soft text-ok",
+    active: "border-warn/40 bg-warn-soft text-warn",
+    idle: "border-line bg-surface-2 text-muted",
+    failed: "border-bad/40 bg-bad-soft text-bad",
+  };
+  return (
+    <ol className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      {steps.map((s, i) => (
+        <li key={s.label} className="relative">
+          <div className={cx("h-full rounded-[12px] border p-3", ring[s.state])}>
+            <div className="flex items-center gap-2 text-[12.5px] font-medium">
+              <Icon name={s.icon} className={cx("size-4", s.state === "active" && "pulse")} />
+              {s.label}
+            </div>
+            <div className="mt-1 text-xl font-bold text-fg tabular-nums">{s.value}</div>
+            {s.note && <div className="text-[11.5px] text-fg-2">{s.note}</div>}
+          </div>
+          {i < steps.length - 1 && (
+            <Icon
+              name="arrow"
+              className="absolute top-1/2 -end-3 z-10 hidden size-4 -translate-y-1/2 text-muted lg:block"
+            />
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export default async function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -32,23 +71,50 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
     throw err;
   }
   const project = await rt.scrapers.getProject(job.projectId);
-  const active = job.status === "queued" || job.status === "running" || !!job.counts.aiBatchId;
+  const running = job.status === "queued" || job.status === "running";
+  const active = running || !!job.counts.aiBatchId;
   const c = job.counts;
   const status = integrationStatus();
   const exportBase = `/api/export?project=${job.projectId}&job=${job.id}`;
+  const processed = (c.enriched ?? 0) + (c.skipped ?? 0) + (c.failed ?? 0);
+  const discoveryState: StepState =
+    job.status === "failed" && !c.discovered
+      ? "failed"
+      : c.discovered !== undefined
+        ? "done"
+        : running
+          ? "active"
+          : "idle";
+  const enrichState: StepState = !c.discovered
+    ? "idle"
+    : processed >= c.discovered
+      ? "done"
+      : job.status === "running"
+        ? "active"
+        : "idle";
 
   return (
     <>
       <AutoRefresh active={active} />
       <Card
+        icon="radar"
         title={
           <span className="flex flex-wrap items-center gap-3">
             <span className="ltr">{job.sourceUrl}</span>
             <StatusBadge status={job.status} />
           </span>
         }
+        description={
+          <>
+            المشروع:{" "}
+            <Link className="underline" href={`/leads?project=${job.projectId}&job=${job.id}`}>
+              {project?.name}
+            </Link>{" "}
+            · بدأت {fmtDate(job.startedAt)} · انتهت {fmtDate(job.finishedAt)}
+          </>
+        }
         actions={
-          (job.status === "queued" || job.status === "running") && (
+          running && (
             <form action={cancelJob.bind(null, job.id)}>
               <Button variant="danger" type="submit">
                 إلغاء
@@ -59,32 +125,58 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       >
         <div className="space-y-4">
           <Progress value={job.progress} />
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <Stat label="مكتشفة" value={fmtNum(c.discovered ?? 0)} />
-            <Stat label="جُلبت" value={fmtNum(c.enriched ?? 0)} />
-            <Stat label="بوسيلة تواصل" value={fmtNum(c.leads ?? 0)} />
-            <Stat label="تُخطّيت" value={fmtNum(c.skipped ?? 0)} />
-            <Stat label="فشلت" value={fmtNum(c.failed ?? 0)} />
-          </div>
+          <Flow
+            steps={[
+              {
+                label: "المصدر",
+                icon: "radar",
+                value: job.sourceType,
+                state: "done",
+                note: job.provider ? `عبر ${job.provider}` : undefined,
+              },
+              {
+                label: "الاكتشاف",
+                icon: "search",
+                value: fmtNum(c.discovered ?? 0),
+                state: discoveryState,
+                note: "حساب",
+              },
+              {
+                label: "الجلب",
+                icon: "download",
+                value: fmtNum(c.enriched ?? 0),
+                state: enrichState,
+                note: `تُخطّيت ${fmtNum(c.skipped ?? 0)} · فشلت ${fmtNum(c.failed ?? 0)}`,
+              },
+              {
+                label: "وسيلة تواصل",
+                icon: "users",
+                value: fmtNum(c.leads ?? 0),
+                state: c.leads ? "done" : "idle",
+                note: "إيميل أو رقم",
+              },
+              {
+                label: "التقييم",
+                icon: "sparkles",
+                value: fmtNum(c.scored ?? 0),
+                state: c.aiBatchId ? "active" : c.scored ? "done" : "idle",
+                note: c.aiBatchId ? "دفعة قيد المعالجة" : undefined,
+              },
+              {
+                label: "التصدير",
+                icon: "sheet",
+                value: "↓",
+                state: job.status === "done" ? "done" : "idle",
+                note: "Excel · CSV · Sheets",
+              },
+            ]}
+          />
           {job.error && <Notice tone="error">{job.error}</Notice>}
-          {c.aiBatchId && (
-            <Notice tone="info">
-              التقييم بالذكاء الاصطناعي قيد المعالجة دفعةً واحدة. تتحدّث الصفحة تلقائياً.
-            </Notice>
-          )}
-          <p className="text-xs text-[var(--muted)]">
-            المشروع:{" "}
-            <Link className="underline" href={`/leads?project=${job.projectId}&job=${job.id}`}>
-              {project?.name}
-            </Link>{" "}
-            · المزوّد: {job.provider ?? "—"} · بدأت: {fmtDate(job.startedAt)} · انتهت:{" "}
-            {fmtDate(job.finishedAt)}
-          </p>
         </div>
       </Card>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card title="تصدير">
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card title="تصدير" icon="download">
           <div className="mb-4 flex flex-wrap gap-2">
             <LinkButton href={`${exportBase}&format=xlsx`}>Excel</LinkButton>
             <LinkButton href={`${exportBase}&format=csv`}>CSV</LinkButton>
@@ -112,14 +204,14 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
               </label>
             </ActionForm>
           ) : (
-            <p className="text-sm text-[var(--muted)]">
+            <p className="text-sm text-muted">
               لتفعيل Google Sheets أضف GOOGLE_SERVICE_ACCOUNT_JSON، أو اطلب من Claude كتابة النتائج
               عبر موصّل Sheets.
             </p>
           )}
         </Card>
 
-        <Card title="الذكاء الاصطناعي">
+        <Card title="الذكاء الاصطناعي" icon="sparkles">
           {status.ai ? (
             <div className="space-y-5">
               <ActionForm action={scoreJob} submit="قيّم العملاء">
@@ -141,7 +233,7 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
               </ActionForm>
             </div>
           ) : (
-            <p className="text-sm text-[var(--muted)]">
+            <p className="text-sm text-muted">
               أضف ANTHROPIC_API_KEY للتقييم من هنا، أو اطلب من Claude عبر MCP أن يقيّم العملاء بنفسه
               بدون مفتاح.
             </p>
@@ -150,7 +242,7 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       </div>
 
       {c.report && (
-        <Card title="تقرير الجمهور">
+        <Card title="تقرير الجمهور" icon="chart">
           <div className="whitespace-pre-wrap text-sm leading-7">{c.report}</div>
         </Card>
       )}

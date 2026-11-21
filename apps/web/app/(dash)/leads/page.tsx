@@ -95,12 +95,12 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         }
       >
         {rows.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">لا توجد نتائج.</p>
+          <p className="text-sm text-muted">لا توجد نتائج.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-[var(--muted)]">
-                <tr className="border-b border-[var(--line)]">
+              <thead className="text-muted">
+                <tr className="border-b border-line">
                   <th className="py-2 text-start font-medium">الحساب</th>
                   <th className="py-2 text-start font-medium">المتابعون</th>
                   <th className="py-2 text-start font-medium">الإيميل</th>
@@ -111,20 +111,17 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr
-                    key={r.username}
-                    className="border-b border-[var(--line)] align-top last:border-0"
-                  >
+                  <tr key={r.username} className="border-b border-line align-top last:border-0">
                     <td className="py-2.5">
                       <a
                         href={`https://www.instagram.com/${r.username}/`}
                         target="_blank"
                         rel="noreferrer"
-                        className="ltr font-medium text-brand hover:underline"
+                        className="ltr font-medium text-accent hover:underline"
                       >
                         @{r.username}
                       </a>
-                      <div className="text-xs text-[var(--muted)]">
+                      <div className="text-xs text-muted">
                         {[r.fullName, r.category, r.isBusiness ? "تجاري" : null]
                           .filter(Boolean)
                           .join(" · ")}
@@ -138,7 +135,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                         <span className="ms-1 text-xs text-amber-600">غير مؤكد</span>
                       )}
                       {r.phoneCountry && (
-                        <span className="ms-1 text-xs text-[var(--muted)]">{r.phoneCountry}</span>
+                        <span className="ms-1 text-xs text-muted">{r.phoneCountry}</span>
                       )}
                     </td>
                     <td className="py-2.5 text-xs">
@@ -146,9 +143,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     </td>
                     <td className="py-2.5" title={r.aiReason ?? undefined}>
                       {r.aiScore ?? "—"}
-                      {r.aiTags && (
-                        <div className="text-xs text-[var(--muted)]">{r.aiTags.join("، ")}</div>
-                      )}
+                      {r.aiTags && <div className="text-xs text-muted">{r.aiTags.join("، ")}</div>}
                     </td>
                   </tr>
                 ))}
