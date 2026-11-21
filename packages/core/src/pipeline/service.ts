@@ -1,7 +1,22 @@
-import { type AnyDb, jobs, leads, profiles, projects, suppression } from "@scrapers/db";
-import { and, desc, eq, gte, inArray, isNotNull, lt, ne, notExists, or, sql } from "drizzle-orm";
+import { createHash, randomBytes } from "node:crypto";
+import { type AnyDb, apiKeys, jobs, leads, profiles, projects, suppression } from "@scrapers/db";
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  notExists,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import { extractContact } from "../extract/index.js";
+import type { AudienceStats, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
 import { NotFoundError, type RawProfile, type Source } from "../types.js";
 import type { ProviderRouter } from "./router.js";
@@ -65,13 +80,23 @@ export class JobNotFoundError extends Error {
   override name = "JobNotFoundError";
 }
 
+export class ScoringUnavailableError extends Error {
+  override name = "ScoringUnavailableError";
+}
+
+export type ApiScope = "read" | "write";
+
+const hashKey = (key: string) => createHash("sha256").update(key).digest("hex");
+
 export function createScrapers(deps: {
   db: AnyDb;
   boss: PgBoss;
   router: ProviderRouter;
   config: ScrapersConfig;
+  /** Optional AI scorer (needs ANTHROPIC_API_KEY). */
+  scorer?: Scorer | undefined;
 }) {
-  const { db, boss, router, config } = deps;
+  const { db, boss, router, config, scorer } = deps;
   const maxLimit = config.maxJobLimit ?? 1000;
 
   async function bump(jobId: string, delta: Record<string, number>) {
@@ -243,6 +268,45 @@ export function createScrapers(deps: {
     await finishIfComplete(job.id);
   }
 
+  async function saveScores(scores: Map<string, LeadScore>) {
+    for (const [leadId, sc] of scores) {
+      const tags = [sc.segment, sc.language, sc.country].filter((t): t is string => !!t);
+      await db
+        .update(leads)
+        .set({
+          aiScore: Math.round(Math.min(100, Math.max(0, sc.score))),
+          aiTags: tags,
+          aiReason: sc.reason.slice(0, 300),
+        })
+        .where(eq(leads.id, leadId));
+    }
+  }
+
+  /** Collects finished AI batches; returns how many jobs were updated. */
+  async function collectPendingScores(): Promise<number> {
+    if (!scorer) return 0;
+    const pending = await db
+      .select({ id: jobs.id, counts: jobs.counts })
+      .from(jobs)
+      .where(sql`${jobs.counts} ? 'aiBatchId'`);
+    let updated = 0;
+    for (const j of pending) {
+      const batchId = j.counts.aiBatchId;
+      if (!batchId) continue;
+      const scores = await scorer.collectBatch(batchId);
+      if (!scores) continue;
+      await saveScores(scores);
+      await db
+        .update(jobs)
+        .set({
+          counts: sql`(${jobs.counts} - 'aiBatchId') || jsonb_build_object('scored', coalesce((${jobs.counts}->>'scored')::int, 0) + ${scores.size}::int)`,
+        })
+        .where(eq(jobs.id, j.id));
+      updated++;
+    }
+    return updated;
+  }
+
   async function handleRetention() {
     const now = new Date();
     await db.delete(leads).where(lt(leads.expiresAt, now));
@@ -254,6 +318,43 @@ export function createScrapers(deps: {
           db.select({ one: sql`1` }).from(leads).where(eq(leads.profileId, profiles.igUserId)),
         ),
       );
+    await collectPendingScores();
+  }
+
+  /**
+   * Processes queued work for up to `budgetMs`, for serverless hosts (Vercel)
+   * where no long-running worker exists. Reports whether work remains.
+   */
+  async function drain(opts: { budgetMs: number }) {
+    const deadline = Date.now() + opts.budgetMs;
+    let processed = 0;
+    const queues = [
+      { name: QUEUES.discover, run: (d: unknown) => handleDiscover(d as DiscoverPayload) },
+      { name: QUEUES.enrich, run: (d: unknown) => handleEnrich(d as EnrichPayload) },
+    ];
+    let idle = false;
+    while (Date.now() < deadline && !idle) {
+      idle = true;
+      for (const q of queues) {
+        if (Date.now() >= deadline) break;
+        const [job] = await boss.fetch<unknown>(q.name);
+        if (!job) continue;
+        idle = false;
+        try {
+          await q.run(job.data);
+          await boss.complete(q.name, job.id);
+        } catch (err) {
+          await boss.fail(q.name, job.id, { message: (err as Error).message });
+        }
+        processed++;
+      }
+    }
+    await collectPendingScores();
+    const [active] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(jobs)
+      .where(inArray(jobs.status, ["queued", "running"]));
+    return { processed, activeJobs: active?.n ?? 0, more: !idle };
   }
 
   return {
@@ -412,6 +513,167 @@ export function createScrapers(deps: {
           .map((l) => l.id);
         if (ids.length) await db.delete(leads).where(inArray(leads.id, ids));
       }
+    },
+
+    drain,
+
+    async getProject(projectId: string) {
+      const [p] = await db.select().from(projects).where(eq(projects.id, projectId));
+      return p ?? null;
+    },
+
+    async listJobs(opts: { projectId?: string; limit?: number } = {}) {
+      return db
+        .select()
+        .from(jobs)
+        .where(opts.projectId ? eq(jobs.projectId, opts.projectId) : undefined)
+        .orderBy(desc(jobs.createdAt))
+        .limit(Math.min(opts.limit ?? 20, 200));
+    },
+
+    /** A stored public profile and where it was collected. */
+    async getStoredProfile(username: string) {
+      const [p] = await db
+        .select()
+        .from(profiles)
+        .where(eq(profiles.username, username.trim().replace(/^@/, "").toLowerCase()));
+      if (!p) return null;
+      const sources = await db
+        .select({
+          projectId: leads.projectId,
+          jobId: leads.jobId,
+          sourceUrl: jobs.sourceUrl,
+          contactSource: leads.contactSource,
+        })
+        .from(leads)
+        .innerJoin(jobs, eq(jobs.id, leads.jobId))
+        .where(eq(leads.profileId, p.igUserId));
+      return { ...p, sources };
+    },
+
+    get scoringAvailable() {
+      return !!scorer;
+    },
+
+    /**
+     * Scores a job's leads with the AI layer. Small jobs are scored now;
+     * large ones are submitted as a batch and collected by drain/retention.
+     */
+    async scoreLeads(jobId: string, criteria: string, opts: { rescore?: boolean } = {}) {
+      if (!scorer)
+        throw new ScoringUnavailableError(
+          "AI scoring needs ANTHROPIC_API_KEY (or let Claude score over MCP)",
+        );
+      const rows = await db
+        .select({ lead: leads, profile: profiles })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(eq(leads.jobId, jobId), opts.rescore ? undefined : isNull(leads.aiScore)));
+      const items: ScoringInput[] = rows.map(({ lead, profile }) => ({
+        id: lead.id,
+        username: profile.username,
+        fullName: profile.fullName,
+        bio: profile.bio,
+        followers: profile.followers,
+        isBusiness: profile.isBusiness,
+        isVerified: profile.isVerified,
+        category: profile.category,
+        externalUrl: profile.externalUrl,
+      }));
+      if (items.length === 0) return { mode: "none" as const, count: 0 };
+      if (items.length > scorer.batchThreshold) {
+        const batchId = await scorer.submitBatch(items, criteria);
+        await db
+          .update(jobs)
+          .set({
+            counts: sql`${jobs.counts} || ${JSON.stringify({ aiBatchId: batchId, aiCriteria: criteria })}::jsonb`,
+          })
+          .where(eq(jobs.id, jobId));
+        return { mode: "batch" as const, count: items.length, batchId };
+      }
+      const scores = await scorer.scoreNow(items, criteria);
+      await saveScores(scores);
+      await bump(jobId, { scored: scores.size });
+      return { mode: "now" as const, count: scores.size };
+    },
+
+    /** Audience summary for a job; written by the AI when available. */
+    async audienceReport(jobId: string) {
+      const rows = await db
+        .select({ lead: leads, profile: profiles })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(eq(leads.jobId, jobId));
+      const count = (vals: (string | undefined)[]) => {
+        const out: Record<string, number> = {};
+        for (const v of vals) if (v) out[v] = (out[v] ?? 0) + 1;
+        return out;
+      };
+      const stats: AudienceStats = {
+        total: rows.length,
+        segments: count(rows.map((r) => r.lead.aiTags?.[0])),
+        languages: count(rows.map((r) => r.lead.aiTags?.[1])),
+        countries: count(rows.map((r) => r.lead.phoneCountry ?? r.lead.aiTags?.[2])),
+        top: rows
+          .filter((r) => r.lead.aiScore !== null)
+          .sort((a, b) => (b.lead.aiScore ?? 0) - (a.lead.aiScore ?? 0))
+          .slice(0, 20)
+          .map((r) => ({
+            username: r.profile.username,
+            followers: r.profile.followers,
+            segment: r.lead.aiTags?.[0] ?? "",
+            score: r.lead.aiScore ?? 0,
+          })),
+      };
+      const [job] = await db.select({ counts: jobs.counts }).from(jobs).where(eq(jobs.id, jobId));
+      let report: string | undefined;
+      if (scorer?.report && stats.top.length > 0) {
+        report = await scorer.report(stats, job?.counts.aiCriteria ?? "");
+        await db
+          .update(jobs)
+          .set({ counts: sql`${jobs.counts} || ${JSON.stringify({ report })}::jsonb` })
+          .where(eq(jobs.id, jobId));
+      }
+      return { stats, report };
+    },
+
+    /** Creates an API key; the plain key is returned once and only its hash is stored. */
+    async createApiKey(name: string, scopes: ApiScope[] = ["read"]) {
+      const key = `sk_${randomBytes(24).toString("base64url")}`;
+      const [row] = await db
+        .insert(apiKeys)
+        .values({ name, keyHash: hashKey(key), scopes })
+        .returning();
+      if (!row) throw new Error("API key insert returned nothing");
+      return { id: row.id, name, scopes, key };
+    },
+
+    async listApiKeys() {
+      return db
+        .select({
+          id: apiKeys.id,
+          name: apiKeys.name,
+          scopes: apiKeys.scopes,
+          lastUsed: apiKeys.lastUsed,
+          createdAt: apiKeys.createdAt,
+        })
+        .from(apiKeys)
+        .orderBy(desc(apiKeys.createdAt));
+    },
+
+    async revokeApiKey(id: string) {
+      await db.delete(apiKeys).where(eq(apiKeys.id, id));
+    },
+
+    /** Returns the key's scopes, or null when the key is unknown. */
+    async verifyApiKey(key: string): Promise<{ id: string; scopes: ApiScope[] } | null> {
+      if (!key.startsWith("sk_")) return null;
+      const [row] = await db
+        .update(apiKeys)
+        .set({ lastUsed: new Date() })
+        .where(eq(apiKeys.keyHash, hashKey(key)))
+        .returning({ id: apiKeys.id, scopes: apiKeys.scopes });
+      return row ? { id: row.id, scopes: row.scopes as ApiScope[] } : null;
     },
 
     /** Exposed for tests and for running the pipeline without pg-boss workers. */

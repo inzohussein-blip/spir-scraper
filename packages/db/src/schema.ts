@@ -42,7 +42,12 @@ export type JobCounts = {
   /** Suppressed, private or missing accounts. */
   skipped?: number;
   failed?: number;
+  /** AI audience report (markdown). */
   report?: string;
+  /** Pending Anthropic Message Batch for AI scoring. */
+  aiBatchId?: string;
+  aiCriteria?: string;
+  scored?: number;
 };
 
 export const jobs = pgTable(

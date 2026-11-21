@@ -1,76 +1,34 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { PGlite } from "@electric-sql/pglite";
-import { createScrapers, type Provider, ProviderRouter, type RawProfile } from "@scrapers/core";
-import * as schema from "@scrapers/db";
-import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
+import type { Provider } from "@scrapers/core";
+import { createTestRuntime, fakeWorker, type TestRuntime } from "@scrapers/runtime/testing";
 import ExcelJS from "exceljs";
-import { fromPglite, PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Context } from "../src/context.js";
 import { buildProgram, type Io } from "../src/program.js";
 
-const migrationsFolder = fileURLToPath(new URL("../../../packages/db/drizzle", import.meta.url));
-
-function profile(username: string): RawProfile {
-  const n = Number(username.replace(/\D/g, "")) || 0;
-  return {
-    igUserId: `id-${n}`,
-    username,
-    isBusiness: n % 2 === 0,
-    isVerified: false,
-    followers: 1000 + n,
-    bio: n % 2 === 0 ? `🇮🇶 واتساب ٠٧٧٠${String(1000000 + n).slice(-7)}` : "personal",
-  };
-}
-
-const fakeWorker: Provider = {
-  id: "worker",
-  capabilities: new Set(["profile"]),
-  ratePerMinute: 1_000_000,
-  costPer1k: 0,
-  getProfile: async (u) => profile(u),
-};
 const paidDiscovery: Provider = {
   id: "apify",
   capabilities: new Set(["hashtag_posters"]),
   ratePerMinute: 1000,
   costPer1k: 3,
-  getProfile: async (u) => profile(u),
+  getProfile: async () => {
+    throw new Error("unused");
+  },
   async *listEngagers() {
     yield "user2";
   },
 };
 
-let pg: PGlite;
-let boss: PgBoss;
-let ctx: Context;
+let rt: TestRuntime;
 const dir = mkdtempSync(join(tmpdir(), "scrapers-cli-"));
 
 beforeAll(async () => {
-  pg = new PGlite();
-  const db = drizzle(pg, { schema });
-  await migrate(db, { migrationsFolder });
-  boss = new PgBoss({ db: fromPglite(pg), backend: "pglite", supervise: false, schedule: false });
-  boss.on("error", () => {});
-  await boss.start();
-  const scrapers = createScrapers({
-    db,
-    boss,
-    router: new ProviderRouter([fakeWorker, paidDiscovery], { sleep: async () => {} }),
-    config: { suppressionPepper: "p" },
-  });
-  await scrapers.init();
-  // Commands close their context; the test keeps one database for all of them.
-  ctx = { scrapers, owner: "me@example.com", close: async () => {} };
+  rt = await createTestRuntime({ providers: [fakeWorker, paidDiscovery] });
 });
 
 afterAll(async () => {
-  await boss.stop({ graceful: false, timeout: 1000 }).catch(() => {});
-  await pg.close();
+  await rt.close();
 });
 
 async function cli(args: string[], answer = false) {
@@ -81,11 +39,11 @@ async function cli(args: string[], answer = false) {
     error: (m) => err.push(m),
     confirm: async () => answer,
   };
-  const program = buildProgram(async () => ctx, io).exitOverride();
+  // Commands close their context; the test keeps one database for all of them.
+  const program = buildProgram(async () => ({ ...rt, close: async () => {} }), io).exitOverride();
   await program.parseAsync(["node", "scrapers", ...args]);
   return { out: out.join("\n"), err: err.join("\n") };
 }
-
 describe("scrapers CLI", () => {
   it("creates and lists projects", async () => {
     expect((await cli(["project", "create", "gulf", "--retention", "30"])).out).toMatch(
@@ -122,7 +80,7 @@ describe("scrapers CLI", () => {
 
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(readFileSync(out) as unknown as ArrayBuffer);
-    const ws = wb.getWorksheet("العملاء");
+    const ws = wb.getWorksheet("gulf");
     expect(ws?.rowCount).toBe(501);
     expect(ws?.views[0]).toMatchObject({ rightToLeft: true });
     const phones = (ws?.getColumn(6).values ?? []).filter(
@@ -134,7 +92,7 @@ describe("scrapers CLI", () => {
   it("lists and filters leads, as a table or JSON", async () => {
     const table = (await cli(["leads", "-p", "gulf", "--has-phone", "-n", "3"])).out;
     expect(table.split("\n")).toHaveLength(4);
-    expect(table).toMatch(/@user500\s+1500\s+\+9647701000500/);
+    expect(table).toMatch(/@user500\s+1500\s+hi@shop500\.com\s+\+9647701000500/);
     const json = JSON.parse(
       (await cli(["leads", "-p", "gulf", "--business", "-n", "1000", "--json"])).out,
     );
@@ -177,5 +135,27 @@ describe("scrapers CLI", () => {
     );
     await expect(cli(["suppress"])).rejects.toThrow(/--username/);
     await expect(cli(["job", "start", "x", "-p", "gulf", "-l", "abc"])).rejects.toThrow();
+  });
+
+  it("manages API keys", async () => {
+    const created = (await cli(["keys", "create", "n8n", "-s", "read,write"])).out;
+    const key = /(sk_\S+)/.exec(created)?.[1] as string;
+    expect(await rt.scrapers.verifyApiKey(key)).toMatchObject({ scopes: ["read", "write"] });
+    const list = (await cli(["keys", "list"])).out;
+    expect(list).toMatch(/n8n\s+\[read,write\]/);
+    const id = list.split(/\s+/)[0] as string;
+    await cli(["keys", "revoke", id]);
+    expect(await rt.scrapers.verifyApiKey(key)).toBeNull();
+  });
+
+  it("explains missing AI and Sheets configuration", async () => {
+    await expect(
+      cli(["score", "00000000-0000-0000-0000-000000000000", "-c", "agents"]),
+    ).rejects.toThrow(/ANTHROPIC_API_KEY/);
+    await expect(cli(["export", "-p", "gulf", "-f", "sheet"])).rejects.toThrow(
+      /GOOGLE_SERVICE_ACCOUNT_JSON/,
+    );
+    const report = (await cli(["report", "00000000-0000-0000-0000-000000000000"])).out;
+    expect(JSON.parse(report)).toMatchObject({ total: 0 });
   });
 });

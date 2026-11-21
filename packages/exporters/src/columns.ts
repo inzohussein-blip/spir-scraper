@@ -51,6 +51,10 @@ export function safeCell(v: string | number | null): string | number | null {
   return `'${v}`;
 }
 
-export function toMatrix(rows: readonly LeadRow[]): (string | number | null)[][] {
-  return rows.map((r) => COLUMNS.map((c) => safeCell(c.value(r))));
+export function toMatrix(
+  rows: readonly LeadRow[],
+  opts: { escapeFormulas?: boolean } = {},
+): (string | number | null)[][] {
+  const escapeCells = opts.escapeFormulas ?? true;
+  return rows.map((r) => COLUMNS.map((c) => (escapeCells ? safeCell(c.value(r)) : c.value(r))));
 }

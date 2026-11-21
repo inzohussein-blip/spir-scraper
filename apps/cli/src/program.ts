@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { confirm, isCancel } from "@clack/prompts";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   type LeadFilters,
   type LeadRow,
@@ -9,7 +10,8 @@ import {
   type SuppressionKind,
   uploadSource,
 } from "@scrapers/core";
-import { toCsv, toXlsx } from "@scrapers/exporters";
+import { buildMcpServer } from "@scrapers/mcp";
+import type { ExportRequest } from "@scrapers/runtime";
 import { Command, InvalidArgumentError, Option } from "commander";
 import pc from "picocolors";
 import type { Context, ContextFactory } from "./context.js";
@@ -39,6 +41,7 @@ const int = (name: string) => (v: string) => {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ENDED = ["done", "failed", "cancelled"];
 
 async function resolveProject(ctx: Context, ref: string): Promise<string> {
   const all = await ctx.scrapers.listProjects();
@@ -56,9 +59,7 @@ function sourceFrom(input: string, type: string | undefined, limit: number): Sou
   return parseSource(input, type as "profile" | "post" | "hashtag" | undefined);
 }
 
-function pct(p: number) {
-  return `${Math.round(p * 100)}%`;
-}
+const pct = (p: number) => `${Math.round(p * 100)}%`;
 
 function formatJob(j: Awaited<ReturnType<Context["scrapers"]["getJob"]>>): string {
   const c = j.counts;
@@ -104,9 +105,8 @@ type FilterOpts = {
   minScore?: number;
 };
 
-function toFilters(projectId: string, o: FilterOpts): LeadFilters {
+function toFilters(o: FilterOpts): Omit<LeadFilters, "projectId"> {
   return {
-    projectId,
     ...(o.job ? { jobId: o.job } : {}),
     ...(o.business ? { business: true } : {}),
     ...(o.hasEmail ? { hasEmail: true } : {}),
@@ -115,18 +115,16 @@ function toFilters(projectId: string, o: FilterOpts): LeadFilters {
   };
 }
 
-async function writeExport(
-  rows: LeadRow[],
-  format: string,
-  out: string | undefined,
-  io: Io,
-): Promise<string> {
-  const file =
-    out ?? `scrapers-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${format}`;
-  if (format === "csv") writeFileSync(file, toCsv(rows), "utf8");
-  else writeFileSync(file, await toXlsx(rows));
-  io.log(`${pc.green("✓")} ${rows.length} leads → ${file}`);
-  return file;
+async function runExport(ctx: Context, req: ExportRequest, out: string | undefined, io: Io) {
+  const r = await ctx.exportLeads(req);
+  if (r.kind === "sheet") {
+    const dup = r.skippedDuplicates ? `, ${r.skippedDuplicates} already there` : "";
+    io.log(`${pc.green("✓")} ${r.written} leads → ${r.url} (tab ${r.tab}${dup})`);
+    return;
+  }
+  const file = out ?? r.filename;
+  writeFileSync(file, r.data);
+  io.log(`${pc.green("✓")} ${r.count} leads → ${file}`);
 }
 
 export type CliProgram = Command & {
@@ -180,7 +178,6 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
     );
   });
 
-  const job = program.command("job").description("start and follow jobs");
   const startOptions = (cmd: Command) =>
     cmd
       .requiredOption("-p, --project <id|name>", "project")
@@ -218,6 +215,7 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
     return j.id;
   }
 
+  const job = program.command("job").description("start and follow jobs");
   startOptions(
     job.command("start <source>").description("URL, @username, #hashtag or a .csv of usernames"),
   ).action(async (input: string, o) => {
@@ -231,7 +229,7 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
       for (;;) {
         const j = await c.scrapers.getJob(id);
         io.log(formatJob(j));
-        if (!o.watch || ["done", "failed", "cancelled"].includes(j.status)) break;
+        if (!o.watch || ENDED.includes(j.status)) break;
         await new Promise((r) => setTimeout(r, 3000));
       }
     });
@@ -249,7 +247,8 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
   ).action(async (o: FilterOpts & { project: string; limit: number; json?: boolean }) => {
     const c = await context();
     const rows = await c.scrapers.listLeads({
-      ...toFilters(await resolveProject(c, o.project), o),
+      projectId: await resolveProject(c, o.project),
+      ...toFilters(o),
       limit: o.limit,
     });
     io.log(o.json ? JSON.stringify(rows, null, 2) : formatLeads(rows));
@@ -258,17 +257,107 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
   filterOptions(
     program
       .command("export")
-      .description("export leads to CSV or XLSX")
+      .description("export leads to CSV, XLSX or Google Sheets")
       .requiredOption("-p, --project <id|name>", "project")
-      .addOption(new Option("-f, --format <format>").choices(["csv", "xlsx"]).default("xlsx"))
+      .addOption(
+        new Option("-f, --format <format>").choices(["csv", "xlsx", "sheet"]).default("xlsx"),
+      )
+      .addOption(
+        new Option("--sheet-mode <mode>", "for --format sheet").choices([
+          "new-file",
+          "new-tab",
+          "append",
+        ]),
+      )
+      .option("--spreadsheet <id>", "spreadsheet id (default: the project's sheet)")
       .option("-o, --out <file>", "output path"),
-  ).action(async (o: FilterOpts & { project: string; format: string; out?: string }) => {
-    const c = await context();
-    const rows = await c.scrapers.listLeads({
-      ...toFilters(await resolveProject(c, o.project), o),
-      limit: 5000,
+  ).action(
+    async (
+      o: FilterOpts & {
+        project: string;
+        format: ExportRequest["format"];
+        sheetMode?: ExportRequest["sheetMode"];
+        spreadsheet?: string;
+        out?: string;
+      },
+    ) => {
+      const c = await context();
+      const { jobId, ...filters } = toFilters(o);
+      await runExport(
+        c,
+        {
+          projectId: await resolveProject(c, o.project),
+          ...(jobId ? { jobId } : {}),
+          filters,
+          format: o.format,
+          ...(o.sheetMode ? { sheetMode: o.sheetMode } : {}),
+          ...(o.spreadsheet ? { spreadsheetId: o.spreadsheet } : {}),
+        },
+        o.out,
+        io,
+      );
+    },
+  );
+
+  program
+    .command("score <jobId>")
+    .description("score a job's leads with AI (needs ANTHROPIC_API_KEY)")
+    .requiredOption("-c, --criteria <text>", "what a good lead looks like")
+    .option("--rescore", "score leads that already have a score too")
+    .action(async (jobId: string, o: { criteria: string; rescore?: boolean }) => {
+      const r = await (await context()).scrapers.scoreLeads(
+        jobId,
+        o.criteria,
+        o.rescore ? { rescore: true } : {},
+      );
+      if (r.mode === "batch") {
+        io.log(
+          `${pc.green("✓")} ${r.count} leads sent as batch ${r.batchId}; results arrive within the hour (scrapers worker collects them)`,
+        );
+      } else io.log(`${pc.green("✓")} scored ${r.count} leads`);
     });
-    await writeExport(rows, o.format, o.out, io);
+
+  program
+    .command("report <jobId>")
+    .description("audience report for a job")
+    .action(async (jobId: string) => {
+      const { stats, report } = await (await context()).scrapers.audienceReport(jobId);
+      io.log(report || JSON.stringify(stats, null, 2));
+    });
+
+  const keys = program.command("keys").description("API keys for the REST API and remote MCP");
+  keys
+    .command("create <name>")
+    .option("-s, --scopes <scopes>", "comma-separated: read,write", "read")
+    .action(async (name: string, o: { scopes: string }) => {
+      const scopes = o.scopes
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s): s is "read" | "write" => s === "read" || s === "write");
+      const k = await (await context()).scrapers.createApiKey(
+        name,
+        scopes.length ? scopes : ["read"],
+      );
+      io.log(
+        `${pc.green("✓")} ${k.name} [${k.scopes.join(",")}]\n${pc.bold(k.key)}\n${pc.yellow("Shown once: store it now.")}`,
+      );
+    });
+  keys.command("list").action(async () => {
+    const all = await (await context()).scrapers.listApiKeys();
+    io.log(
+      all.length
+        ? all
+            .map(
+              (k) =>
+                `${k.id}  ${k.name}  [${k.scopes.join(",")}]  last used ${k.lastUsed?.toISOString() ?? "never"}`,
+            )
+            .join("\n")
+        : "No keys.",
+    );
+  });
+  keys.command("revoke <id>").action(async (id: string) => {
+    await (await context()).scrapers.revokeApiKey(id);
+    io.log(`${pc.green("✓")} revoked`);
   });
 
   program
@@ -302,11 +391,31 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
       });
     });
 
+  program
+    .command("mcp")
+    .description(
+      "serve the MCP tools over stdio (Claude Desktop / Claude Code); jobs run in this process",
+    )
+    .action(async () => {
+      const c = await context();
+      await c.scrapers.work();
+      // stdout belongs to the MCP protocol: nothing else may print to it.
+      const handle = serveStdio(() => buildMcpServer(c));
+      await new Promise<void>((resolve) => {
+        process.stdin.once("end", resolve);
+        process.once("SIGINT", resolve);
+        process.once("SIGTERM", resolve);
+      });
+      await handle.close();
+    });
+
   startOptions(
     program
       .command("run <source>")
       .description("start a job, process it here and optionally export when done")
-      .addOption(new Option("-f, --format <format>", "export when done").choices(["csv", "xlsx"]))
+      .addOption(
+        new Option("-f, --format <format>", "export when done").choices(["csv", "xlsx", "sheet"]),
+      )
       .option("-o, --out <file>", "output path")
       .option("--poll <seconds>", "queue polling interval", "2"),
   ).action(
@@ -317,7 +426,7 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
         type?: string;
         limit: number;
         yes?: boolean;
-        format?: string;
+        format?: ExportRequest["format"];
         out?: string;
         poll: string;
       },
@@ -332,20 +441,19 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
         const line = `${j.status} ${pct(j.progress)}`;
         if (line !== last) io.log(`  ${line}`);
         last = line;
-        if (["done", "failed", "cancelled"].includes(j.status)) {
+        if (ENDED.includes(j.status)) {
           io.log(formatJob(j));
           break;
         }
         await new Promise((r) => setTimeout(r, 500));
       }
-      if (o.format) {
-        const rows = await c.scrapers.listLeads({
-          projectId: await resolveProject(c, o.project),
-          jobId: id,
-          limit: 5000,
-        });
-        await writeExport(rows, o.format, o.out, io);
-      }
+      if (o.format)
+        await runExport(
+          c,
+          { projectId: await resolveProject(c, o.project), jobId: id, format: o.format },
+          o.out,
+          io,
+        );
     },
   );
 

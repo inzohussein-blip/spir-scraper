@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --color-brand: oklch(0.55 0.17 262);
+  --color-brand-soft: oklch(0.95 0.03 262);
+}
+
+:root {
+  color-scheme: light;
+  --bg: oklch(0.985 0 0);
+  --card: #fff;
+  --fg: oklch(0.21 0.02 262);
+  --muted: oklch(0.55 0.02 262);
+  --line: oklch(0.92 0.01 262);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: oklch(0.17 0.01 262);
+    --card: oklch(0.21 0.015 262);
+    --fg: oklch(0.95 0.01 262);
+    --muted: oklch(0.7 0.02 262);
+    --line: oklch(0.3 0.02 262);
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}

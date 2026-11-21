@@ -6,6 +6,7 @@ import { migrate } from "drizzle-orm/pglite/migrator";
 import { fromPglite, PgBoss } from "pg-boss";
 import { ProviderRouter } from "../src/pipeline/router.js";
 import { createScrapers } from "../src/pipeline/service.js";
+import type { LeadScore, Scorer, ScoringInput } from "../src/scoring.js";
 import {
   type Capability,
   NotFoundError,
@@ -16,7 +17,7 @@ import {
 
 const migrationsFolder = fileURLToPath(new URL("../../db/drizzle", import.meta.url));
 
-export async function setup(providers: Provider[]) {
+export async function setup(providers: Provider[], scorer?: Scorer) {
   const pg = new PGlite();
   const db = drizzle(pg, { schema });
   await migrate(db, { migrationsFolder });
@@ -33,6 +34,7 @@ export async function setup(providers: Provider[]) {
     db,
     boss,
     router,
+    scorer,
     config: { suppressionPepper: "test-pepper" },
   });
   await scrapers.init();
@@ -94,5 +96,40 @@ export class FakeProvider implements Provider {
   }
   async *listEngagers(_source: unknown, limit: number): AsyncIterable<string> {
     for (const u of this.impl.engagers?.(limit) ?? []) yield u;
+  }
+}
+
+/** A scorer that scores by follower count, with an in-memory "batch" API. */
+export class FakeScorer implements Scorer {
+  batches = new Map<string, { items: ScoringInput[]; ready: boolean }>();
+  constructor(readonly batchThreshold = 100) {}
+  private score(items: ScoringInput[]) {
+    return new Map<string, LeadScore>(
+      items.map((i) => [
+        i.id,
+        {
+          segment: i.isBusiness ? "potential_partner" : "individual_trader",
+          language: "ar",
+          country: "SA",
+          score: Math.min(100, Math.round((i.followers ?? 0) / 10)),
+          reason: `followers ${i.followers}`,
+        },
+      ]),
+    );
+  }
+  async scoreNow(items: ScoringInput[]) {
+    return this.score(items);
+  }
+  async submitBatch(items: ScoringInput[]) {
+    const id = `batch_${this.batches.size + 1}`;
+    this.batches.set(id, { items, ready: false });
+    return id;
+  }
+  async collectBatch(id: string) {
+    const b = this.batches.get(id);
+    return b?.ready ? this.score(b.items) : null;
+  }
+  async report(stats: { total: number }) {
+    return `report for ${stats.total}`;
   }
 }

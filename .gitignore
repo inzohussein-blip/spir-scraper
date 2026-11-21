@@ -9,3 +9,6 @@ coverage/
 __pycache__/
 .venv/
 .DS_Store
+.next/
+.vercel/
+*.tsbuildinfo
