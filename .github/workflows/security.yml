@@ -18,7 +18,7 @@ jobs:
   node:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -32,7 +32,7 @@ jobs:
       run:
         working-directory: services/ig-worker
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - name: Known vulnerabilities in the worker's dependencies
         run: uv export --locked --no-dev --format requirements-txt > /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --strict

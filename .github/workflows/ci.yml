@@ -16,7 +16,7 @@ jobs:
         # 24 is what Vercel runs today; 26 is the newer LTS line.
         node: [24, 26]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -34,7 +34,7 @@ jobs:
       run:
         working-directory: services/ig-worker
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked
       - run: uv run ruff check .
@@ -57,7 +57,7 @@ jobs:
     env:
       DATABASE_URL: postgres://scrapers:scrapers@localhost:5432/scrapers
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
