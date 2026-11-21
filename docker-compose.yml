@@ -1,0 +1,21 @@
+# Local development stack. Phase 0 runs Postgres only; api, jobs and
+# ig-worker services are added in phase 1.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: scrapers
+      POSTGRES_PASSWORD: scrapers
+      POSTGRES_DB: scrapers
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scrapers"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

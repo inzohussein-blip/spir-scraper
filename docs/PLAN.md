@@ -517,10 +517,10 @@ DEFAULT_RETENTION_DAYS=90
 ## 14. خارطة الطريق
 
 ### المرحلة 0 — التأسيس (2–3 أيام)
-- [ ] هيكل المستودع (pnpm و Turborepo و Biome و tsconfig المشترك)
-- [ ] `packages/db`: مخطط Drizzle وأول migration على Supabase
-- [ ] `docker-compose.yml` وملف `.env.example`
-- [ ] CI أساسي
+- [x] هيكل المستودع (pnpm و Turborepo و Biome و tsconfig المشترك)
+- [x] `packages/db`: مخطط Drizzle وأول migration، مع RLS. جُرّب على Postgres حقيقي، ويبقى تطبيقه على Supabase عند إنشاء المشروع
+- [x] `docker-compose.yml` وملف `.env.example`
+- [x] CI أساسي (فحص، بناء، أنواع، اختبارات، وتطبيق الـ migrations على Postgres)
 
 **بوابة:** `pnpm build && pnpm test` ينجحان في CI.
 
