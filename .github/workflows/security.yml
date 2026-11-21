@@ -33,6 +33,6 @@ jobs:
         working-directory: services/ig-worker
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Known vulnerabilities in the worker's dependencies
         run: uv export --locked --no-dev --format requirements-txt > /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --strict
