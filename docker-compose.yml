@@ -1,5 +1,5 @@
-# Local development stack. Phase 0 runs Postgres only; api, jobs and
-# ig-worker services are added in phase 1.
+# Local development stack: Postgres and the Instaloader worker.
+# The Node side (CLI / worker) runs on the host: pnpm scrapers ...
 services:
   postgres:
     image: postgres:17-alpine
@@ -16,6 +16,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  ig-worker:
+    build: ./services/ig-worker
+    environment:
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}
+      MIN_INTERVAL_SECONDS: ${MIN_INTERVAL_SECONDS:-3}
+    # Bound to localhost only: the worker is never exposed publicly.
+    ports:
+      - "127.0.0.1:8000:8000"
 
 volumes:
   pgdata:

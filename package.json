@@ -13,7 +13,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "db:generate": "pnpm --filter @scrapers/db generate",
-    "db:migrate": "pnpm --filter @scrapers/db migrate"
+    "db:migrate": "pnpm --filter @scrapers/db migrate",
+    "scrapers": "node apps/cli/dist/bin.js"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",

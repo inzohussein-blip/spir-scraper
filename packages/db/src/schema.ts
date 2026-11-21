@@ -39,6 +39,8 @@ export type JobCounts = {
   discovered?: number;
   enriched?: number;
   leads?: number;
+  /** Suppressed, private or missing accounts. */
+  skipped?: number;
   failed?: number;
   report?: string;
 };
@@ -153,3 +155,4 @@ export type Profile = typeof profiles.$inferSelect;
 export type NewProfile = typeof profiles.$inferInsert;
 export type Lead = typeof leads.$inferSelect;
 export type NewLead = typeof leads.$inferInsert;
+export type Suppression = typeof suppression.$inferSelect;

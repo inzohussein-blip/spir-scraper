@@ -11,22 +11,49 @@
 المتطلبات: Node.js 22.12 أو أحدث (يُفضّل 24)، و pnpm 10، و Docker.
 
 ```bash
-pnpm install
-cp .env.example .env
-docker compose up -d postgres     # Postgres محلي على المنفذ 5432
-pnpm db:migrate                   # تطبيق الـ migrations
-pnpm lint && pnpm build && pnpm typecheck && pnpm test
+pnpm install && pnpm build
+cp .env.example .env              # عبّئ SUPPRESSION_PEPPER و WORKER_SHARED_SECRET (openssl rand -hex 32)
+docker compose up -d              # Postgres + عامل Instaloader
+pnpm db:migrate
 ```
 
-لاستخدام Supabase بدل Postgres المحلي، ضع رابطَي الاتصال في `DATABASE_URL` و `DIRECT_DATABASE_URL`.
+لاستخدام Supabase بدل Postgres المحلي، ضع رابطَي الاتصال في `DATABASE_URL` و `DIRECT_DATABASE_URL`. الطابور (pg-boss) يستخدم `DIRECT_DATABASE_URL`، لأنه يحتاج اتصالاً مباشراً لا يمر عبر الـ pooler.
+
+## الاستخدام من الطرفية
+
+```bash
+pnpm scrapers project create "وكلاء الخليج" --retention 90
+
+# الطريقة المجانية: رفع قائمة معرّفات (عمود username أو روابط حسابات)
+pnpm scrapers run accounts.csv -p "وكلاء الخليج" -l 500 -f xlsx -o leads.xlsx
+
+# من رابط منافس أو منشور أو هاشتاق: يتطلب APIFY_TOKEN (ضمن الرصيد المجاني)
+pnpm scrapers run https://instagram.com/competitor -p "وكلاء الخليج" -l 200
+
+pnpm scrapers leads -p "وكلاء الخليج" --business --has-phone
+pnpm scrapers export -p "وكلاء الخليج" -f csv -o leads.csv
+pnpm scrapers suppress --phone +966501234567     # إيقاف وحذف
+pnpm scrapers job start <source> -p <project>    # إضافة مهمة للطابور فقط
+pnpm scrapers worker                             # معالجة الطابور باستمرار
+```
+
+## الاختبارات
+
+```bash
+pnpm lint && pnpm typecheck && pnpm test                  # TypeScript
+cd services/ig-worker && uv run pytest && uv run ruff check .   # Python
+```
 
 بعد تعديل `packages/db/src/schema.ts` شغّل `pnpm db:generate` لتوليد migration جديد.
 
 ## هيكل المستودع
 
 ```
-apps/              # cli و api و mcp و web (من المرحلة 1)
-packages/db/       # مخطط Drizzle والـ migrations
-services/          # ig-worker بلغة Python (من المرحلة 1)
-docs/              # الخطة والمراجع
+apps/cli/              # أمر scrapers
+packages/core/         # المهام والاستخراج والموجّه والإيقاف
+packages/providers/    # worker (Instaloader) و Apify
+packages/exporters/    # CSV و XLSX
+packages/db/           # مخطط Drizzle والـ migrations
+services/ig-worker/    # Python 3.14 + FastAPI + Instaloader
+docs/                  # الخطة والمراجع
 ```

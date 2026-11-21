@@ -1,0 +1,32 @@
+{
+  "name": "@scrapers/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "scrapers": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "tsx src/bin.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.9.0",
+    "@scrapers/core": "workspace:*",
+    "@scrapers/db": "workspace:*",
+    "@scrapers/exporters": "workspace:*",
+    "@scrapers/providers": "workspace:*",
+    "commander": "15.1.0",
+    "drizzle-orm": "0.45.4",
+    "pg-boss": "12.39.0",
+    "picocolors": "1.1.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.17",
+    "exceljs": "4.4.0",
+    "tsx": "4.23.15",
+    "vitest": "5.1.1"
+  }
+}

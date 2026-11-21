@@ -525,14 +525,16 @@ DEFAULT_RETENTION_DAYS=90
 **بوابة:** `pnpm build && pnpm test` ينجحان في CI.
 
 ### المرحلة 1 — نواة تعمل من الطرفية (1–2 أسبوع)
-- [ ] `packages/core`: المهام، والاستخراج، والتطبيع، والإيقاف، وإزالة التكرار
-- [ ] `packages/providers`: الواجهة الموحّدة، والموجّه، و Apify مع سقف الرصيد المجاني (Graph API مؤجّل)
-- [ ] `services/ig-worker`: خدمة FastAPI تغلّف Instaloader، بنقطة `/profile/{username}` فقط
-- [ ] مصدر `upload` (رفع قائمة CSV)
-- [ ] `packages/exporters`: CSV و XLSX
-- [ ] `apps/cli`: أوامر project و job و leads و export و worker
+- [x] `packages/core`: المهام، والاستخراج، والتطبيع، والإيقاف، وإزالة التكرار
+- [x] `packages/providers`: الواجهة الموحّدة، والموجّه، و Apify مع سقف الرصيد المجاني (Graph API مؤجّل). Apify لم يُجرَّب على حساب حقيقي بعد
+- [x] `services/ig-worker`: خدمة FastAPI تغلّف Instaloader، بنقطة `/profile/{username}` فقط. لم تُجرَّب على إنستقرام الحقيقي بعد
+- [x] مصدر `upload` (رفع قائمة CSV)
+- [x] `packages/exporters`: CSV و XLSX
+- [x] `apps/cli`: أوامر project و job و leads و export و suppress و worker و run
 
 **بوابة:** مهمة من 500 حساب تنتهي بملف XLSX صحيح، وتغطية اختبارات الاستخراج 90% أو أكثر.
+
+**الحالة:** تحققت البوابة باختبار آلي بمزوّد وهمي (500 حساب إلى XLSX)، والتغطية 100% للأسطر. يبقى اختبار حي على إنستقرام و Apify من جهاز المالك.
 
 ### المرحلة 2 — Claude والشيت (أسبوع واحد) ← أهم مرحلة
 - [ ] `apps/mcp`: الأدوات الثماني والموارد والقوالب، عبر stdio
