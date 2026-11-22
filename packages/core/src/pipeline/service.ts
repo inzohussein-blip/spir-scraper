@@ -822,10 +822,13 @@ export function createScrapers(deps: {
       { name: QUEUES.enrich, run: (d: unknown) => handleEnrich(d as EnrichPayload) },
     ];
     let idle = false;
-    while (Date.now() < deadline && !idle) {
+    // Each call takes at least one job even when the budget is already spent
+    // (a slow cold start, a busy machine), so a drain always makes progress.
+    const overBudget = () => processed > 0 && Date.now() >= deadline;
+    while (!overBudget() && !idle) {
       idle = true;
       for (const q of queues) {
-        if (Date.now() >= deadline) break;
+        if (overBudget()) break;
         const [job] = await boss.fetch<unknown>(q.name);
         if (!job) continue;
         idle = false;

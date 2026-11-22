@@ -1,14 +1,17 @@
 import { createMcpHandler } from "@modelcontextprotocol/server";
-import { buildMcpServer } from "@scrapers/mcp";
+import { buildMcpServer, SERVERLESS_MCP_OPTIONS } from "@scrapers/mcp";
 import { scheduleDrain } from "@/lib/drain";
 import { authorizeMcp } from "@/lib/mcp-auth";
 import { getRuntime } from "@/lib/runtime";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+// Every MCP exchange is a short request/response; nothing here should run long.
+export const maxDuration = 60;
 
-const handler = createMcpHandler(async () =>
-  buildMcpServer(await getRuntime(), { onJobStarted: () => scheduleDrain() }),
+const handler = createMcpHandler(
+  async () =>
+    buildMcpServer(await getRuntime(), { onJobStarted: () => scheduleDrain({ force: true }) }),
+  SERVERLESS_MCP_OPTIONS,
 );
 
 async function handle(req: Request) {
@@ -16,7 +19,7 @@ async function handle(req: Request) {
   if (!auth.ok) return auth.response;
   const res = await handler.fetch(req);
   // Keep queued jobs moving while Claude is polling get_job.
-  scheduleDrain(new URL(req.url).origin);
+  scheduleDrain({ origin: new URL(req.url).origin });
   return res;
 }
 

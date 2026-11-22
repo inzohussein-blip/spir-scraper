@@ -93,7 +93,7 @@ export async function createRuntime(
   if (!db) {
     const url = databaseUrl(env);
     if (!url) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
-    ownDb = createDb(url, o.serverless ? { max: 3 } : {});
+    ownDb = createDb(url, o.serverless ? { max: 3, idleTimeoutSeconds: 20 } : {});
     db = ownDb;
   }
 
@@ -103,7 +103,11 @@ export async function createRuntime(
     // pg-boss needs a session connection: Supabase's session pooler or direct URL, not the transaction pooler.
     boss = new PgBoss({
       connectionString: directDatabaseUrl(env) ?? "",
-      ...(o.serverless ? { supervise: false, schedule: false, max: 3 } : {}),
+      // Serverless: no background supervision, and idle connections close so
+      // the database can suspend between uses.
+      ...(o.serverless
+        ? { supervise: false, schedule: false, max: 2, idleTimeoutMillis: 20_000 }
+        : {}),
     });
     boss.on("error", (err) => console.error("[pg-boss]", err.message));
     await boss.start();
