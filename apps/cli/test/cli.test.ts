@@ -43,7 +43,8 @@ async function cli(args: string[], answer = false) {
   const program = buildProgram(async () => ({ ...rt, close: async () => {} }), io).exitOverride();
   await program.parseAsync(["node", "scrapers", ...args]);
   // CI terminals enable colours; strip them so assertions and parsed ids see plain text.
-  const plain = (lines: string[]) => lines.join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+  const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+  const plain = (lines: string[]) => lines.join("\n").replace(ansi, "");
   return { out: plain(out), err: plain(err) };
 }
 describe("scrapers CLI", () => {
