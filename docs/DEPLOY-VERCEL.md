@@ -25,6 +25,8 @@
 
 التطبيق يستخدم `DATABASE_URL_UNPOOLED` للطابور والجداول تلقائياً إن لم تضع `DIRECT_DATABASE_URL`، فلا تنسخ شيئاً يدوياً.
 
+إن وضعت **Custom Prefix** عند الربط، تصبح الأسماء مثل `NEON_DATABASE_URL`. التطبيق يقرأ البادئتين `NEON_` و `STORAGE_` تلقائياً. لأي بادئة أخرى أضف `DATABASE_ENV_PREFIX` بقيمتها، مثلاً `MYDB`.
+
 **أو يدوياً:** أنشئ مشروعاً على neon.tech، ومن **Connect** خذ:
 - الرابط مع **Connection pooling** مفعّلاً ← `DATABASE_URL`
 - الرابط مع **Connection pooling** مطفأً ← `DIRECT_DATABASE_URL`

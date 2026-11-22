@@ -23,6 +23,21 @@ describe("connection urls", () => {
     expect(directDatabaseUrl(env)).toBe("session");
   });
 
+  it("accepts names Vercel's integrations set with a custom prefix", () => {
+    const neon = { NEON_DATABASE_URL: "pooled", NEON_DATABASE_URL_UNPOOLED: "direct" };
+    expect(databaseUrl(neon)).toBe("pooled");
+    expect(directDatabaseUrl(neon)).toBe("direct");
+    expect(databaseUrl({ NEON_POSTGRES_URL: "pg" })).toBe("pg");
+    const custom = {
+      DATABASE_ENV_PREFIX: "MYDB_",
+      MYDB_DATABASE_URL: "mine",
+      NEON_DATABASE_URL: "neon",
+    };
+    expect(databaseUrl(custom)).toBe("mine");
+    // Unprefixed names still win.
+    expect(databaseUrl({ DATABASE_URL: "own", NEON_DATABASE_URL: "neon" })).toBe("own");
+  });
+
   it("falls back to the pooled url and ignores blanks", () => {
     expect(directDatabaseUrl({ DATABASE_URL: "pooled", DIRECT_DATABASE_URL: " " })).toBe("pooled");
     expect(directDatabaseUrl({})).toBeUndefined();

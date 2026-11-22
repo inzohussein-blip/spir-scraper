@@ -12,7 +12,7 @@ import {
 } from "@scrapers/core";
 import { buildMcpServer } from "@scrapers/mcp";
 import type { ExportRequest } from "@scrapers/runtime";
-import { generateVapidKeys } from "@scrapers/runtime";
+import { databaseUrl, generateVapidKeys } from "@scrapers/runtime";
 import { Command, InvalidArgumentError, Option } from "commander";
 import pc from "picocolors";
 import type { Context, ContextFactory } from "./context.js";
@@ -497,7 +497,7 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
         io.log(
           `${ok === null ? pc.dim("–") : ok ? pc.green("✓") : pc.red("✗")} ${label}${detail ? pc.dim(`  ${detail}`) : ""}`,
         );
-      line(!!(env.DATABASE_URL || env.POSTGRES_URL), "DATABASE_URL");
+      line(!!databaseUrl(env), "DATABASE_URL");
       line(!!env.SUPPRESSION_PEPPER, "SUPPRESSION_PEPPER");
       line(
         !!(env.WORKER_URL || env.APIFY_TOKEN || env.IG_GRAPH_TOKEN),

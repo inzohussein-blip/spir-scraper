@@ -1,4 +1,5 @@
 import "server-only";
+import { databaseUrl } from "@scrapers/runtime";
 
 /** Public origin of this deployment, used for OAuth metadata and self-calls. */
 export function appOrigin(req?: Request): string {
@@ -19,7 +20,7 @@ export function authSecret(): Uint8Array {
 
 export function integrationStatus() {
   return {
-    database: !!(process.env.DATABASE_URL || process.env.POSTGRES_URL),
+    database: !!databaseUrl(),
     worker: !!process.env.WORKER_URL,
     apify: !!process.env.APIFY_TOKEN,
     graph: !!(process.env.IG_BUSINESS_ACCOUNT_ID && process.env.IG_GRAPH_TOKEN),

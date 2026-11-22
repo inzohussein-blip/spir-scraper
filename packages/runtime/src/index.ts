@@ -25,6 +25,8 @@ import { PgBoss } from "pg-boss";
 import { WebPushSink } from "./push.js";
 import { type FetchLike, TelegramNotifier } from "./telegram.js";
 
+/** Which database URL the app will use, for status checks (any accepted variable name). */
+export { databaseUrl, directDatabaseUrl } from "@scrapers/db";
 export * from "./commands.js";
 export * from "./push.js";
 export * from "./telegram.js";
