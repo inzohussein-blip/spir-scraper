@@ -30,6 +30,7 @@
 
 1. في vercel.com: **Add New → Project** واختر المستودع `spir-scraper` من GitHub.
 2. **Root Directory:** `apps/web`. أوامر التثبيت والبناء مضبوطة في `apps/web/vercel.json` فلا تغيّرها.
+   - **يبني Vercel فرع `main` فقط:** `ignoreCommand` في `vercel.json` يتخطى بناء أي فرع آخر، مثل فروع العمل وطلبات Dependabot، فلا تُستهلك دقائق البناء على نسخ تجريبية.
 3. أضف متغيرات البيئة (Settings → Environment Variables):
 
 | المتغير | إلزامي | القيمة |
