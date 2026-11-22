@@ -164,6 +164,38 @@ describe("pipeline handlers", () => {
     }
   });
 
+  it("runs a followers job end to end and keeps its source after a reload", async () => {
+    const followers = new FakeProvider("apify", ["account_followers"], {
+      engagers: () => ["f1", "f2", "f3"],
+    });
+    const engagersOnly = new FakeProvider("graph", ["account_engagers"], {
+      engagers: () => ["commenter"],
+    });
+    const worker = new FakeProvider("worker", ["profile"], { profile: fakeProfile });
+    const t = await setup([engagersOnly, followers, worker]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const source = parseSource("https://www.instagram.com/competitor/followers/");
+      const { job } = await t.scrapers.startJob({ projectId: p.id, source, limit: 10 });
+      // Stored in the database with the new enum value, then read back for discovery.
+      for (let i = 0; i < 10; i++) {
+        const r = await t.scrapers.drain({ budgetMs: 5_000 });
+        if (r.activeJobs === 0) break;
+      }
+      const j = await t.scrapers.getJob(job.id);
+      expect(j).toMatchObject({
+        status: "done",
+        sourceType: "followers",
+        provider: "apify",
+        counts: { discovered: 3, enriched: 3 },
+      });
+      const leads = await t.scrapers.listLeads({ projectId: p.id });
+      expect(leads.map((l) => l.username).sort()).toEqual(["f1", "f2", "f3"]);
+    } finally {
+      await t.close();
+    }
+  });
+
   it("fails a job with a helpful message when no provider can discover", async () => {
     const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
     try {

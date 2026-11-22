@@ -80,6 +80,8 @@
 | `APP_URL` | مستحسن | رابط النشر النهائي، مثل `https://scrapers.vercel.app` |
 | `APIFY_TOKEN` | للاكتشاف | من حسابك في Apify |
 | `APIFY_MONTHLY_CAP_USD` | | `0` = الرصيد المجاني فقط |
+| `APIFY_RECENT_POSTS` | | عدد منشورات المنافس التي يُجمع المعلّقون عليها (افتراضياً 20) |
+| `APIFY_FOLLOWERS_ACTOR` | | خدمة Apify لجرد المتابعين (افتراضياً `apify~instagram-followers-following-scraper`، ولا تحتاج تسجيل دخولك) |
 | `ANTHROPIC_API_KEY` | اختياري | للتقييم من اللوحة. عبر MCP يقيّم Claude بنفسه بدونه |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | اختياري | JSON حساب خدمة Google (يمكن بصيغة base64) |
 | `WORKER_URL` و `WORKER_SHARED_SECRET` | اختياري | عامل Instaloader على جهازك عبر نفق |

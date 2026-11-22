@@ -212,6 +212,47 @@ describe("ApifyProvider", () => {
     ).toEqual(["a"]);
   });
 
+  it("reads commenters from the competitor's 20 most recent posts by default", async () => {
+    const f = fakeFetch((url) => (url.includes("/limits") ? limits(5, 0) : json([])));
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    for await (const _ of p.listEngagers({ type: "profile", username: "c", url: "u" }, 10)) {
+    }
+    const posts = f.calls.find((c) => c.url.includes("post-scraper"));
+    expect(JSON.parse(String(posts?.init?.body))).toEqual({ username: ["c"], resultsLimit: 20 });
+  });
+
+  it("collects an account's followers with Apify's followers actor", async () => {
+    const f = fakeFetch((url) =>
+      url.includes("/limits")
+        ? limits(5, 0)
+        : json([{ username: "Follower1" }, { username: "competitor" }, { username: "f2" }]),
+    );
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    const out: string[] = [];
+    for await (const u of p.listEngagers(
+      { type: "followers", username: "competitor", url: "u" },
+      50,
+    ))
+      out.push(u);
+    expect(out).toEqual(["follower1", "f2"]);
+    const run = f.calls.find((c) => c.url.includes("/acts/"));
+    expect(run?.url).toContain("/acts/apify~instagram-followers-following-scraper/");
+    expect(JSON.parse(String(run?.init?.body))).toEqual({
+      usernames: ["competitor"],
+      dataToScrape: "followers",
+      resultsLimit: 50,
+    });
+  });
+
+  it("lets the followers actor and post count be configured", () => {
+    const [p] = providersFromEnv({
+      APIFY_TOKEN: "t",
+      APIFY_FOLLOWERS_ACTOR: "someone~followers",
+      APIFY_RECENT_POSTS: "30",
+    });
+    expect(p?.capabilities.has("account_followers")).toBe(true);
+  });
+
   it("yields nothing when a competitor has no posts", async () => {
     const f = fakeFetch((url) =>
       url.includes("/limits") ? limits(5, 0) : json({ not: "an array" }),

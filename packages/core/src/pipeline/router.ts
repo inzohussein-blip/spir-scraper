@@ -16,6 +16,7 @@ export class NoProviderError extends Error {
 
 const SOURCE_CAPABILITY: Record<Exclude<Source["type"], "upload">, Capability> = {
   profile: "account_engagers",
+  followers: "account_followers",
   post: "post_commenters",
   hashtag: "hashtag_posters",
 };

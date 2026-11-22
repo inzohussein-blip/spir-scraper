@@ -1428,5 +1428,7 @@ function sourceFromJob(job: {
     return { type: "post", shortcode: parts[1] ?? "", url: job.sourceUrl };
   if (job.sourceType === "hashtag")
     return { type: "hashtag", tag: decodeURIComponent(parts[2] ?? ""), url: job.sourceUrl };
+  if (job.sourceType === "followers")
+    return { type: "followers", username: parts[0] ?? "", url: job.sourceUrl };
   return { type: "profile", username: parts[0] ?? "", url: job.sourceUrl };
 }

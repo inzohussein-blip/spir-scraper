@@ -18,7 +18,13 @@ import {
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 
-export const sourceType = pgEnum("source_type", ["profile", "post", "hashtag", "upload"]);
+export const sourceType = pgEnum("source_type", [
+  "profile",
+  "followers",
+  "post",
+  "hashtag",
+  "upload",
+]);
 export const jobStatus = pgEnum("job_status", ["queued", "running", "done", "failed", "cancelled"]);
 export const contactSource = pgEnum("contact_source", ["business_button", "bio", "link"]);
 export const providerId = pgEnum("provider_id", ["graph", "apify", "worker", "upload"]);

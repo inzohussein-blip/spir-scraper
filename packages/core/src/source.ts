@@ -23,6 +23,10 @@ const RESERVED = new Set([
   "developer",
 ]);
 
+function followersOf(username: string): Extract<Source, { type: "followers" }> {
+  return { type: "followers", username, url: `https://www.instagram.com/${username}/followers/` };
+}
+
 export function isValidUsername(u: string): boolean {
   return USERNAME_RE.test(u) && !u.startsWith(".") && !u.endsWith(".") && !u.includes("..");
 }
@@ -48,7 +52,9 @@ export function parseSource(
   if (!s.includes("/") && !s.includes(".com")) {
     const username = normalizeUsername(s);
     if (!isValidUsername(username)) throw new SourceError(`Invalid username: ${s}`);
-    return { type: "profile", username, url: `https://www.instagram.com/${username}/` };
+    return type === "followers"
+      ? followersOf(username)
+      : { type: "profile", username, url: `https://www.instagram.com/${username}/` };
   }
 
   let url: URL;
@@ -75,6 +81,10 @@ export function parseSource(
   }
   if (first && !RESERVED.has(first)) {
     const username = normalizeUsername(first);
+    // instagram.com/<user>/followers/, or a profile link asked for as followers.
+    if (isValidUsername(username) && (second === "followers" || type === "followers")) {
+      return followersOf(username);
+    }
     if (isValidUsername(username)) {
       return { type: "profile", username, url: `https://www.instagram.com/${username}/` };
     }

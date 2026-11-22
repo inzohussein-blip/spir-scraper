@@ -27,10 +27,12 @@ export interface RawProfile {
 
 export type ProviderId = "graph" | "apify" | "worker";
 
-export type SourceType = "profile" | "post" | "hashtag" | "upload";
+export type SourceType = "profile" | "followers" | "post" | "hashtag" | "upload";
 
 export type Source =
   | { type: "profile"; username: string; url: string }
+  /** The account's followers list (needs a provider with account_followers). */
+  | { type: "followers"; username: string; url: string }
   | { type: "post"; shortcode: string; url: string }
   | { type: "hashtag"; tag: string; url: string }
   | { type: "upload"; usernames: string[]; url: string };
@@ -40,7 +42,8 @@ export type Capability =
   | "business_contact"
   | "post_commenters"
   | "hashtag_posters"
-  | "account_engagers";
+  | "account_engagers"
+  | "account_followers";
 
 export interface Provider {
   readonly id: ProviderId;

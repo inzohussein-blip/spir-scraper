@@ -58,7 +58,8 @@ export default async function NewJob({
           <Field label="نوع الرابط">
             <Select name="type" defaultValue="">
               <option value="">تلقائي</option>
-              <option value="profile">حساب</option>
+              <option value="profile">حساب: المعلّقون على منشوراته</option>
+              <option value="followers">حساب: قائمة متابعيه</option>
               <option value="post">منشور</option>
               <option value="hashtag">هاشتاق</option>
             </Select>

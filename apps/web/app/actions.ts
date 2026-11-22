@@ -137,7 +137,9 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
       const type = str(form, "type");
       source = parseSource(
         str(form, "source"),
-        type === "hashtag" || type === "post" || type === "profile" ? type : undefined,
+        type === "hashtag" || type === "post" || type === "profile" || type === "followers"
+          ? type
+          : undefined,
       );
     } else {
       return { error: "أدخل رابطاً أو ارفع ملف CSV" };
