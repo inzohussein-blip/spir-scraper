@@ -69,7 +69,21 @@ try {
   step("API key and health card");
 
   await page.goto(`${B}/`);
+  // Shortcuts work once React has hydrated the page.
+  await page.waitForSelector("html[data-ready]", { state: "attached" });
   await page.keyboard.press("Control+k");
+  try {
+    await page.waitForSelector('input[placeholder^="ابحث"]', { timeout: 10_000 });
+  } catch (err) {
+    // Diagnostics for CI: was the page hydrated, and where did the key go?
+    const state = await page.evaluate(() => ({
+      ready: document.documentElement.dataset.ready ?? null,
+      active: document.activeElement?.tagName ?? null,
+      url: location.href,
+    }));
+    console.error("palette did not open", state, await browser.version());
+    throw err;
+  }
   await page.fill('input[placeholder^="ابحث"]', "وكلاء");
   await page.keyboard.press("Enter");
   await page.waitForURL(/\/leads\?project=/);

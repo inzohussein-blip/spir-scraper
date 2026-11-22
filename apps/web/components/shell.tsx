@@ -180,6 +180,8 @@ export function Shell({
       }
     };
     window.addEventListener("keydown", onKey);
+    // Marks the page interactive (keyboard shortcuts attached); end-to-end tests wait for it.
+    document.documentElement.dataset.ready = "1";
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
