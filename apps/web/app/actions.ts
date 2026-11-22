@@ -16,6 +16,7 @@ import {
   endSession,
   MAX_TRIES_PER_IP,
   MAX_TRIES_TOTAL,
+  passwordSettingProblem,
   requireSession,
   sendLoginCode,
   startSession,
@@ -51,6 +52,9 @@ async function lockedOut(): Promise<boolean> {
 const LOCKED = "محاولات خاطئة كثيرة. حاول بعد 10 دقائق.";
 
 export async function login(_: ActionState, form: FormData): Promise<ActionState> {
+  // A missing or too short setting is the owner's to fix, not a wrong try.
+  const setting = passwordSettingProblem();
+  if (setting) return { error: setting };
   if (await lockedOut()) return { error: LOCKED };
   if (!checkPassword(str(form, "password"))) {
     await audit("login.failed", { stage: "password" }, "anonymous");

@@ -67,7 +67,7 @@
 | `DB_SIZE_LIMIT_MB` | | حد تخزين خطتك، لشريط الحجم في الإعدادات (افتراضياً 500) |
 | `SUPPRESSION_PEPPER` | ✅ | `openssl rand -hex 32` (لا تغيّره بعد البدء) |
 | `AUTH_SECRET` | ✅ | `openssl rand -hex 32` (تغييره يُلغي كل الجلسات والرموز) |
-| `DASHBOARD_PASSWORD` | ✅ | كلمة مرور اللوحة، 12 حرفاً على الأقل |
+| `DASHBOARD_PASSWORD` | ✅ | كلمة مرور اللوحة، 8 أحرف على الأقل (يُفضّل أطول) |
 | `CRON_SECRET` | ✅ | `openssl rand -hex 32`، و Vercel يرسله تلقائياً مع مهام cron |
 | `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHAT_ID` | مستحسن | الإشعارات على تلكرام، وكود الدخول بخطوتين |
 | `VAPID_PUBLIC_KEY` و `VAPID_PRIVATE_KEY` | اختياري | إشعارات المتصفح والموبايل. تُولَّد بـ `pnpm scrapers push-keys` |

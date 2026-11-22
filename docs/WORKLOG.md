@@ -170,7 +170,7 @@
 - [ ] **متغيرات البيئة في Vercel** (Settings → Environment Variables)، ثم Redeploy:
   - `DATABASE_URL` و `DIRECT_DATABASE_URL`: من Neon (**Storage → Create Database → Neon** يضيفهما تلقائياً)
   - `AUTH_SECRET` و `CRON_SECRET` و `SUPPRESSION_PEPPER`: كل واحد `openssl rand -hex 32`
-  - `DASHBOARD_PASSWORD`: 12 حرفاً أو أكثر
+  - `DASHBOARD_PASSWORD`: 8 أحرف أو أكثر (Pull Request #12 خفّض الحد من 12)
   - `OWNER_EMAIL`
   - `APP_URL=https://spir-scraper.vercel.app` (موصى به حتى تبقى روابط OAuth و MCP ثابتة)
   - اختياري: `APIFY_TOKEN`، و `WORKER_URL` مع `WORKER_SHARED_SECRET`، و `TELEGRAM_BOT_TOKEN` مع `TELEGRAM_CHAT_ID`، و `ANTHROPIC_API_KEY`

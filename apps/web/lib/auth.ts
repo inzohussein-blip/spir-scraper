@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { authSecret } from "./env";
 import { getRuntime } from "./runtime";
-import { safeEqual, sign, verify } from "./tokens";
+import { dashboardPasswordProblem, safeEqual, sign, verify } from "./tokens";
 
 export const SESSION_COOKIE = "scrapers_session";
 const CODE_COOKIE = "scrapers_2fa";
@@ -15,10 +15,15 @@ const CODE_TTL = 5 * 60;
 export const MAX_TRIES_PER_IP = 5;
 export const MAX_TRIES_TOTAL = 30;
 
+/** Arabic message when DASHBOARD_PASSWORD is missing or too short, else null. */
+export function passwordSettingProblem(): string | null {
+  return dashboardPasswordProblem(process.env.DASHBOARD_PASSWORD);
+}
+
+/** False (never a match) while the setting is unusable; the login page shows passwordSettingProblem(). */
 export function checkPassword(password: string): boolean {
   const expected = process.env.DASHBOARD_PASSWORD;
-  if (!expected || expected.length < 12)
-    throw new Error("DASHBOARD_PASSWORD must be set (12+ characters)");
+  if (!expected || dashboardPasswordProblem(expected)) return false;
   return safeEqual(password, expected);
 }
 
