@@ -35,4 +35,4 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - name: Known vulnerabilities in the worker's dependencies
-        run: uv export --locked --no-dev --format requirements-txt > /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --strict
+        run: uv export --locked --no-dev --no-emit-project --format requirements-txt > /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --strict

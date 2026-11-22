@@ -42,7 +42,9 @@ async function cli(args: string[], answer = false) {
   // Commands close their context; the test keeps one database for all of them.
   const program = buildProgram(async () => ({ ...rt, close: async () => {} }), io).exitOverride();
   await program.parseAsync(["node", "scrapers", ...args]);
-  return { out: out.join("\n"), err: err.join("\n") };
+  // CI terminals enable colours; strip them so assertions and parsed ids see plain text.
+  const plain = (lines: string[]) => lines.join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+  return { out: plain(out), err: plain(err) };
 }
 describe("scrapers CLI", () => {
   it("creates and lists projects", async () => {

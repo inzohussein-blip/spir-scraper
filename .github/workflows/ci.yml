@@ -12,6 +12,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     strategy:
+      # Let both Node versions finish, so a failure on one does not hide the other.
+      fail-fast: false
       matrix:
         # 24 is what Vercel runs today; 26 is the newer LTS line.
         node: [24, 26]
