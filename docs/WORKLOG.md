@@ -174,7 +174,7 @@
   - `OWNER_EMAIL`
   - `APP_URL=https://spir-scraper.vercel.app` (موصى به حتى تبقى روابط OAuth و MCP ثابتة)
   - اختياري: `APIFY_TOKEN`، و `WORKER_URL` مع `WORKER_SHARED_SECRET`، و `TELEGRAM_BOT_TOKEN` مع `TELEGRAM_CHAT_ID`، و `ANTHROPIC_API_KEY`
-- [ ] تشغيل الـ migrations على قاعدة Neon: `DIRECT_DATABASE_URL="..." pnpm db:migrate`
+- [x] ~~تشغيل الـ migrations يدوياً~~: صارت تعمل تلقائياً مع كل بناء إنتاج على Vercel (Pull Request #11)
 - [ ] تشغيل العامل في البيت ([docs/HOME-WORKER.md](HOME-WORKER.md))
 - [ ] ربط Claude بخادم MCP: `https://spir-scraper.vercel.app/api/mcp`
 - [ ] رفع `pg-boss` إلى 12.39.0 أو أحدث (أصبح ممكناً الآن بعد مرور يوم على نشره)
@@ -191,3 +191,4 @@
 | `3eb3352` | سد الثغرات الأمنية، واستبدال exceljs، و pnpm 12 |
 | `f91a175` | تدوير البروكسيات في العامل، وعامل البيت مع Cloudflare Tunnel، والوثائق |
 | `9788dce` | دمج Pull Request #9 في `main` |
+| PR #11 | قراءة متغيرات Neon ذات البادئة `NEON_`، وتطبيق الـ migrations تلقائياً في بناء Vercel |

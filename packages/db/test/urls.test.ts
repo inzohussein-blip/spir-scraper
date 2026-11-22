@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { skipReason } from "../src/migrate.js";
 import { databaseUrl, directDatabaseUrl } from "../src/urls.js";
 
 describe("connection urls", () => {
@@ -41,5 +42,19 @@ describe("connection urls", () => {
   it("falls back to the pooled url and ignores blanks", () => {
     expect(directDatabaseUrl({ DATABASE_URL: "pooled", DIRECT_DATABASE_URL: " " })).toBe("pooled");
     expect(directDatabaseUrl({})).toBeUndefined();
+  });
+});
+
+describe("migrations on the Vercel build", () => {
+  const url = { NEON_DATABASE_URL_UNPOOLED: "postgres://x" };
+  it("runs on production builds with a database", () => {
+    expect(skipReason(["--if-configured"], { ...url, VERCEL_ENV: "production" })).toBeNull();
+  });
+  it("skips without a database or on previews", () => {
+    expect(skipReason(["--if-configured"], { VERCEL_ENV: "production" })).toMatch(/no database/);
+    expect(skipReason(["--if-configured"], { ...url, VERCEL_ENV: "preview" })).toMatch(/preview/);
+  });
+  it("never skips when run by hand", () => {
+    expect(skipReason([], {})).toBeNull();
   });
 });
