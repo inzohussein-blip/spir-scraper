@@ -30,7 +30,7 @@ export async function POST(req: Request) {
       scrapers: rt.scrapers,
       owner: rt.owner,
       appUrl: appOrigin(req),
-      onJobStarted: () => scheduleDrain(appOrigin(req)),
+      onJobStarted: () => scheduleDrain({ origin: appOrigin(req), force: true }),
     },
     text,
     state,

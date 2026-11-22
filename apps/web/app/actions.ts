@@ -154,7 +154,7 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
   } catch (err) {
     return fail(err);
   }
-  scheduleDrain();
+  scheduleDrain({ force: true });
   redirect(`/jobs/${jobId}`);
 }
 
