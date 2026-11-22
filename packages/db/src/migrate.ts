@@ -2,12 +2,13 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
+import { directDatabaseUrl } from "./urls.js";
 
 export const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 async function main() {
-  const url = process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL;
-  if (!url) throw new Error("DIRECT_DATABASE_URL or DATABASE_URL must be set");
+  const url = directDatabaseUrl();
+  if (!url) throw new Error("Set DIRECT_DATABASE_URL (or DATABASE_URL_UNPOOLED / DATABASE_URL)");
   const client = postgres(url, { max: 1 });
   try {
     await migrate(drizzle(client), { migrationsFolder });

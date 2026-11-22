@@ -1,6 +1,6 @@
 # النشر على Vercel
 
-المستودع جاهز للنشر: لوحة التحكم، والـ REST API، وخادم MCP لـ Claude، و OAuth كلها في تطبيق واحد هو `apps/web`. قاعدة البيانات على Supabase.
+المستودع جاهز للنشر: لوحة التحكم، والـ REST API، وخادم MCP لـ Claude، و OAuth كلها في تطبيق واحد هو `apps/web`. قاعدة البيانات Postgres على Neon أو Supabase، والاثنان يعملان بلا تغيير في الكود.
 
 ## ما يعمل على Vercel وما لا يعمل
 
@@ -13,7 +13,31 @@
 
 > **تنبيه الخطة المجانية:** خطة Hobby في Vercel مخصصة للاستخدام الشخصي غير التجاري حسب شروطهم. للاستخدام التجاري تحتاج خطة Pro. راجع شروط Vercel الحالية.
 
-## الخطوة 1 — Supabase (مجاني)
+## الخطوة 1 — قاعدة البيانات: Neon أو Supabase
+
+اختر واحدة منهما.
+
+### الخيار أ: Neon (الأسهل مع Vercel)
+
+**الطريقة الأسرع:** من مشروعك في Vercel: **Storage → Create Database → Neon**، ثم اربطها بالمشروع. يضيف Vercel المتغيرات بنفسه:
+- `DATABASE_URL`: الرابط الذي يمر عبر الـ pooler (فيه `-pooler` في اسم المضيف)
+- `DATABASE_URL_UNPOOLED`: الرابط المباشر
+
+التطبيق يستخدم `DATABASE_URL_UNPOOLED` للطابور والجداول تلقائياً إن لم تضع `DIRECT_DATABASE_URL`، فلا تنسخ شيئاً يدوياً.
+
+**أو يدوياً:** أنشئ مشروعاً على neon.tech، ومن **Connect** خذ:
+- الرابط مع **Connection pooling** مفعّلاً ← `DATABASE_URL`
+- الرابط مع **Connection pooling** مطفأً ← `DIRECT_DATABASE_URL`
+
+ملاحظات:
+- Neon يطفئ قاعدة البيانات بعد فترة خمول ويوقظها مع أول طلب، فقد يتأخر أول طلب بعد الخمول قليلاً. هذا طبيعي.
+- راجع حدود الخطة المجانية الحالية في صفحة أسعار Neon. ضع حد التخزين في `DB_SIZE_LIMIT_MB` ليُحسب شريط حجم قاعدة البيانات في صفحة الإعدادات صحيحاً.
+- طبّق الجداول مرة واحدة من جهازك بالرابط المباشر:
+  ```bash
+  DIRECT_DATABASE_URL="postgres://...neon.tech/neondb?sslmode=require" pnpm db:migrate
+  ```
+
+### الخيار ب: Supabase
 
 1. أنشئ مشروعاً على supabase.com.
 2. من **Connect** خذ رابطين:
@@ -35,8 +59,9 @@
 
 | المتغير | إلزامي | القيمة |
 |---|---|---|
-| `DATABASE_URL` | ✅ | Transaction pooler من Supabase |
-| `DIRECT_DATABASE_URL` | ✅ | Session pooler من Supabase |
+| `DATABASE_URL` | ✅ | الرابط عبر الـ pooler (Neon: يضيفه التكامل تلقائياً، Supabase: Transaction pooler) |
+| `DIRECT_DATABASE_URL` | ✅ | الرابط المباشر (Neon: يكفي `DATABASE_URL_UNPOOLED` من التكامل، Supabase: Session pooler) |
+| `DB_SIZE_LIMIT_MB` | | حد تخزين خطتك، لشريط الحجم في الإعدادات (افتراضياً 500) |
 | `SUPPRESSION_PEPPER` | ✅ | `openssl rand -hex 32` (لا تغيّره بعد البدء) |
 | `AUTH_SECRET` | ✅ | `openssl rand -hex 32` (تغييره يُلغي كل الجلسات والرموز) |
 | `DASHBOARD_PASSWORD` | ✅ | كلمة مرور اللوحة، 12 حرفاً على الأقل |

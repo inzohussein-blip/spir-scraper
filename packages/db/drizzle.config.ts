@@ -1,11 +1,12 @@
 import { defineConfig } from "drizzle-kit";
+import { directDatabaseUrl } from "./src/urls.js";
 
 export default defineConfig({
   dialect: "postgresql",
   schema: "./src/schema.ts",
   out: "./drizzle",
   dbCredentials: {
-    url: process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL ?? "",
+    url: directDatabaseUrl() ?? "",
   },
   strict: true,
 });
