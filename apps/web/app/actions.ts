@@ -22,7 +22,9 @@ import {
   twoFactorEnabled,
 } from "@/lib/auth";
 import { scheduleDrain } from "@/lib/drain";
+import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
+import { telegramWebhookSecret } from "@/lib/telegram";
 
 export type ActionState = {
   error?: string;
@@ -289,4 +291,88 @@ export async function checkProviders(): Promise<ActionState> {
   if (results.length === 0) return { error: "لا يوجد مصدر مفعّل" };
   const lines = results.map((r) => `${r.ok ? "✓" : "✗"} ${r.provider}: ${r.detail}`).join(" · ");
   return results.every((r) => r.ok) ? { message: lines } : { error: lines };
+}
+
+export async function connectTelegramCommands(): Promise<ActionState> {
+  await requireSession();
+  const rt = await getRuntime();
+  if (!rt.telegram) return { error: "تلكرام غير مضبوط" };
+  const origin = appOrigin();
+  if (!origin.startsWith("https://"))
+    return { error: "يحتاج تلكرام رابطاً يبدأ بـ https (ضع APP_URL)" };
+  try {
+    await rt.telegram.setWebhook(`${origin}/api/telegram`, telegramWebhookSecret());
+  } catch (err) {
+    return fail(err);
+  }
+  await audit("telegram.webhook");
+  return { message: "تم الربط. أرسل /help للبوت على تلكرام." };
+}
+
+const STATUSES = ["new", "contacted", "interested", "customer", "rejected"] as const;
+type Status = (typeof STATUSES)[number];
+
+export async function setLeadStatus(projectId: string, username: string, status: string) {
+  await requireSession();
+  if (!STATUSES.includes(status as Status)) return;
+  await (await getRuntime()).scrapers.setLeadStatus({
+    projectId,
+    username,
+    status: status as Status,
+  });
+  revalidatePath("/leads");
+}
+
+export async function updateProjectSettings(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const id = str(form, "project");
+  const keywords = str(form, "keywords")
+    .split(/[,،\n]/)
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .slice(0, 50);
+  try {
+    await (await getRuntime()).scrapers.updateProject(id, {
+      autoExport: form.get("auto_export") === "on",
+      watchKeywords: keywords.length ? keywords : null,
+      aiCriteria: str(form, "criteria") || null,
+      sheetId: str(form, "sheet") || null,
+    });
+  } catch (err) {
+    return fail(err);
+  }
+  await audit("project.update", { id });
+  revalidatePath("/leads");
+  return { message: "حُفظت إعدادات المشروع" };
+}
+
+export async function addMonitor(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const source = parseSource(str(form, "source"));
+    await (await getRuntime()).scrapers.createMonitor({
+      projectId: str(form, "project"),
+      source,
+      limit: Number(str(form, "limit") || 100),
+      everyDays: Number(str(form, "every") || 7),
+    });
+  } catch (err) {
+    return fail(err);
+  }
+  await audit("monitor.create", { source: str(form, "source") });
+  revalidatePath("/leads");
+  return { message: "أُضيفت المراقبة. تعمل مع المهمة اليومية وتجمع الحسابات الجديدة فقط." };
+}
+
+export async function toggleMonitor(id: string, enabled: boolean) {
+  await requireSession();
+  await (await getRuntime()).scrapers.setMonitorEnabled(id, enabled);
+  revalidatePath("/leads");
+}
+
+export async function removeMonitor(id: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.deleteMonitor(id);
+  await audit("monitor.delete", { id });
+  revalidatePath("/leads");
 }

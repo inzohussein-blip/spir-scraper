@@ -29,6 +29,20 @@
       "when": 1795290177821,
       "tag": "0003_rls_audit_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795294610262,
+      "tag": "0004_leads_workflow_and_performance",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795294610924,
+      "tag": "0005_rls_new_tables",
+      "breakpoints": true
     }
   ]
 }

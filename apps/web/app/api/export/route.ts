@@ -20,6 +20,10 @@ export async function GET(req: Request) {
       ...(q.get("has_email") ? { hasEmail: true } : {}),
       ...(q.get("has_phone") ? { hasPhone: true } : {}),
       ...(q.get("min_score") ? { minScore: Number(q.get("min_score")) } : {}),
+      ...(q.get("q") ? { q: q.get("q") as string } : {}),
+      ...(["new", "contacted", "interested", "customer", "rejected"].includes(q.get("status") ?? "")
+        ? { status: q.get("status") as "new" }
+        : {}),
     },
   });
   if (r.kind !== "file") return new Response("unexpected", { status: 500 });

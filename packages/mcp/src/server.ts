@@ -10,6 +10,8 @@ export interface McpOptions {
   maxLimit?: number;
 }
 
+const STATUSES = ["new", "contacted", "interested", "customer", "rejected"] as const;
+
 const COMPLIANCE =
   "Collects public Instagram data only. Contact details are kept for business, verified and influencer accounts. " +
   "Unsolicited outreach about financial products may break regulator rules and broker terms; this server never sends messages.";
@@ -144,8 +146,9 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
     {
       title: "List leads",
       description:
-        "Page through collected leads, best AI score first. Each lead has username, followers, category, " +
-        "email/phone when public, contact_source and AI score/tags. Use this to classify leads yourself when the server has no AI key.",
+        "Page through collected leads, best AI score first. Each lead has username, followers, category, city, " +
+        "email/phone when public, contact_source, AI score/tags, CRM status, engagement rate and quality flags. " +
+        "Pass next_cursor back as cursor for the next page. Use this to classify leads yourself when the server has no AI key.",
       inputSchema: z.object({
         project: z.string(),
         job_id: z.string().uuid().optional(),
@@ -153,28 +156,28 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         has_email: z.boolean().optional(),
         has_phone: z.boolean().optional(),
         min_score: z.number().int().min(0).max(100).optional(),
+        status: z.enum(STATUSES).optional(),
+        search: z.string().max(100).optional().describe("Text in username, name or bio"),
         limit: z.number().int().min(1).max(200).default(50),
-        offset: z.number().int().min(0).default(0),
+        cursor: z.string().optional(),
       }),
       annotations: { readOnlyHint: true },
     },
     guard(async (a) => {
       const projectId = await projectIdFor(rt, a.project);
-      const leads = await rt.scrapers.listLeads({
+      const page = await rt.scrapers.listLeadsPage({
         projectId,
         ...(a.job_id ? { jobId: a.job_id } : {}),
         ...(a.business_only ? { business: true } : {}),
         ...(a.has_email ? { hasEmail: true } : {}),
         ...(a.has_phone ? { hasPhone: true } : {}),
         ...(a.min_score !== undefined ? { minScore: a.min_score } : {}),
+        ...(a.status ? { status: a.status } : {}),
+        ...(a.search ? { q: a.search } : {}),
+        ...(a.cursor ? { cursor: a.cursor } : {}),
         limit: a.limit,
-        offset: a.offset,
       });
-      return json({
-        count: leads.length,
-        next_offset: leads.length === a.limit ? a.offset + a.limit : null,
-        leads,
-      });
+      return json({ count: page.leads.length, next_cursor: page.nextCursor, leads: page.leads });
     }),
   );
 
@@ -268,6 +271,102 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
     guard(async ({ kind, value, reason }) => {
       await rt.scrapers.suppress(kind, value, reason);
       return json({ suppressed: kind });
+    }),
+  );
+
+  server.registerTool(
+    "set_lead_status",
+    {
+      title: "Set a lead's status",
+      description:
+        "Record where the owner is with a lead: new, contacted, interested, customer or rejected, with an optional note. " +
+        "Kept when the account is collected again.",
+      inputSchema: z.object({
+        project: z.string(),
+        username: z.string(),
+        status: z.enum(STATUSES),
+        note: z.string().max(500).optional(),
+      }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const updated = await rt.scrapers.setLeadStatus({
+        projectId,
+        username: a.username,
+        status: a.status,
+        ...(a.note !== undefined ? { note: a.note } : {}),
+      });
+      return updated
+        ? json({ updated: true })
+        : fail(`@${a.username} is not a lead in this project`);
+    }),
+  );
+
+  server.registerTool(
+    "update_project",
+    {
+      title: "Project settings",
+      description:
+        "Change a project's settings: auto_export appends every lead (with score and status) to the project's Google Sheet " +
+        "when a job finishes; ai_criteria makes finished jobs get scored automatically; watch_keywords alerts the owner " +
+        "when a collected name or bio contains one of them.",
+      inputSchema: z.object({
+        project: z.string(),
+        auto_export: z.boolean().optional(),
+        ai_criteria: z.string().max(2000).nullable().optional(),
+        watch_keywords: z.array(z.string().max(50)).max(50).nullable().optional(),
+        sheet_id: z.string().nullable().optional(),
+      }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const p = await rt.scrapers.updateProject(projectId, {
+        autoExport: a.auto_export,
+        aiCriteria: a.ai_criteria,
+        watchKeywords: a.watch_keywords,
+        sheetId: a.sheet_id,
+      });
+      return p ? json(p) : fail("Project not found");
+    }),
+  );
+
+  server.registerTool(
+    "watch_competitor",
+    {
+      title: "Watch a competitor",
+      description:
+        "Create a recurring job for a competitor profile, post or hashtag that collects only accounts the project does not " +
+        "have yet. It runs with the daily background task.",
+      inputSchema: z.object({
+        project: z.string(),
+        source: z.string(),
+        every_days: z.number().int().min(1).max(90).default(7),
+        limit: z.number().int().min(1).max(maxLimit).default(100),
+      }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const m = await rt.scrapers.createMonitor({
+        projectId,
+        source: parseSource(a.source),
+        everyDays: a.every_days,
+        limit: a.limit,
+      });
+      return json({ monitor_id: m.id, source: m.sourceUrl, every_days: m.everyDays });
+    }),
+  );
+
+  server.registerTool(
+    "list_monitors",
+    {
+      title: "Competitor monitors",
+      description: "List competitor monitors with their schedule and last run.",
+      inputSchema: z.object({ project: z.string().optional() }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) => {
+      const projectId = a.project ? await projectIdFor(rt, a.project) : undefined;
+      return json({ monitors: await rt.scrapers.listMonitors(projectId) });
     }),
   );
 

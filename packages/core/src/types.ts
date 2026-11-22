@@ -17,6 +17,12 @@ export interface RawProfile {
   businessPhone?: string | null;
   /** Country calling code that accompanies businessPhone, e.g. "966". */
   businessPhoneCountryCode?: string | null;
+  /** WhatsApp number from the business contact options, when shown. */
+  businessWhatsapp?: string | null;
+  /** City from the business address, when shown. */
+  city?: string | null;
+  /** Likes and comments of recent posts, for engagement and quality checks. */
+  recentPosts?: { likes: number | null; comments: number | null }[] | null;
 }
 
 export type ProviderId = "graph" | "apify" | "worker";

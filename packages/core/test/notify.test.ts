@@ -36,6 +36,7 @@ describe("notifications", () => {
         boss: t.boss,
         router: t.router,
         config: { suppressionPepper: "p" },
+        resolve: {},
         appUrl: "https://app.example/",
         sinks: [{ send: async (n) => void sent.push(n) }],
       });

@@ -44,9 +44,13 @@ describe("MCP server over Streamable HTTP", () => {
       "get_job",
       "get_profile",
       "list_leads",
+      "list_monitors",
       "score_leads",
+      "set_lead_status",
       "start_job",
       "suppress",
+      "update_project",
+      "watch_competitor",
     ]);
     const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();
     expect(prompts).toEqual(["audience_report", "find_partners"]);
@@ -117,5 +121,52 @@ describe("MCP server over Streamable HTTP", () => {
     expect((p.messages[0]?.content as { text: string } | undefined)?.text).toContain(
       'start_job with source "@comp"',
     );
+  });
+
+  it("sets lead status, searches, updates projects and watches competitors", async () => {
+    await call("start_job", { usernames: ["user6", "user8"], project: "crm", limit: 5 });
+    await settle(rt);
+    expect(
+      (
+        await call("set_lead_status", {
+          project: "crm",
+          username: "user6",
+          status: "customer",
+          note: "دفع",
+        })
+      ).isError,
+    ).toBeFalsy();
+    expect(
+      (await call("set_lead_status", { project: "crm", username: "nobody", status: "customer" }))
+        .isError,
+    ).toBe(true);
+    const customers = await call("list_leads", { project: "crm", status: "customer" });
+    expect(customers.structuredContent.leads).toEqual([
+      expect.objectContaining({ username: "user6", status: "customer", statusNote: "دفع" }),
+    ]);
+    const page = await call("list_leads", { project: "crm", limit: 1 });
+    expect(page.structuredContent.next_cursor).toEqual(expect.any(String));
+    const next = await call("list_leads", {
+      project: "crm",
+      limit: 1,
+      cursor: page.structuredContent.next_cursor,
+    });
+    expect(next.structuredContent.leads[0].username).not.toBe(
+      page.structuredContent.leads[0].username,
+    );
+    expect(
+      (await call("list_leads", { project: "crm", search: "user8" })).structuredContent.count,
+    ).toBe(1);
+    const p = await call("update_project", {
+      project: "crm",
+      auto_export: true,
+      watch_keywords: ["coach"],
+    });
+    expect(p.structuredContent).toMatchObject({ autoExport: true, watchKeywords: ["coach"] });
+    const m = await call("watch_competitor", { project: "crm", source: "#forex", every_days: 3 });
+    expect(m.structuredContent.every_days).toBe(3);
+    expect(
+      (await call("list_monitors", { project: "crm" })).structuredContent.monitors,
+    ).toHaveLength(1);
   });
 });

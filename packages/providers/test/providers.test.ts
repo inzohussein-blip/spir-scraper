@@ -85,6 +85,27 @@ describe("mapApifyProfile", () => {
       businessEmail: "a@acme.com",
       businessPhone: "501234567",
       businessPhoneCountryCode: "966",
+      businessWhatsapp: null,
+      city: null,
+      recentPosts: null,
+    });
+  });
+
+  it("maps WhatsApp, city and recent posts", () => {
+    expect(
+      mapApifyProfile({
+        username: "x",
+        whatsappNumber: "+9647701234567",
+        cityName: "Baghdad",
+        latestPosts: [{ likesCount: 10, commentsCount: 2 }, {}],
+      }),
+    ).toMatchObject({
+      businessWhatsapp: "+9647701234567",
+      city: "Baghdad",
+      recentPosts: [
+        { likes: 10, comments: 2 },
+        { likes: null, comments: null },
+      ],
     });
   });
 

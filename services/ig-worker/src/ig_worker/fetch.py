@@ -7,6 +7,7 @@ provider instead of retrying.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import instaloader
@@ -32,8 +33,9 @@ class FailFastRateController(instaloader.RateController):
         raise RateLimited(f"Instagram rate limit ({query_type})")
 
 
-def make_loader() -> instaloader.Instaloader:
-    return instaloader.Instaloader(
+def make_loader(proxy: str | None = None) -> instaloader.Instaloader:
+    """Anonymous loader. ``proxy`` (e.g. a residential proxy URL) applies to every request."""
+    loader = instaloader.Instaloader(
         quiet=True,
         download_pictures=False,
         download_videos=False,
@@ -45,10 +47,52 @@ def make_loader() -> instaloader.Instaloader:
         max_connection_attempts=1,
         rate_controller=FailFastRateController,
     )
+    if proxy:
+        session = getattr(loader.context, "_session", None)
+        if session is not None:
+            session.proxies = {"http": proxy, "https": proxy}
+    return loader
 
 
 def _str(v: Any) -> str | None:
     return v.strip() if isinstance(v, str) and v.strip() else None
+
+
+def _count(d: Any, *keys: str) -> int | None:
+    for k in keys:
+        v = d.get(k) if isinstance(d, dict) else None
+        if isinstance(v, dict) and isinstance(v.get("count"), int):
+            return v["count"]
+    return None
+
+
+def _recent_posts(node: dict[str, Any]) -> list[dict[str, int | None]] | None:
+    """Likes and comments of the up to 12 posts that come with the profile page."""
+    edges = (node.get("edge_owner_to_timeline_media") or {}).get("edges")
+    if not isinstance(edges, list):
+        return None
+    posts = []
+    for e in edges[:12]:
+        n = e.get("node") if isinstance(e, dict) else None
+        if not isinstance(n, dict):
+            continue
+        posts.append(
+            {
+                "likes": _count(n, "edge_liked_by", "edge_media_preview_like"),
+                "comments": _count(n, "edge_media_to_comment"),
+            }
+        )
+    return posts
+
+
+def _city(node: dict[str, Any]) -> str | None:
+    raw = node.get("business_address_json")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return _str(json.loads(raw).get("city_name"))
+        except ValueError, AttributeError:
+            return None
+    return _str(node.get("city_name"))
 
 
 def profile_to_dict(p: instaloader.Profile) -> dict[str, Any]:
@@ -70,6 +114,11 @@ def profile_to_dict(p: instaloader.Profile) -> dict[str, Any]:
         "businessEmail": _str(node.get("business_email") or node.get("public_email")),
         "businessPhone": _str(node.get("business_phone_number") or node.get("public_phone_number")),
         "businessPhoneCountryCode": _str(node.get("public_phone_country_code")),
+        "businessWhatsapp": _str(
+            node.get("whatsapp_number") or node.get("business_whatsapp_number")
+        ),
+        "city": _city(node),
+        "recentPosts": _recent_posts(node),
     }
 
 

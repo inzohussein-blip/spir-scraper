@@ -72,11 +72,15 @@ describe("migrations", () => {
     expect(rows.map((r) => r.relname)).toEqual([
       "api_keys",
       "audit_log",
+      "counters",
+      "ephemeral",
       "jobs",
       "leads",
+      "monitors",
       "notifications",
       "profiles",
       "projects",
+      "push_subscriptions",
       "suppression",
     ]);
     expect(rows.every((r) => r.relrowsecurity)).toBe(true);

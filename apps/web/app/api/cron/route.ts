@@ -4,7 +4,11 @@ import { getRuntime } from "@/lib/runtime";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-/** Vercel Cron: daily retention, AI batch collection and a drain safety net. */
+/**
+ * Vercel Cron (daily on the Hobby plan): retention, AI batch collection,
+ * provider checks, due competitor monitors, the weekly summary, and a drain
+ * safety net for anything left in the queue.
+ */
 export async function GET(req: Request) {
   if (!isCronRequest(req)) return new Response("unauthorized", { status: 401 });
   const rt = await getRuntime();
@@ -12,6 +16,9 @@ export async function GET(req: Request) {
   const health = await rt
     .healthCheck()
     .catch((err) => [{ provider: "all", ok: false, detail: String(err) }]);
-  const drained = await rt.scrapers.drain({ budgetMs: 200_000 });
-  return Response.json({ ok: true, ...drained, health });
+  const monitorJobs = await rt.scrapers.runDueMonitors();
+  const weekly = await rt.scrapers.weeklySummary().catch(() => null);
+  const drained = await rt.scrapers.drain({ budgetMs: 180_000 });
+  await rt.scrapers.setValue("cron:last", new Date().toISOString(), 30 * 86_400_000);
+  return Response.json({ ok: true, ...drained, health, monitorJobs, weeklySent: !!weekly });
 }

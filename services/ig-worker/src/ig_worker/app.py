@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import re
 import secrets
 import time
@@ -28,6 +29,7 @@ def create_app(
     fetch: Fetcher | None = None,
     secret: str | None = None,
     min_interval: float | None = None,
+    jitter: float | None = None,
 ) -> FastAPI:
     secret = secret if secret is not None else os.environ.get("WORKER_SHARED_SECRET", "")
     if not secret:
@@ -37,11 +39,13 @@ def create_app(
         if min_interval is not None
         else float(os.environ.get("MIN_INTERVAL_SECONDS", "3"))
     )
+    # Random extra wait so the request rhythm is not perfectly regular (idea from instagrapi).
+    spread = jitter if jitter is not None else float(os.environ.get("JITTER_SECONDS", "2"))
 
     if fetch is None:
         from .fetch import fetch_profile, make_loader
 
-        loader = make_loader()
+        loader = make_loader(os.environ.get("PROXY_URL") or None)
 
         def fetch(username: str) -> dict[str, Any]:
             return fetch_profile(loader, username)
@@ -64,7 +68,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="invalid username")
 
         async with lock:
-            wait = last_call + interval - time.monotonic()
+            wait = last_call + interval + random.uniform(0, spread) - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
             try:

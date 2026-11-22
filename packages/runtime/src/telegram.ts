@@ -33,6 +33,26 @@ export class TelegramNotifier implements NotificationSink {
     if (!res.ok) throw new Error(`Telegram sendMessage failed: HTTP ${res.status}`);
   }
 
+  /** Points the bot's updates at our webhook; Telegram echoes `secret` in a header. */
+  async setWebhook(url: string, secret: string): Promise<void> {
+    const res = await this.fetch(`https://api.telegram.org/bot${this.token}/setWebhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url,
+        secret_token: secret,
+        allowed_updates: ["message"],
+        drop_pending_updates: true,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`Telegram setWebhook failed: HTTP ${res.status}`);
+  }
+
+  get chat(): string {
+    return this.chatId;
+  }
+
   async send(n: NotificationInput & { link?: string }): Promise<void> {
     const lines = [`${ICON[n.level]} <b>${escapeHtml(n.title)}</b>`];
     if (n.body) lines.push(escapeHtml(n.body));

@@ -35,6 +35,8 @@ export async function setup(providers: Provider[], scorer?: Scorer) {
     boss,
     router,
     scorer,
+    // No network in tests: link-in-bio pages and MX checks are tested separately.
+    resolve: {},
     config: { suppressionPepper: "test-pepper" },
   });
   await scrapers.init();

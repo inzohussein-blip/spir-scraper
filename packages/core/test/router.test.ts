@@ -11,6 +11,7 @@ describe("ProviderRouter", () => {
     const p = new FakeProvider("worker", ["profile"], { profile: fakeProfile }, 30);
     const r = new ProviderRouter([p], {
       now: () => now,
+      jitter: 0,
       sleep: async (ms) => {
         waits.push(ms);
         now += ms;
@@ -87,5 +88,47 @@ describe("ProviderRouter", () => {
     expect(r.estimateCost(parseSource("#fx") as never, 500)).toBe(2);
     expect(r.estimateCost(uploadSource(["a"]), 500)).toBe(0.5);
     await expect(r.listEngagers(parseSource("#fx") as never, 5)).rejects.toThrow(/actor crashed/);
+  });
+
+  it("adds random jitter to the spacing", async () => {
+    let now = 0;
+    const waits: number[] = [];
+    const p = new FakeProvider("worker", ["profile"], { profile: fakeProfile }, 60);
+    const r = new ProviderRouter([p], {
+      now: () => now,
+      random: () => 0.5,
+      sleep: async (ms) => {
+        waits.push(ms);
+        now += ms;
+      },
+    });
+    await r.getProfile("a");
+    await r.getProfile("b");
+    expect(waits).toEqual([1150]);
+  });
+
+  it("saves and restores cooldowns and reports exhaustion", async () => {
+    let now = 1000;
+    const p = new FakeProvider("worker", ["profile"], {
+      profile: () => {
+        throw new BlockedError("wall", "worker");
+      },
+    });
+    const a = new ProviderRouter([p], { now: () => now, sleep: async () => {}, cooldownMs: 500 });
+    await a.getProfile("x").catch(() => {});
+    expect(a.exhausted()).toBe(true);
+    expect(a.nextAvailableIn()).toBe(500);
+    const saved = a.snapshot();
+    expect(saved).toEqual({ worker: { until: 1500, down: true } });
+    const b = new ProviderRouter(
+      [new FakeProvider("worker", ["profile"], { profile: fakeProfile })],
+      { now: () => now, sleep: async () => {} },
+    );
+    b.restore(saved);
+    b.restore(null);
+    expect(b.exhausted()).toBe(true);
+    now = 1600;
+    expect(b.exhausted()).toBe(false);
+    expect(b.exhausted("hashtag_posters")).toBe(false);
   });
 });

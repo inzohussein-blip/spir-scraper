@@ -71,6 +71,7 @@ export async function createTestRuntime(
       boss,
       providers: opts.providers ?? [fakeWorker],
       scorer: opts.scorer ?? null,
+      resolve: {},
       ...(opts.telegramFetch ? { telegramFetch: opts.telegramFetch } : {}),
       ...(opts.sheetsRequest
         ? { sheetsRequest: opts.sheetsRequest, sheetsEmail: "sa@test.iam" }

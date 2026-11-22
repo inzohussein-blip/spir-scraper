@@ -1,5 +1,20 @@
 import type { LeadRow } from "@scrapers/core";
 
+export const STATUS_AR: Record<string, string> = {
+  new: "جديد",
+  contacted: "تواصلت",
+  interested: "مهتم",
+  customer: "عميل",
+  rejected: "مرفوض",
+};
+
+export const FLAGS_AR: Record<string, string> = {
+  low_engagement: "تفاعل منخفض",
+  suspicious_engagement: "تفاعل مريب",
+  follow_farming: "متابعة متبادلة",
+  few_posts: "منشورات قليلة",
+};
+
 export interface Column {
   key: string;
   /** Arabic header shown in files and sheets; `key` stays the stable machine name. */
@@ -27,6 +42,22 @@ export const COLUMNS: readonly Column[] = [
   { key: "ai_score", header: "الدرجة", width: 8, value: (r) => r.aiScore },
   { key: "ai_tags", header: "الوسوم", width: 22, value: (r) => r.aiTags?.join("، ") ?? null },
   { key: "ai_reason", header: "سبب الدرجة", width: 36, value: (r) => r.aiReason },
+  { key: "status", header: "الحالة", width: 12, value: (r) => STATUS_AR[r.status] ?? r.status },
+  { key: "status_note", header: "ملاحظة", width: 24, value: (r) => r.statusNote },
+  { key: "city", header: "المدينة", width: 14, value: (r) => r.city },
+  { key: "engagement_rate", header: "نسبة التفاعل %", width: 12, value: (r) => r.engagementRate },
+  {
+    key: "quality_flags",
+    header: "ملاحظات الجودة",
+    width: 22,
+    value: (r) => r.qualityFlags?.map((f) => FLAGS_AR[f] ?? f).join("، ") ?? null,
+  },
+  {
+    key: "other_projects",
+    header: "في مشاريع أخرى",
+    width: 12,
+    value: (r) => r.otherProjects || null,
+  },
   {
     key: "profile_url",
     header: "رابط الحساب",

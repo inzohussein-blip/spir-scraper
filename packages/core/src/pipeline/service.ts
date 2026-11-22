@@ -3,11 +3,16 @@ import {
   type AnyDb,
   apiKeys,
   auditLog,
+  counters,
+  ephemeral,
   jobs,
+  type LeadStatus,
   leads,
+  monitors,
   notifications,
   profiles,
   projects,
+  pushSubscriptions,
   suppression,
 } from "@scrapers/db";
 import {
@@ -19,18 +24,26 @@ import {
   isNotNull,
   isNull,
   lt,
+  lte,
   ne,
   notExists,
   or,
+  type SQL,
   sql,
 } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
-import { extractContact } from "../extract/index.js";
+import {
+  createMxChecker,
+  fetchLinkPage,
+  profileQuality,
+  type ResolveDeps,
+  resolveContact,
+} from "../extract/index.js";
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
 import { NotFoundError, type RawProfile, type Source } from "../types.js";
-import type { ProviderRouter } from "./router.js";
+import { NoProviderError, type ProviderRouter } from "./router.js";
 
 export const QUEUES = {
   discover: "scrapers-discover",
@@ -44,6 +57,11 @@ export interface ScrapersConfig {
   suppressionPepper: string;
   maxJobLimit?: number;
   defaultRetentionDays?: number;
+  /** Reuse a profile fetched within this many days instead of fetching it again (0 disables). */
+  profileCacheDays?: number;
+  /** Weekly summary day (0 = Sunday … 5 = Friday) and time zone. */
+  weeklyDay?: number;
+  timeZone?: string;
 }
 
 export interface DiscoverPayload {
@@ -64,9 +82,22 @@ export interface LeadFilters {
   hasEmail?: boolean;
   hasPhone?: boolean;
   minScore?: number;
+  status?: LeadStatus;
+  /** Text search in username, name and bio. */
+  q?: string;
   limit?: number;
   offset?: number;
+  /** Opaque cursor from a previous page (keyset pagination). */
+  cursor?: string;
 }
+
+export const LEAD_STATUSES: readonly LeadStatus[] = [
+  "new",
+  "contacted",
+  "interested",
+  "customer",
+  "rejected",
+];
 
 /** A lead joined with its profile: what list_leads and the exporters return. */
 export interface LeadRow {
@@ -83,6 +114,13 @@ export interface LeadRow {
   aiScore: number | null;
   aiTags: string[] | null;
   aiReason: string | null;
+  status: LeadStatus;
+  statusNote: string | null;
+  city: string | null;
+  engagementRate: number | null;
+  qualityFlags: string[] | null;
+  /** How many other projects also hold this person. */
+  otherProjects: number;
   sourceUrl: string;
   fetchedAt: Date;
 }
@@ -110,9 +148,74 @@ export function createScrapers(deps: {
   sinks?: NotificationSink[];
   /** Public dashboard URL, used to build links in notifications. */
   appUrl?: string;
+  /** Network steps of contact extraction (link-in-bio pages, MX check). Defaults to the real ones. */
+  resolve?: ResolveDeps;
+  /** Called when a finished job (scored, if the project has AI criteria) is ready to export. */
+  onReadyToExport?: (jobId: string) => Promise<void>;
 }) {
   const { db, boss, router, config, scorer } = deps;
   const sinks = deps.sinks ?? [];
+  const resolveDeps: ResolveDeps = deps.resolve ?? {
+    linkPage: (url) => fetchLinkPage(url),
+    checkEmail: createMxChecker(),
+  };
+  const cacheDays = config.profileCacheDays ?? 7;
+  const pepper = config.suppressionPepper;
+
+  // ---- small shared stores (serverless-safe) ----
+  async function getValue<T>(key: string): Promise<T | null> {
+    const [row] = await db
+      .select({ value: ephemeral.value })
+      .from(ephemeral)
+      .where(and(eq(ephemeral.key, key), sql`${ephemeral.expiresAt} > now()`));
+    return (row?.value as T | undefined) ?? null;
+  }
+
+  async function setValue(key: string, value: unknown, ttlMs: number) {
+    const expiresAt = new Date(Date.now() + ttlMs);
+    await db
+      .insert(ephemeral)
+      .values({ key, value, expiresAt })
+      .onConflictDoUpdate({ target: ephemeral.key, set: { value, expiresAt } });
+  }
+
+  /** Stores the key only if it is not there yet; false means it was already claimed. */
+  async function claimOnce(key: string, ttlMs: number): Promise<boolean> {
+    await db
+      .delete(ephemeral)
+      .where(and(eq(ephemeral.key, key), sql`${ephemeral.expiresAt} <= now()`));
+    const rows = await db
+      .insert(ephemeral)
+      .values({ key, value: true, expiresAt: new Date(Date.now() + ttlMs) })
+      .onConflictDoNothing()
+      .returning({ key: ephemeral.key });
+    return rows.length > 0;
+  }
+
+  /** Fixed-window counter: returns the count within the current window, including this hit. */
+  async function hitCounter(key: string, windowMs: number): Promise<number> {
+    const expiresAt = new Date(Date.now() + windowMs).toISOString();
+    const [row] = await db
+      .insert(counters)
+      .values({ key, count: 1, expiresAt: new Date(expiresAt) })
+      .onConflictDoUpdate({
+        target: counters.key,
+        set: {
+          count: sql`case when ${counters.expiresAt} <= now() then 1 else ${counters.count} + 1 end`,
+          expiresAt: sql`case when ${counters.expiresAt} <= now() then ${expiresAt}::timestamptz else ${counters.expiresAt} end`,
+        },
+      })
+      .returning({ count: counters.count });
+    return row?.count ?? 1;
+  }
+
+  const ROUTER_KEY = "router:state";
+  async function loadRouterState() {
+    router.restore(await getValue<Record<string, { until: number; down: boolean }>>(ROUTER_KEY));
+  }
+  async function saveRouterState() {
+    await setValue(ROUTER_KEY, router.snapshot(), 24 * 3600_000);
+  }
 
   /** Stores a bell notification (deduplicated for 30 minutes) and forwards it to the sinks. */
   async function notify(n: NotificationInput): Promise<boolean> {
@@ -198,22 +301,58 @@ export function createScrapers(deps: {
       url: `/jobs/${jobId}`,
       key: `job-done:${jobId}`,
     });
+    await afterJobDone(jobId);
   }
 
-  async function isSuppressed(
-    kind: SuppressionKind,
-    value: string | null | undefined,
-  ): Promise<boolean> {
-    if (!value) return false;
-    const [hit] = await db
+  /** Scores the job when its project has AI criteria, then hands it over for export. */
+  async function afterJobDone(jobId: string) {
+    const [row] = await db
+      .select({ criteria: projects.aiCriteria })
+      .from(jobs)
+      .innerJoin(projects, eq(projects.id, jobs.projectId))
+      .where(eq(jobs.id, jobId));
+    if (scorer && row?.criteria) {
+      try {
+        const r = await scoreJob(jobId, row.criteria, {});
+        if (r.mode === "batch") return; // exported when the batch is collected
+      } catch (err) {
+        console.error("[auto-score]", redactSecrets((err as Error).message));
+      }
+    }
+    await readyToExport(jobId);
+  }
+
+  async function readyToExport(jobId: string) {
+    if (!deps.onReadyToExport) return;
+    try {
+      await deps.onReadyToExport(jobId);
+    } catch (err) {
+      await notify({
+        type: "job",
+        level: "warn",
+        title: "تعذّر التصدير التلقائي",
+        body: redactSecrets((err as Error).message),
+        url: `/jobs/${jobId}`,
+        key: `auto-export-failed:${jobId}`,
+      });
+    }
+  }
+
+  /** Which of these hashes are on the suppression list (one query). */
+  async function suppressedHashes(hashes: string[]): Promise<Set<string>> {
+    if (hashes.length === 0) return new Set();
+    const rows = await db
       .select({ h: suppression.valueHash })
       .from(suppression)
-      .where(eq(suppression.valueHash, suppressionHash(kind, value, config.suppressionPepper)))
-      .limit(1);
-    return !!hit;
+      .where(inArray(suppression.valueHash, hashes));
+    return new Set(rows.map((r) => r.h));
   }
 
-  async function saveProfile(p: RawProfile, fetchedBy: "graph" | "apify" | "worker") {
+  async function saveProfile(
+    p: RawProfile,
+    fetchedBy: "graph" | "apify" | "worker",
+    quality: { engagementRate: number | null; flags: string[] },
+  ) {
     // A username can move to a new account; drop the stale row first.
     await db
       .delete(profiles)
@@ -232,6 +371,13 @@ export function createScrapers(deps: {
       isVerified: p.isVerified,
       category: p.category ?? null,
       externalUrl: p.externalUrl ?? null,
+      businessEmail: p.businessEmail ?? null,
+      businessPhone: p.businessPhone ?? null,
+      businessPhoneCountryCode: p.businessPhoneCountryCode ?? null,
+      businessWhatsapp: p.businessWhatsapp ?? null,
+      city: p.city ?? null,
+      engagementRate: quality.engagementRate === null ? null : String(quality.engagementRate),
+      qualityFlags: quality.flags.length ? quality.flags : null,
       fetchedAt: new Date(),
       fetchedBy,
     };
@@ -276,6 +422,17 @@ export function createScrapers(deps: {
       return;
     }
 
+    if (job.onlyNew && usernames.length > 0) {
+      // Monitors collect only people the project does not have yet.
+      const known = await db
+        .select({ username: profiles.username })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(eq(leads.projectId, job.projectId), inArray(profiles.username, usernames)));
+      const have = new Set(known.map((k) => k.username));
+      usernames = usernames.filter((u) => !have.has(u));
+    }
+
     await db
       .update(jobs)
       .set({ counts: { discovered: usernames.length } })
@@ -291,44 +448,126 @@ export function createScrapers(deps: {
     await boss.insert(QUEUES.enrich, batches);
   }
 
+  const rowToRaw = (r: typeof profiles.$inferSelect): RawProfile => ({
+    igUserId: r.igUserId,
+    username: r.username,
+    fullName: r.fullName,
+    bio: r.bio,
+    followers: r.followers,
+    following: r.following,
+    posts: r.posts,
+    isBusiness: r.isBusiness,
+    isVerified: r.isVerified,
+    category: r.category,
+    externalUrl: r.externalUrl,
+    businessEmail: r.businessEmail,
+    businessPhone: r.businessPhone,
+    businessPhoneCountryCode: r.businessPhoneCountryCode,
+    businessWhatsapp: r.businessWhatsapp,
+    city: r.city,
+  });
+
+  function matchKeywords(p: RawProfile, keywords: string[] | null): string[] {
+    if (!keywords?.length) return [];
+    const text = `${p.username} ${p.fullName ?? ""} ${p.bio ?? ""}`.toLowerCase();
+    return keywords.filter((k) => k.trim() && text.includes(k.trim().toLowerCase()));
+  }
+
   async function handleEnrich(payload: EnrichPayload) {
     const [row] = await db
-      .select({ job: jobs, retentionDays: projects.retentionDays })
+      .select({ job: jobs, project: projects })
       .from(jobs)
       .innerJoin(projects, eq(projects.id, jobs.projectId))
       .where(eq(jobs.id, payload.jobId));
     if (row?.job.status !== "running") return;
-    const { job, retentionDays } = row;
-    const expiresAt = new Date(Date.now() + retentionDays * 86_400_000);
+    const { job, project } = row;
+    const expiresAt = new Date(Date.now() + project.retentionDays * 86_400_000);
+    await loadRouterState();
 
-    for (const username of payload.usernames) {
-      // Re-check between accounts so cancelling takes effect quickly.
-      const [current] = await db
-        .select({ status: jobs.status })
-        .from(jobs)
-        .where(eq(jobs.id, job.id));
-      if (current?.status !== "running") return;
+    // One query each for suppressed usernames and cached profiles, instead of per account.
+    const names = payload.usernames.map((u) => u.toLowerCase());
+    const blocked = await suppressedHashes(
+      names.map((u) => suppressionHash("username", u, pepper)),
+    );
+    const cached = new Map<string, typeof profiles.$inferSelect>();
+    if (cacheDays > 0) {
+      const fresh = await db
+        .select()
+        .from(profiles)
+        .where(
+          and(
+            inArray(profiles.username, names),
+            gte(profiles.fetchedAt, new Date(Date.now() - cacheDays * 86_400_000)),
+          ),
+        );
+      for (const p of fresh) cached.set(p.username, p);
+    }
 
-      if (await isSuppressed("username", username)) {
-        await bump(job.id, { skipped: 1 });
+    const delta = { enriched: 0, leads: 0, skipped: 0, failed: 0, cached: 0 };
+    const watchHits: string[] = [];
+    let deferred: string[] = [];
+
+    for (let i = 0; i < names.length; i++) {
+      const username = names[i] as string;
+      // Re-check every 10 accounts so cancelling takes effect quickly.
+      if (i > 0 && i % 10 === 0) {
+        const [current] = await db
+          .select({ status: jobs.status })
+          .from(jobs)
+          .where(eq(jobs.id, job.id));
+        if (current?.status !== "running") break;
+      }
+      if (blocked.has(suppressionHash("username", username, pepper))) {
+        delta.skipped++;
         continue;
       }
-      let fetched: Awaited<ReturnType<ProviderRouter["getProfile"]>>;
-      try {
-        fetched = await router.getProfile(username);
-      } catch (err) {
-        await bump(job.id, err instanceof NotFoundError ? { skipped: 1 } : { failed: 1 });
+
+      let profile: RawProfile;
+      let provider: "graph" | "apify" | "worker";
+      let quality: { engagementRate: number | null; flags: string[] };
+      const hit = cached.get(username);
+      if (hit) {
+        profile = rowToRaw(hit);
+        provider = hit.fetchedBy === "upload" ? "worker" : hit.fetchedBy;
+        quality = {
+          engagementRate: hit.engagementRate === null ? null : Number(hit.engagementRate),
+          flags: hit.qualityFlags ?? [],
+        };
+        delta.cached++;
+      } else {
+        try {
+          const fetched = await router.getProfile(username);
+          profile = fetched.profile;
+          provider = fetched.provider;
+          quality = profileQuality(profile);
+        } catch (err) {
+          if (err instanceof NotFoundError) {
+            delta.skipped++;
+            continue;
+          }
+          if (err instanceof NoProviderError && router.exhausted("profile")) {
+            // Every provider is resting: resume this account and the rest later instead of failing them.
+            deferred = names.slice(i);
+            break;
+          }
+          delta.failed++;
+          continue;
+        }
+      }
+
+      const contact = await resolveContact(profile, resolveDeps);
+      const contactHashes = [
+        contact.email ? suppressionHash("email", contact.email, pepper) : null,
+        contact.phoneE164 || contact.phoneRaw
+          ? suppressionHash("phone", (contact.phoneE164 ?? contact.phoneRaw) as string, pepper)
+          : null,
+      ].filter((h): h is string => !!h);
+      if ((await suppressedHashes(contactHashes)).size > 0) {
+        delta.skipped++;
         continue;
       }
-      const contact = extractContact(fetched.profile);
-      if (
-        (await isSuppressed("email", contact.email)) ||
-        (await isSuppressed("phone", contact.phoneE164 ?? contact.phoneRaw))
-      ) {
-        await bump(job.id, { skipped: 1 });
-        continue;
-      }
-      await saveProfile(fetched.profile, fetched.provider);
+      if (!hit) await saveProfile(profile, provider, quality);
+      const phone = contact.phoneE164 ?? contact.phoneRaw;
       const leadValues = {
         jobId: job.id,
         email: contact.email,
@@ -336,14 +575,49 @@ export function createScrapers(deps: {
         phoneRaw: contact.phoneRaw,
         phoneCountry: contact.phoneCountry,
         contactSource: contact.contactSource,
+        phoneHash: phone ? suppressionHash("phone", phone, pepper) : null,
         expiresAt,
       };
+      // On conflict the lead's status and note are kept: only the data is refreshed.
       await db
         .insert(leads)
-        .values({ projectId: job.projectId, profileId: fetched.profile.igUserId, ...leadValues })
+        .values({ projectId: job.projectId, profileId: profile.igUserId, ...leadValues })
         .onConflictDoUpdate({ target: [leads.projectId, leads.profileId], set: leadValues });
-      const hasContact = !!(contact.email || contact.phoneE164 || contact.phoneRaw);
-      await bump(job.id, { enriched: 1, leads: hasContact ? 1 : 0 });
+      delta.enriched++;
+      if (contact.email || phone) delta.leads++;
+      if (matchKeywords(profile, project.watchKeywords).length) watchHits.push(profile.username);
+    }
+
+    await bump(job.id, delta);
+    await saveRouterState();
+    if (deferred.length > 0) {
+      const waitSeconds = Math.ceil(router.nextAvailableIn("profile") / 1000) + 5;
+      await boss.send(
+        QUEUES.enrich,
+        { jobId: job.id, usernames: deferred },
+        { startAfter: waitSeconds },
+      );
+      await notify({
+        type: "provider",
+        level: "warn",
+        title: `أُجّل ${deferred.length} حساباً في مهمة ${project.name}`,
+        body: `كل المصادر في فترة توقف. تكمل المهمة تلقائياً بعد حوالي ${Math.ceil(waitSeconds / 60)} دقيقة.`,
+        url: `/jobs/${job.id}`,
+        key: `deferred:${job.id}`,
+      });
+    }
+    if (watchHits.length > 0) {
+      await notify({
+        type: "system",
+        level: "info",
+        title: `كلمات المراقبة: ${watchHits.length} حساب في ${project.name}`,
+        body: watchHits
+          .slice(0, 15)
+          .map((u) => `@${u}`)
+          .join("، "),
+        url: `/leads?project=${project.id}&job=${job.id}`,
+        key: `watch:${job.id}:${watchHits[0]}`,
+      });
     }
     await finishIfComplete(job.id);
   }
@@ -391,6 +665,7 @@ export function createScrapers(deps: {
         })
         .where(eq(jobs.id, j.id));
       updated++;
+      await readyToExport(j.id);
     }
     return updated;
   }
@@ -406,7 +681,133 @@ export function createScrapers(deps: {
           db.select({ one: sql`1` }).from(leads).where(eq(leads.profileId, profiles.igUserId)),
         ),
       );
+    await db.delete(ephemeral).where(lt(ephemeral.expiresAt, now));
+    await db.delete(counters).where(lt(counters.expiresAt, now));
     await collectPendingScores();
+  }
+
+  async function scoreJob(jobId: string, criteria: string, opts: { rescore?: boolean }) {
+    if (!scorer)
+      throw new ScoringUnavailableError(
+        "AI scoring needs ANTHROPIC_API_KEY (or let Claude score over MCP)",
+      );
+    const rows = await db
+      .select({ lead: leads, profile: profiles })
+      .from(leads)
+      .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+      .where(and(eq(leads.jobId, jobId), opts.rescore ? undefined : isNull(leads.aiScore)));
+    const items: ScoringInput[] = rows.map(({ lead, profile }) => ({
+      id: lead.id,
+      username: profile.username,
+      fullName: profile.fullName,
+      bio: profile.bio,
+      followers: profile.followers,
+      isBusiness: profile.isBusiness,
+      isVerified: profile.isVerified,
+      category: profile.category,
+      externalUrl: profile.externalUrl,
+    }));
+    if (items.length === 0) return { mode: "none" as const, count: 0 };
+    if (items.length > scorer.batchThreshold) {
+      const batchId = await scorer.submitBatch(items, criteria);
+      await db
+        .update(jobs)
+        .set({
+          counts: sql`${jobs.counts} || ${JSON.stringify({ aiBatchId: batchId, aiCriteria: criteria })}::jsonb`,
+        })
+        .where(eq(jobs.id, jobId));
+      return { mode: "batch" as const, count: items.length, batchId };
+    }
+    const scores = await scorer.scoreNow(items, criteria);
+    await saveScores(scores);
+    await bump(jobId, { scored: scores.size });
+    return { mode: "now" as const, count: scores.size };
+  }
+
+  const scoreKey = sql`coalesce(${leads.aiScore}, -1)`;
+  const followersKey = sql`coalesce(${profiles.followers}, -1)`;
+  const encodeCursor = (c: { s: number; f: number; id: string }) =>
+    Buffer.from(JSON.stringify(c)).toString("base64url");
+  const decodeCursor = (c: string): { s: number; f: number; id: string } | null => {
+    try {
+      const v = JSON.parse(Buffer.from(c, "base64url").toString("utf8"));
+      return typeof v.s === "number" && typeof v.f === "number" && typeof v.id === "string"
+        ? v
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  async function leadsPage(
+    f: LeadFilters,
+  ): Promise<{ leads: LeadRow[]; nextCursor: string | null }> {
+    const conds: (SQL | undefined)[] = [eq(leads.projectId, f.projectId)];
+    if (f.jobId) conds.push(eq(leads.jobId, f.jobId));
+    if (f.business) conds.push(eq(profiles.isBusiness, true));
+    if (f.hasEmail) conds.push(isNotNull(leads.email));
+    if (f.hasPhone) conds.push(or(isNotNull(leads.phoneE164), isNotNull(leads.phoneRaw)));
+    if (f.minScore !== undefined) conds.push(gte(leads.aiScore, f.minScore));
+    if (f.status) conds.push(eq(leads.status, f.status));
+    if (f.q?.trim()) {
+      const like = `%${f.q.trim().replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+      conds.push(
+        sql`(${profiles.username} ilike ${like} or ${profiles.fullName} ilike ${like} or ${profiles.bio} ilike ${like})`,
+      );
+    }
+    const cursor = f.cursor ? decodeCursor(f.cursor) : null;
+    if (cursor)
+      conds.push(
+        sql`(${scoreKey}, ${followersKey}, ${leads.id}) < (${cursor.s}, ${cursor.f}, ${cursor.id}::uuid)`,
+      );
+    const limit = Math.min(f.limit ?? 50, 5000);
+    const rows = await db
+      .select({
+        lead: leads,
+        profile: profiles,
+        sourceUrl: jobs.sourceUrl,
+        others: sql<number>`(select count(*)::int from ${leads} as l2 where l2.profile_id = ${leads.profileId} and l2.project_id <> ${leads.projectId})`,
+      })
+      .from(leads)
+      .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+      .innerJoin(jobs, eq(jobs.id, leads.jobId))
+      .where(and(...conds))
+      .orderBy(desc(scoreKey), desc(followersKey), desc(leads.id))
+      .limit(limit)
+      .offset(cursor ? 0 : (f.offset ?? 0));
+    const out: LeadRow[] = rows.map(({ lead, profile, sourceUrl, others }) => ({
+      username: profile.username,
+      fullName: profile.fullName,
+      category: profile.category,
+      followers: profile.followers,
+      isBusiness: profile.isBusiness,
+      email: lead.email,
+      phone: lead.phoneE164 ?? lead.phoneRaw,
+      phoneCountry: lead.phoneCountry,
+      phoneConfirmed: !!lead.phoneE164,
+      contactSource: lead.contactSource,
+      aiScore: lead.aiScore,
+      aiTags: lead.aiTags,
+      aiReason: lead.aiReason,
+      status: lead.status,
+      statusNote: lead.statusNote,
+      city: profile.city,
+      engagementRate: profile.engagementRate === null ? null : Number(profile.engagementRate),
+      qualityFlags: profile.qualityFlags,
+      otherProjects: Number(others ?? 0),
+      sourceUrl,
+      fetchedAt: profile.fetchedAt,
+    }));
+    const last = rows.at(-1);
+    const nextCursor =
+      rows.length === limit && last
+        ? encodeCursor({
+            s: last.lead.aiScore ?? -1,
+            f: last.profile.followers ?? -1,
+            id: last.lead.id,
+          })
+        : null;
+    return { leads: out, nextCursor };
   }
 
   /**
@@ -479,6 +880,8 @@ export function createScrapers(deps: {
       sheetId?: string;
       aiCriteria?: string;
       retentionDays?: number;
+      autoExport?: boolean;
+      watchKeywords?: string[];
     }) {
       const [p] = await db
         .insert(projects)
@@ -536,43 +939,10 @@ export function createScrapers(deps: {
       return this.getJob(jobId);
     },
 
-    async listLeads(f: LeadFilters): Promise<LeadRow[]> {
-      const conds = [eq(leads.projectId, f.projectId)];
-      if (f.jobId) conds.push(eq(leads.jobId, f.jobId));
-      if (f.business) conds.push(eq(profiles.isBusiness, true));
-      if (f.hasEmail) conds.push(isNotNull(leads.email));
-      if (f.hasPhone) {
-        const c = or(isNotNull(leads.phoneE164), isNotNull(leads.phoneRaw));
-        if (c) conds.push(c);
-      }
-      if (f.minScore !== undefined) conds.push(gte(leads.aiScore, f.minScore));
-      const rows = await db
-        .select({ lead: leads, profile: profiles, sourceUrl: jobs.sourceUrl })
-        .from(leads)
-        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
-        .innerJoin(jobs, eq(jobs.id, leads.jobId))
-        .where(and(...conds))
-        .orderBy(sql`${leads.aiScore} desc nulls last`, desc(profiles.followers), leads.id)
-        .limit(Math.min(f.limit ?? 50, 5000))
-        .offset(f.offset ?? 0);
-      return rows.map(({ lead, profile, sourceUrl }) => ({
-        username: profile.username,
-        fullName: profile.fullName,
-        category: profile.category,
-        followers: profile.followers,
-        isBusiness: profile.isBusiness,
-        email: lead.email,
-        phone: lead.phoneE164 ?? lead.phoneRaw,
-        phoneCountry: lead.phoneCountry,
-        phoneConfirmed: !!lead.phoneE164,
-        contactSource: lead.contactSource,
-        aiScore: lead.aiScore,
-        aiTags: lead.aiTags,
-        aiReason: lead.aiReason,
-        sourceUrl,
-        fetchedAt: profile.fetchedAt,
-      }));
-    },
+    listLeads: async (f: LeadFilters): Promise<LeadRow[]> => (await leadsPage(f)).leads,
+
+    /** One page of leads with a cursor for the next page. */
+    listLeadsPage: (f: LeadFilters) => leadsPage(f),
 
     /** Adds to the suppression list and deletes any matching data. */
     async suppress(kind: SuppressionKind, value: string, reason?: string) {
@@ -588,23 +958,231 @@ export function createScrapers(deps: {
       } else if (kind === "email") {
         await db.delete(leads).where(eq(leads.email, value.trim().toLowerCase()));
       } else {
-        const all = await db
-          .select({ id: leads.id, e164: leads.phoneE164, raw: leads.phoneRaw })
-          .from(leads)
-          .where(or(isNotNull(leads.phoneE164), isNotNull(leads.phoneRaw)));
-        const ids = all
-          .filter(
-            (l) =>
-              suppressionHash("phone", l.e164 ?? l.raw ?? "", config.suppressionPepper) ===
-              valueHash,
-          )
-          .map((l) => l.id);
-        if (ids.length) await db.delete(leads).where(inArray(leads.id, ids));
+        await db.delete(leads).where(eq(leads.phoneHash, valueHash));
       }
     },
 
     drain,
     notify,
+    getValue,
+    setValue,
+    claimOnce,
+    hitCounter,
+
+    // ---- browser push subscriptions ----
+    async savePushSubscription(sub: { endpoint: string; p256dh: string; auth: string }) {
+      await db
+        .insert(pushSubscriptions)
+        .values(sub)
+        .onConflictDoUpdate({
+          target: pushSubscriptions.endpoint,
+          set: { p256dh: sub.p256dh, auth: sub.auth },
+        });
+    },
+    async listPushSubscriptions() {
+      return db.select().from(pushSubscriptions);
+    },
+    async deletePushSubscription(endpoint: string) {
+      await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, endpoint));
+    },
+
+    async updateProject(
+      projectId: string,
+      patch: {
+        name?: string | undefined;
+        sheetId?: string | null | undefined;
+        aiCriteria?: string | null | undefined;
+        retentionDays?: number | undefined;
+        autoExport?: boolean | undefined;
+        watchKeywords?: string[] | null | undefined;
+      },
+    ) {
+      const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      if (Object.keys(clean).length === 0) return this.getProject(projectId);
+      const [p] = await db
+        .update(projects)
+        .set(clean)
+        .where(eq(projects.id, projectId))
+        .returning();
+      return p ?? null;
+    },
+
+    /** Sets where the owner is with a lead (CRM status) and an optional note. */
+    async setLeadStatus(input: {
+      projectId: string;
+      username: string;
+      status: LeadStatus;
+      note?: string | null;
+    }) {
+      const [profile] = await db
+        .select({ id: profiles.igUserId })
+        .from(profiles)
+        .where(eq(profiles.username, input.username.trim().replace(/^@/, "").toLowerCase()));
+      if (!profile) return false;
+      const updated = await db
+        .update(leads)
+        .set({
+          status: input.status,
+          statusAt: new Date(),
+          ...(input.note !== undefined ? { statusNote: input.note?.slice(0, 500) ?? null } : {}),
+        })
+        .where(and(eq(leads.projectId, input.projectId), eq(leads.profileId, profile.id)))
+        .returning({ id: leads.id });
+      return updated.length > 0;
+    },
+
+    async leadStatusCounts(projectId: string) {
+      const rows = await db
+        .select({ status: leads.status, n: sql<number>`count(*)::int` })
+        .from(leads)
+        .where(eq(leads.projectId, projectId))
+        .groupBy(leads.status);
+      return Object.fromEntries(rows.map((r) => [r.status, r.n])) as Partial<
+        Record<LeadStatus, number>
+      >;
+    },
+
+    // ---- monitors: recurring "new accounts only" jobs (idea from the Spir bot's schedules) ----
+    async createMonitor(input: {
+      projectId: string;
+      source: Exclude<Source, { type: "upload" }>;
+      limit?: number;
+      everyDays?: number;
+    }) {
+      const [m] = await db
+        .insert(monitors)
+        .values({
+          projectId: input.projectId,
+          sourceType: input.source.type,
+          sourceUrl: input.source.url,
+          limit: Math.min(Math.max(1, input.limit ?? 100), maxLimit),
+          everyDays: Math.min(Math.max(1, input.everyDays ?? 7), 90),
+        })
+        .returning();
+      if (!m) throw new Error("Monitor insert returned nothing");
+      return m;
+    },
+
+    async listMonitors(projectId?: string) {
+      return db
+        .select()
+        .from(monitors)
+        .where(projectId ? eq(monitors.projectId, projectId) : undefined)
+        .orderBy(desc(monitors.createdAt));
+    },
+
+    async setMonitorEnabled(id: string, enabled: boolean) {
+      await db.update(monitors).set({ enabled }).where(eq(monitors.id, id));
+    },
+
+    async deleteMonitor(id: string) {
+      await db.delete(monitors).where(eq(monitors.id, id));
+    },
+
+    /** Starts a job for every enabled monitor that is due. Returns the job ids. */
+    async runDueMonitors(now = new Date()) {
+      const due = await db
+        .select()
+        .from(monitors)
+        .where(
+          and(
+            eq(monitors.enabled, true),
+            or(
+              isNull(monitors.lastRunAt),
+              lte(
+                monitors.lastRunAt,
+                sql`${now.toISOString()}::timestamptz - make_interval(days => ${monitors.everyDays})`,
+              ),
+            ),
+          ),
+        );
+      const started: string[] = [];
+      for (const m of due) {
+        const [job] = await db
+          .insert(jobs)
+          .values({
+            projectId: m.projectId,
+            sourceType: m.sourceType,
+            sourceUrl: m.sourceUrl,
+            limit: m.limit,
+            onlyNew: true,
+            monitorId: m.id,
+          })
+          .returning({ id: jobs.id });
+        if (!job) continue;
+        await boss.send(QUEUES.discover, { jobId: job.id });
+        await db.update(monitors).set({ lastRunAt: now }).where(eq(monitors.id, m.id));
+        started.push(job.id);
+      }
+      return started;
+    },
+
+    /** Friday summary (idea from the Spir bot's weekly post): sent once per week. */
+    async weeklySummary(now = new Date()) {
+      const tz = config.timeZone ?? "Asia/Baghdad";
+      const weekday = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(
+        now,
+      );
+      const day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(weekday);
+      if (day !== (config.weeklyDay ?? 5)) return null;
+      const stamp = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now);
+      if (!(await claimOnce(`weekly:${stamp}`, 8 * 86_400_000))) return null;
+      const since = new Date(now.getTime() - 7 * 86_400_000);
+      const [t] = await db
+        .select({
+          leads: sql<number>`count(*)::int`,
+          contact: sql<number>`count(*) filter (where ${leads.email} is not null or ${leads.phoneE164} is not null or ${leads.phoneRaw} is not null)::int`,
+        })
+        .from(leads)
+        .where(gte(leads.createdAt, since));
+      const [j] = await db
+        .select({
+          done: sql<number>`count(*) filter (where ${jobs.status} = 'done')::int`,
+          failed: sql<number>`count(*) filter (where ${jobs.status} = 'failed')::int`,
+        })
+        .from(jobs)
+        .where(gte(jobs.createdAt, since));
+      const top = await db
+        .select({ username: profiles.username, score: leads.aiScore })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(gte(leads.createdAt, since), isNotNull(leads.aiScore)))
+        .orderBy(desc(leads.aiScore))
+        .limit(10);
+      const body = [
+        `عملاء جدد: ${t?.leads ?? 0} (بوسيلة تواصل: ${t?.contact ?? 0})`,
+        `مهام اكتملت: ${j?.done ?? 0} · فشلت: ${j?.failed ?? 0}`,
+        top.length ? `الأفضل: ${top.map((x) => `@${x.username} (${x.score})`).join("، ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      await notify({
+        type: "system",
+        level: "info",
+        title: "ملخص الأسبوع",
+        body,
+        url: "/",
+        key: `weekly:${stamp}`,
+      });
+      return body;
+    },
+
+    /** Database size and row counts for the health card. */
+    async systemHealth() {
+      const [size] = await db
+        .select({ bytes: sql<number>`pg_database_size(current_database())::float8` })
+        .from(sql`(select 1) as one`);
+      const count = async (t: typeof leads | typeof profiles | typeof jobs) =>
+        (await db.select({ n: sql<number>`count(*)::int` }).from(t))[0]?.n ?? 0;
+      return {
+        dbBytes: Number(size?.bytes ?? 0),
+        leads: await count(leads),
+        profiles: await count(profiles),
+        jobs: await count(jobs),
+        lastCron: await getValue<string>("cron:last"),
+        providers: router.snapshot(),
+      };
+    },
 
     /** Numbers for the overview page, including leads per day for the last 7 days. */
     async overviewStats() {
@@ -749,43 +1327,8 @@ export function createScrapers(deps: {
      * Scores a job's leads with the AI layer. Small jobs are scored now;
      * large ones are submitted as a batch and collected by drain/retention.
      */
-    async scoreLeads(jobId: string, criteria: string, opts: { rescore?: boolean } = {}) {
-      if (!scorer)
-        throw new ScoringUnavailableError(
-          "AI scoring needs ANTHROPIC_API_KEY (or let Claude score over MCP)",
-        );
-      const rows = await db
-        .select({ lead: leads, profile: profiles })
-        .from(leads)
-        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
-        .where(and(eq(leads.jobId, jobId), opts.rescore ? undefined : isNull(leads.aiScore)));
-      const items: ScoringInput[] = rows.map(({ lead, profile }) => ({
-        id: lead.id,
-        username: profile.username,
-        fullName: profile.fullName,
-        bio: profile.bio,
-        followers: profile.followers,
-        isBusiness: profile.isBusiness,
-        isVerified: profile.isVerified,
-        category: profile.category,
-        externalUrl: profile.externalUrl,
-      }));
-      if (items.length === 0) return { mode: "none" as const, count: 0 };
-      if (items.length > scorer.batchThreshold) {
-        const batchId = await scorer.submitBatch(items, criteria);
-        await db
-          .update(jobs)
-          .set({
-            counts: sql`${jobs.counts} || ${JSON.stringify({ aiBatchId: batchId, aiCriteria: criteria })}::jsonb`,
-          })
-          .where(eq(jobs.id, jobId));
-        return { mode: "batch" as const, count: items.length, batchId };
-      }
-      const scores = await scorer.scoreNow(items, criteria);
-      await saveScores(scores);
-      await bump(jobId, { scored: scores.size });
-      return { mode: "now" as const, count: scores.size };
-    },
+    scoreLeads: (jobId: string, criteria: string, opts: { rescore?: boolean } = {}) =>
+      scoreJob(jobId, criteria, opts),
 
     /** Audience summary for a job; written by the AI when available. */
     async audienceReport(jobId: string) {

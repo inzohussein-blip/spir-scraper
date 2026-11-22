@@ -22,6 +22,14 @@ export const sourceType = pgEnum("source_type", ["profile", "post", "hashtag", "
 export const jobStatus = pgEnum("job_status", ["queued", "running", "done", "failed", "cancelled"]);
 export const contactSource = pgEnum("contact_source", ["business_button", "bio", "link"]);
 export const providerId = pgEnum("provider_id", ["graph", "apify", "worker", "upload"]);
+/** Where the owner is with each lead (idea from the Spir bot's review page). */
+export const leadStatus = pgEnum("lead_status", [
+  "new",
+  "contacted",
+  "interested",
+  "customer",
+  "rejected",
+]);
 
 export const projects = pgTable("projects", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -32,6 +40,10 @@ export const projects = pgTable("projects", {
   /** Free-text scoring criteria for the AI layer. */
   aiCriteria: text("ai_criteria"),
   retentionDays: integer("retention_days").notNull().default(90),
+  /** Append every lead (with its score) to the project's sheet when a job finishes. */
+  autoExport: boolean("auto_export").notNull().default(false),
+  /** Words in a name or bio that trigger an alert, e.g. وكيل, IB, partner. */
+  watchKeywords: text("watch_keywords").array(),
   createdAt: createdAt(),
 });
 
@@ -68,6 +80,9 @@ export const jobs = pgTable(
     error: text("error"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /** Skip accounts already in the project (used by monitors). */
+    onlyNew: boolean("only_new").notNull().default(false),
+    monitorId: uuid("monitor_id"),
     createdAt: createdAt(),
   },
   (t) => [
@@ -88,6 +103,16 @@ export const profiles = pgTable("profiles", {
   isVerified: boolean("is_verified").notNull().default(false),
   category: text("category"),
   externalUrl: text("external_url"),
+  /** Public contact-button fields, kept so a cached profile can be re-read without fetching. */
+  businessEmail: text("business_email"),
+  businessPhone: text("business_phone"),
+  businessPhoneCountryCode: text("business_phone_country_code"),
+  businessWhatsapp: text("business_whatsapp"),
+  city: text("city"),
+  /** Average (likes + comments) / followers over recent posts, in percent. */
+  engagementRate: numeric("engagement_rate", { precision: 7, scale: 3 }),
+  /** Heuristic warnings such as low_engagement or follow_farming. */
+  qualityFlags: text("quality_flags").array(),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
   fetchedBy: providerId("fetched_by").notNull(),
 });
@@ -116,6 +141,11 @@ export const leads = pgTable(
     aiScore: smallint("ai_score"),
     aiTags: text("ai_tags").array(),
     aiReason: text("ai_reason"),
+    /** Suppression hash of the phone, so suppressing a number is an index lookup. */
+    phoneHash: text("phone_hash"),
+    status: leadStatus("status").notNull().default("new"),
+    statusNote: text("status_note"),
+    statusAt: timestamp("status_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: createdAt(),
   },
@@ -128,6 +158,9 @@ export const leads = pgTable(
     ),
     index("leads_project_score_idx").on(t.projectId, t.aiScore.desc()),
     index("leads_expires_idx").on(t.expiresAt),
+    index("leads_profile_idx").on(t.profileId),
+    index("leads_phone_hash_idx").on(t.phoneHash),
+    index("leads_project_status_idx").on(t.projectId, t.status),
   ],
 );
 
@@ -205,3 +238,58 @@ export const notifications = pgTable(
 
 export type AuditEntry = typeof auditLog.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+
+/** Recurring jobs that watch a competitor and collect only new accounts. */
+export const monitors = pgTable(
+  "monitors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sourceType: sourceType("source_type").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    limit: integer("limit").notNull().default(100),
+    everyDays: integer("every_days").notNull().default(7),
+    enabled: boolean("enabled").notNull().default(true),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("monitors_every_days", sql`${t.everyDays} between 1 and 90`),
+    check("monitors_limit_range", sql`${t.limit} between 1 and 5000`),
+  ],
+);
+
+/** Short-lived values shared by serverless instances: idempotency, used OAuth codes, provider state. */
+export const ephemeral = pgTable(
+  "ephemeral",
+  {
+    key: text("key").primaryKey(),
+    value: jsonb("value").$type<unknown>(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("ephemeral_expires_idx").on(t.expiresAt)],
+);
+
+/** Fixed-window counters, e.g. API requests per key per minute. */
+export const counters = pgTable(
+  "counters",
+  {
+    key: text("key").primaryKey(),
+    count: integer("count").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("counters_expires_idx").on(t.expiresAt)],
+);
+
+/** Browser push subscriptions for dashboard notifications. */
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  endpoint: text("endpoint").primaryKey(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  createdAt: createdAt(),
+});
+
+export type Monitor = typeof monitors.$inferSelect;
+export type LeadStatus = (typeof leadStatus.enumValues)[number];

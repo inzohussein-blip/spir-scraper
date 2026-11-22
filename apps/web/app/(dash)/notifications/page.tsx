@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { markAllRead } from "@/app/actions";
+import { PushToggle } from "@/components/push-toggle";
 import { Badge, Button, Card, Dot, fmtAgo, fmtDate } from "@/components/ui";
 import { getRuntime } from "@/lib/runtime";
 
@@ -35,6 +36,12 @@ export default async function Notifications() {
         )
       }
     >
+      {rt.vapidPublicKey && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-[10px] bg-surface-2 p-3 text-sm">
+          <span className="flex-1">إشعارات على هذا الجهاز حتى لو كانت اللوحة مغلقة:</span>
+          <PushToggle publicKey={rt.vapidPublicKey} />
+        </div>
+      )}
       {list.length === 0 ? (
         <p className="text-sm text-muted">
           لا إشعارات. تصلك هنا عند انتهاء المهام، وتوقف المصادر، ونفاد الرصيد.

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { Button, Card, Notice } from "@/components/ui";
 import { audit } from "@/lib/audit";
@@ -52,7 +53,12 @@ export default async function Authorize({ searchParams }: { searchParams: Promis
     const code = await sign(
       authSecret(),
       "code",
-      { cid: p.client_id.slice(-16), redirect_uri: p.redirect_uri, challenge: p.code_challenge },
+      {
+        cid: p.client_id.slice(-16),
+        redirect_uri: p.redirect_uri,
+        challenge: p.code_challenge,
+        jti: randomUUID(),
+      },
       300,
     );
     await audit("oauth.approve", { client: ok.client.name, redirect: p.redirect_uri });

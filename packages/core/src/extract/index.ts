@@ -8,8 +8,12 @@ import { findPhones, type PhoneMatch, parseButtonPhone } from "./phones.js";
 
 export * from "./country.js";
 export * from "./emails.js";
+export * from "./linkpages.js";
 export * from "./links.js";
+export * from "./mx.js";
 export * from "./phones.js";
+export * from "./quality.js";
+export * from "./resolve.js";
 
 export type ContactSource = "business_button" | "bio" | "link";
 
@@ -61,16 +65,17 @@ export function extractContact(profile: RawProfile): ExtractedContact {
       ? profile.businessEmail.trim().toLowerCase()
       : null;
   const countries = inferCountries({
-    bio,
+    bio: [bio, profile.city].filter(Boolean).join("\n"),
     fullName: profile.fullName,
     emails: [buttonEmail, ...bioEmails, ...link.emails].filter((e): e is string => !!e),
   });
 
   if (!isContactEligible(profile)) return { ...EMPTY, countries };
 
-  // 1. Public contact button.
-  const buttonPhone = profile.businessPhone
-    ? parseButtonPhone(profile.businessPhone, profile.businessPhoneCountryCode, countries)
+  // 1. Public contact button (phone, or the WhatsApp option).
+  const buttonNumber = profile.businessPhone ?? profile.businessWhatsapp;
+  const buttonPhone = buttonNumber
+    ? parseButtonPhone(buttonNumber, profile.businessPhoneCountryCode, countries)
     : undefined;
   if (buttonEmail || buttonPhone) {
     return {

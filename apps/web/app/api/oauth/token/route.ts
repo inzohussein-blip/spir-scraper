@@ -1,4 +1,5 @@
 import { appOrigin, authSecret } from "@/lib/env";
+import { getRuntime } from "@/lib/runtime";
 import { pkceChallenge, sign, verify } from "@/lib/tokens";
 
 const ACCESS_TTL = 3600;
@@ -38,15 +39,21 @@ export async function POST(req: Request) {
   const clientId = get("client_id");
 
   if (get("grant_type") === "authorization_code") {
-    const code = await verify<{ cid: string; redirect_uri: string; challenge: string }>(
-      secret,
-      "code",
-      get("code"),
-    );
+    const code = await verify<{
+      cid: string;
+      redirect_uri: string;
+      challenge: string;
+      jti?: string;
+    }>(secret, "code", get("code"));
     if (!code) return err("invalid_grant");
     if (code.cid !== clientId.slice(-16) || code.redirect_uri !== get("redirect_uri"))
       return err("invalid_grant");
     if (pkceChallenge(get("code_verifier")) !== code.challenge) return err("invalid_grant");
+    // Codes are single-use: the first exchange claims the code's id.
+    const rt = await getRuntime();
+    if (!code.jti || !(await rt.scrapers.claimOnce(`oauth-code:${code.jti}`, 10 * 60_000))) {
+      return err("invalid_grant");
+    }
     return issue(origin, clientId);
   }
 

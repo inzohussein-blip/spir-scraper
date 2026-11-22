@@ -32,6 +32,9 @@ export type ProviderHealthEvent =
 export interface RouterOptions {
   /** Called when a provider starts resting and when it works again. */
   onHealth?: (e: ProviderHealthEvent) => void;
+  /** Random spread added to request spacing, 0..1 of the interval (default 0.3). */
+  jitter?: number;
+  random?: () => number;
   /** How long a provider rests after a 429 or a block. */
   cooldownMs?: number;
   now?: () => number;
@@ -48,6 +51,8 @@ export class ProviderRouter {
   private readonly nextSlot = new Map<ProviderId, number>();
   private readonly down = new Set<ProviderId>();
   private readonly onHealth: ((e: ProviderHealthEvent) => void) | undefined;
+  private readonly jitter: number;
+  private readonly random: () => number;
   private readonly cooldownMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -58,6 +63,8 @@ export class ProviderRouter {
   ) {
     this.cooldownMs = opts.cooldownMs ?? 15 * 60_000;
     this.onHealth = opts.onHealth;
+    this.jitter = opts.jitter ?? 0.3;
+    this.random = opts.random ?? Math.random;
     this.now = opts.now ?? Date.now;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
@@ -71,7 +78,9 @@ export class ProviderRouter {
 
   /** Spaces calls to each provider according to its ratePerMinute. */
   private async throttle(p: Provider): Promise<void> {
-    const interval = 60_000 / Math.max(p.ratePerMinute, 1);
+    // Up to 30% random jitter so requests are not perfectly regular (idea from instagrapi's delay_range).
+    const base = 60_000 / Math.max(p.ratePerMinute, 1);
+    const interval = base * (1 + this.jitter * this.random());
     const t = this.now();
     const slot = Math.max(this.nextSlot.get(p.id) ?? 0, t);
     this.nextSlot.set(p.id, slot + interval);
@@ -98,6 +107,41 @@ export class ProviderRouter {
 
   private ok(p: Provider) {
     if (this.down.delete(p.id)) this.onHealth?.({ provider: p.id, status: "up" });
+  }
+
+  /** Cooldowns and down-state, to persist between serverless invocations. */
+  snapshot(): Record<string, { until: number; down: boolean }> {
+    const out: Record<string, { until: number; down: boolean }> = {};
+    for (const p of this.providers) {
+      const until = this.cooldownUntil.get(p.id) ?? 0;
+      if (until > this.now() || this.down.has(p.id))
+        out[p.id] = { until, down: this.down.has(p.id) };
+    }
+    return out;
+  }
+
+  /** Merges saved state: keeps the later cooldown of the two. */
+  restore(state: Record<string, { until: number; down: boolean }> | null | undefined) {
+    if (!state) return;
+    for (const [id, s] of Object.entries(state)) {
+      const pid = id as ProviderId;
+      if (s.until > (this.cooldownUntil.get(pid) ?? 0)) this.cooldownUntil.set(pid, s.until);
+      if (s.down) this.down.add(pid);
+    }
+  }
+
+  /** True when providers exist for this capability but all of them are resting. */
+  exhausted(cap: Capability = "profile"): boolean {
+    return this.supports(cap) && this.available(cap).length === 0;
+  }
+
+  /** Milliseconds until the first resting provider for this capability is usable again. */
+  nextAvailableIn(cap: Capability = "profile"): number {
+    const t = this.now();
+    const waits = this.providers
+      .filter((p) => p.capabilities.has(cap))
+      .map((p) => (this.cooldownUntil.get(p.id) ?? 0) - t);
+    return Math.max(0, Math.min(...waits, this.cooldownMs));
   }
 
   supports(cap: Capability): boolean {

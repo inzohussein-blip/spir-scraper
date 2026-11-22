@@ -17,6 +17,12 @@ const row = (over: Partial<LeadRow> = {}): LeadRow => ({
   aiScore: 80,
   aiTags: ["وكيل", "خليج"],
   aiReason: "يتحدث العربية",
+  status: "new",
+  statusNote: null,
+  city: null,
+  engagementRate: null,
+  qualityFlags: null,
+  otherProjects: 0,
   sourceUrl: "https://www.instagram.com/competitor/",
   fetchedAt: new Date("2026-11-21T10:00:00Z"),
   ...over,
@@ -47,6 +53,21 @@ describe("toCsv", () => {
     expect(lines[1]).toContain("شركة أكمي");
     expect(lines[1]).toContain("وكيل، خليج");
     expect(lines[2]).toContain(",لا,");
+  });
+
+  it("writes status, flags and the score for every lead", () => {
+    const csv = toCsv([
+      row({
+        status: "interested",
+        qualityFlags: ["low_engagement"],
+        engagementRate: 1.25,
+        otherProjects: 2,
+      }),
+    ]);
+    expect(csv).toContain(",مهتم,");
+    expect(csv).toContain("تفاعل منخفض");
+    expect(csv).toContain(",1.25,");
+    expect(csv).toContain(",80,");
   });
 
   it("can use machine-readable headers", () => {

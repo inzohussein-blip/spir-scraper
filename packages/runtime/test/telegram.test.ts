@@ -2,7 +2,7 @@ import { type Provider, RateLimitedError, uploadSource } from "@scrapers/core";
 import { ApifyProvider } from "@scrapers/providers";
 import { describe, expect, it } from "vitest";
 import { TelegramNotifier } from "../src/index.js";
-import { createTestRuntime, fakeProfile, settle } from "../src/testing.js";
+import { createTestRuntime, fakeProfile } from "../src/testing.js";
 
 function telegramSpy() {
   const sent: { url: string; body: { chat_id: string; text: string; parse_mode: string } }[] = [];
@@ -58,12 +58,15 @@ describe("runtime notifications", () => {
       expect(rt.telegram).not.toBeNull();
       const p = await rt.scrapers.createProject({ name: "p", owner: rt.owner });
       await rt.scrapers.startJob({ projectId: p.id, source: uploadSource(["user2"]), limit: 1 });
-      await settle(rt);
+      await rt.scrapers.drain({ budgetMs: 5_000 });
       await new Promise((r) => setTimeout(r, 50));
       const texts = t.sent.map((s) => s.body.text);
       expect(texts.some((x) => x.includes("المصدر worker: تجاوز حد الطلبات"))).toBe(true);
+      // The account is deferred, not failed, and the link points at the dashboard.
       expect(
-        texts.some((x) => x.includes("انتهت مهمة p") && x.includes("https://scrapers.app/jobs/")),
+        texts.some(
+          (x) => x.includes("أُجّل 1 حساباً في مهمة p") && x.includes("https://scrapers.app/jobs/"),
+        ),
       ).toBe(true);
       limited = false;
       expect(await rt.healthCheck()).toEqual([

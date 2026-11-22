@@ -158,4 +158,57 @@ describe("scrapers CLI", () => {
     const report = (await cli(["report", "00000000-0000-0000-0000-000000000000"])).out;
     expect(JSON.parse(report)).toMatchObject({ total: 0 });
   });
+
+  it("sets lead status, filters by it and searches", async () => {
+    expect(
+      (await cli(["lead", "status", "@user496", "interested", "-p", "gulf", "--note", "call back"]))
+        .out,
+    ).toContain("user496 → interested");
+    await expect(cli(["lead", "status", "user496", "maybe", "-p", "gulf"])).rejects.toThrow(
+      /status must be one of/,
+    );
+    await expect(cli(["lead", "status", "ghost", "contacted", "-p", "gulf"])).rejects.toThrow(
+      /not a lead/,
+    );
+    const json = JSON.parse(
+      (await cli(["leads", "-p", "gulf", "--status", "interested", "--json"])).out,
+    );
+    expect(json).toEqual([
+      expect.objectContaining({
+        username: "user496",
+        status: "interested",
+        statusNote: "call back",
+      }),
+    ]);
+    expect(
+      JSON.parse((await cli(["leads", "-p", "gulf", "-q", "user49", "--json"])).out).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("changes project settings and manages monitors", async () => {
+    expect(
+      (await cli(["project", "set", "gulf", "--auto-export", "--keywords", "وكيل, IB"])).out,
+    ).toContain("auto export on · keywords وكيل, IB");
+    expect(
+      (await cli(["project", "set", "gulf", "--no-auto-export", "--keywords", ""])).out,
+    ).toContain("auto export off · keywords —");
+    expect((await cli(["monitor", "add", "#forex", "-p", "gulf", "-e", "3"])).out).toContain(
+      "every 3 days",
+    );
+    const list = (await cli(["monitor", "list", "-p", "gulf"])).out;
+    expect(list).toMatch(/on +every 3d/);
+    expect((await cli(["monitor", "run"])).out).toMatch(/started 1 job/);
+    expect((await cli(["monitor", "run"])).out).toBe("No monitor is due.");
+    await cli(["monitor", "rm", list.split(/\s+/)[0] as string]);
+    expect((await cli(["monitor", "list"])).out).toBe("No monitors.");
+  });
+
+  it("generates VAPID keys and runs doctor", async () => {
+    expect((await cli(["push-keys"])).out).toMatch(
+      /VAPID_PUBLIC_KEY=\S{40,}\nVAPID_PRIVATE_KEY=\S{20,}/,
+    );
+    const doctor = (await cli(["doctor"])).out;
+    expect(doctor).toContain("database reachable");
+    expect(doctor).toContain("run with --live");
+  });
 });

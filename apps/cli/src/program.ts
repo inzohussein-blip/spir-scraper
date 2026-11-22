@@ -12,6 +12,7 @@ import {
 } from "@scrapers/core";
 import { buildMcpServer } from "@scrapers/mcp";
 import type { ExportRequest } from "@scrapers/runtime";
+import { generateVapidKeys } from "@scrapers/runtime";
 import { Command, InvalidArgumentError, Option } from "commander";
 import pc from "picocolors";
 import type { Context, ContextFactory } from "./context.js";
@@ -94,8 +95,13 @@ function filterOptions(cmd: Command) {
     .option("--business", "business accounts only")
     .option("--has-email", "only leads with an email")
     .option("--has-phone", "only leads with a phone number")
-    .option("--min-score <n>", "minimum AI score", int("min-score"));
+    .option("--min-score <n>", "minimum AI score", int("min-score"))
+    .addOption(new Option("--status <status>", "CRM status").choices([...STATUSES]))
+    .option("-q, --search <text>", "text in username, name or bio");
 }
+
+const STATUSES = ["new", "contacted", "interested", "customer", "rejected"] as const;
+type Status = (typeof STATUSES)[number];
 
 type FilterOpts = {
   job?: string;
@@ -103,6 +109,8 @@ type FilterOpts = {
   hasEmail?: boolean;
   hasPhone?: boolean;
   minScore?: number;
+  status?: Status;
+  search?: string;
 };
 
 function toFilters(o: FilterOpts): Omit<LeadFilters, "projectId"> {
@@ -112,6 +120,8 @@ function toFilters(o: FilterOpts): Omit<LeadFilters, "projectId"> {
     ...(o.hasEmail ? { hasEmail: true } : {}),
     ...(o.hasPhone ? { hasPhone: true } : {}),
     ...(o.minScore !== undefined ? { minScore: o.minScore } : {}),
+    ...(o.status ? { status: o.status } : {}),
+    ...(o.search ? { q: o.search } : {}),
   };
 }
 
@@ -359,6 +369,174 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
     await (await context()).scrapers.revokeApiKey(id);
     io.log(`${pc.green("✓")} revoked`);
   });
+
+  const lead = program.command("lead").description("work with one lead");
+  lead
+    .command("status <username> <status>")
+    .description(`set the CRM status: ${STATUSES.join(", ")}`)
+    .requiredOption("-p, --project <id|name>", "project")
+    .option("--note <text>", "note")
+    .action(async (username: string, status: string, o: { project: string; note?: string }) => {
+      if (!STATUSES.includes(status as Status))
+        throw new InvalidArgumentError(`status must be one of ${STATUSES.join(", ")}`);
+      const c = await context();
+      const ok = await c.scrapers.setLeadStatus({
+        projectId: await resolveProject(c, o.project),
+        username,
+        status: status as Status,
+        ...(o.note !== undefined ? { note: o.note } : {}),
+      });
+      if (!ok) throw new Error(`@${username.replace(/^@/, "")} is not a lead in this project`);
+      io.log(`${pc.green("✓")} @${username.replace(/^@/, "")} → ${status}`);
+    });
+
+  project
+    .command("set <name>")
+    .description("change project settings")
+    .option(
+      "--auto-export",
+      "append every lead (with score) to the project sheet when a job finishes",
+    )
+    .option("--no-auto-export", "turn auto export off")
+    .option("--keywords <list>", "comma-separated watch keywords ('' clears)")
+    .option("--criteria <text>", "AI scoring criteria ('' clears)")
+    .option("--sheet <id>", "Google Sheet id ('' clears)")
+    .action(
+      async (
+        name: string,
+        o: { autoExport?: boolean; keywords?: string; criteria?: string; sheet?: string },
+      ) => {
+        const c = await context();
+        const id = await resolveProject(c, name);
+        const keywords = o.keywords
+          ?.split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+        const p = await c.scrapers.updateProject(id, {
+          ...(o.autoExport !== undefined ? { autoExport: o.autoExport } : {}),
+          ...(keywords !== undefined ? { watchKeywords: keywords.length ? keywords : null } : {}),
+          ...(o.criteria !== undefined ? { aiCriteria: o.criteria || null } : {}),
+          ...(o.sheet !== undefined ? { sheetId: o.sheet || null } : {}),
+        });
+        io.log(
+          `${pc.green("✓")} ${p?.name}: auto export ${p?.autoExport ? "on" : "off"} · keywords ${p?.watchKeywords?.join(", ") || "—"} · sheet ${p?.sheetId ?? "—"}`,
+        );
+      },
+    );
+
+  const monitor = program
+    .command("monitor")
+    .description("watch competitors: recurring jobs that collect only new accounts");
+  monitor
+    .command("add <source>")
+    .requiredOption("-p, --project <id|name>", "project")
+    .option("-e, --every <days>", "run every N days", int("every"), 7)
+    .option("-l, --limit <n>", "max accounts per run", int("limit"), 100)
+    .action(async (input: string, o: { project: string; every: number; limit: number }) => {
+      const c = await context();
+      const m = await c.scrapers.createMonitor({
+        projectId: await resolveProject(c, o.project),
+        source: parseSource(input),
+        everyDays: o.every,
+        limit: o.limit,
+      });
+      io.log(`${pc.green("✓")} monitor ${m.id} · ${m.sourceUrl} every ${m.everyDays} days`);
+    });
+  monitor
+    .command("list")
+    .option("-p, --project <id|name>", "project")
+    .action(async (o: { project?: string }) => {
+      const c = await context();
+      const all = await c.scrapers.listMonitors(
+        o.project ? await resolveProject(c, o.project) : undefined,
+      );
+      io.log(
+        all.length
+          ? all
+              .map(
+                (m) =>
+                  `${m.id}  ${m.enabled ? pc.green("on ") : pc.dim("off")}  every ${m.everyDays}d  ${m.sourceUrl}  last ${m.lastRunAt?.toISOString() ?? "never"}`,
+              )
+              .join("\n")
+          : "No monitors.",
+      );
+    });
+  monitor.command("rm <id>").action(async (id: string) => {
+    await (await context()).scrapers.deleteMonitor(id);
+    io.log(`${pc.green("✓")} removed`);
+  });
+  monitor
+    .command("run")
+    .description("start every monitor that is due (the daily cron does this)")
+    .action(async () => {
+      const ids = await (await context()).scrapers.runDueMonitors();
+      io.log(
+        ids.length
+          ? `${pc.green("✓")} started ${ids.length} job(s): ${ids.join(", ")}`
+          : "No monitor is due.",
+      );
+    });
+
+  program
+    .command("push-keys")
+    .description("generate VAPID keys for browser push notifications")
+    .action(() => {
+      const k = generateVapidKeys();
+      io.log(
+        `VAPID_PUBLIC_KEY=${k.publicKey}\nVAPID_PRIVATE_KEY=${k.privateKey}\n${pc.yellow("Put both in your environment; keep the private key secret.")}`,
+      );
+    });
+
+  program
+    .command("doctor")
+    .description("check configuration, database and data sources")
+    .option("--live", "also fetch one public profile from each free provider")
+    .action(async (o: { live?: boolean }) => {
+      const env = process.env;
+      const line = (ok: boolean | null, label: string, detail = "") =>
+        io.log(
+          `${ok === null ? pc.dim("–") : ok ? pc.green("✓") : pc.red("✗")} ${label}${detail ? pc.dim(`  ${detail}`) : ""}`,
+        );
+      line(!!env.DATABASE_URL, "DATABASE_URL");
+      line(!!env.SUPPRESSION_PEPPER, "SUPPRESSION_PEPPER");
+      line(
+        !!(env.WORKER_URL || env.APIFY_TOKEN || env.IG_GRAPH_TOKEN),
+        "at least one data source",
+        "WORKER_URL / APIFY_TOKEN / IG_GRAPH_TOKEN",
+      );
+      line(
+        env.ANTHROPIC_API_KEY ? true : null,
+        "AI scoring",
+        env.ANTHROPIC_API_KEY ? "" : "optional",
+      );
+      line(
+        env.GOOGLE_SERVICE_ACCOUNT_JSON ? true : null,
+        "Google Sheets",
+        env.GOOGLE_SERVICE_ACCOUNT_JSON ? "" : "optional",
+      );
+      line(
+        env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID ? true : null,
+        "Telegram",
+        env.TELEGRAM_BOT_TOKEN ? "" : "optional",
+      );
+      line(
+        env.VAPID_PUBLIC_KEY ? true : null,
+        "browser push",
+        env.VAPID_PUBLIC_KEY ? "" : "optional (scrapers push-keys)",
+      );
+      const c = await context();
+      const h = await c.scrapers.systemHealth();
+      line(
+        true,
+        "database reachable",
+        `${(h.dbBytes / 1024 / 1024).toFixed(1)}MB · ${h.leads} leads · ${h.jobs} jobs`,
+      );
+      if (o.live) {
+        for (const r of await c.healthCheck()) line(r.ok, `provider ${r.provider}`, r.detail);
+      } else {
+        line(null, "providers", "run with --live to test them (Apify only checks the credit)");
+      }
+    });
 
   program
     .command("suppress")

@@ -6,6 +6,7 @@ import {
   type Provider,
   type ProviderHealthEvent,
   ProviderRouter,
+  type ResolveDeps,
   type Scorer,
   type Scrapers,
 } from "@scrapers/core";
@@ -21,8 +22,11 @@ import {
 } from "@scrapers/exporters";
 import { ApifyProvider, providersFromEnv } from "@scrapers/providers";
 import { PgBoss } from "pg-boss";
+import { WebPushSink } from "./push.js";
 import { type FetchLike, TelegramNotifier } from "./telegram.js";
 
+export * from "./commands.js";
+export * from "./push.js";
 export * from "./telegram.js";
 
 export type ExportFormat = "csv" | "xlsx" | "sheet";
@@ -50,6 +54,8 @@ export interface Runtime {
   exportLeads(req: ExportRequest): Promise<ExportResult>;
   /** Telegram channel to the owner (notifications, login codes), when configured. */
   telegram: TelegramNotifier | null;
+  /** Public VAPID key for browser push, when configured. */
+  vapidPublicKey: string | null;
   /** Daily check: free-credit level and whether each provider still answers. */
   healthCheck(): Promise<{ provider: string; ok: boolean; detail: string }[]>;
   close(): Promise<void>;
@@ -66,6 +72,8 @@ export interface RuntimeOverrides {
   serverless?: boolean;
   sinks?: NotificationSink[];
   telegramFetch?: FetchLike;
+  /** Overrides the network steps of contact extraction (tests pass {}). */
+  resolve?: ResolveDeps;
   onClose?: () => Promise<void>;
 }
 
@@ -108,6 +116,26 @@ export async function createRuntime(
       ? new TelegramNotifier(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID, o.telegramFetch)
       : null;
   const providers = o.providers ?? providersFromEnv(env);
+  // Browser push needs a store that exists only after createScrapers; the sink reads it lazily.
+  let pushStore: Scrapers | null = null;
+  const push =
+    env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY
+      ? new WebPushSink(
+          () => {
+            if (!pushStore) throw new Error("push store not ready");
+            return pushStore;
+          },
+          {
+            publicKey: env.VAPID_PUBLIC_KEY,
+            privateKey: env.VAPID_PRIVATE_KEY,
+            subject:
+              env.VAPID_SUBJECT ||
+              (env.OWNER_EMAIL?.includes("@")
+                ? `mailto:${env.OWNER_EMAIL}`
+                : "mailto:owner@example.com"),
+          },
+        )
+      : null;
   const REASONS = {
     rate_limited: "تجاوز حد الطلبات",
     blocked: "محجوب أو يطلب تسجيل دخول",
@@ -121,15 +149,54 @@ export async function createRuntime(
     boss,
     router,
     scorer,
-    sinks: [...(telegram ? [telegram] : []), ...(o.sinks ?? [])],
+    sinks: [...(telegram ? [telegram] : []), ...(push ? [push] : []), ...(o.sinks ?? [])],
     ...(env.APP_URL ? { appUrl: env.APP_URL } : {}),
+    ...(o.resolve ? { resolve: o.resolve } : {}),
+    onReadyToExport: (jobId) => autoExport(jobId),
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,
       maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 1000),
       defaultRetentionDays: Number(env.DEFAULT_RETENTION_DAYS ?? 90),
+      profileCacheDays: Number(env.PROFILE_CACHE_DAYS ?? 7),
+      weeklyDay: Number(env.WEEKLY_SUMMARY_DAY ?? 5),
+      timeZone: env.TIME_ZONE || "Asia/Baghdad",
     },
   });
+
+  /**
+   * Auto-export (owner's choice: no score thresholds): every lead of the job,
+   * with its score and status, goes to the project's sheet. A project without
+   * a sheet gets a new one, remembered for later jobs.
+   */
+  async function autoExport(jobId: string) {
+    const job = await scrapers.getJob(jobId);
+    const project = await scrapers.getProject(job.projectId);
+    if (!project?.autoExport) return;
+    if (!sheets) {
+      await scrapers.notify({
+        type: "job",
+        level: "warn",
+        title: "التصدير التلقائي مفعّل لكن Google Sheets غير مضبوط",
+        body: "أضف GOOGLE_SERVICE_ACCOUNT_JSON أو أطفئ التصدير التلقائي للمشروع.",
+        url: `/jobs/${jobId}`,
+        key: `auto-export-nosheets:${project.id}`,
+      });
+      return;
+    }
+    const r = await runtime.exportLeads({ projectId: project.id, jobId, format: "sheet" });
+    if (r.kind !== "sheet") return;
+    if (!project.sheetId) await scrapers.updateProject(project.id, { sheetId: r.spreadsheetId });
+    await scrapers.notify({
+      type: "job",
+      level: "ok",
+      title: `صُدّر ${r.written} عميلاً إلى شيت ${project.name}`,
+      body: r.skippedDuplicates ? `${r.skippedDuplicates} موجودون في الشيت مسبقاً` : "",
+      url: `/jobs/${jobId}`,
+      key: `auto-export:${jobId}`,
+    });
+  }
   await scrapers.init();
+  pushStore = scrapers;
   onHealth = (e) => {
     const sent =
       e.status === "down"
@@ -159,7 +226,7 @@ export async function createRuntime(
 
   const owner = env.OWNER_EMAIL || "owner";
 
-  return {
+  const runtime: Runtime = {
     scrapers,
     owner,
     sheetsEmail: sheets?.email ?? null,
@@ -214,6 +281,7 @@ export async function createRuntime(
     },
 
     telegram,
+    vapidPublicKey: push ? (env.VAPID_PUBLIC_KEY ?? null) : null,
 
     async healthCheck() {
       const results: { provider: string; ok: boolean; detail: string }[] = [];
@@ -267,4 +335,5 @@ export async function createRuntime(
       await o.onClose?.();
     },
   };
+  return runtime;
 }

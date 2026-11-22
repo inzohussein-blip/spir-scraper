@@ -137,4 +137,132 @@ describe("REST API", () => {
       expect.arrayContaining(["/v1/jobs", "/v1/leads", "/v1/jobs/{id}/export"]),
     );
   });
+
+  it("limits requests per key and says when to retry", async () => {
+    const limited = createApi(async () => rt, { rateLimitPerMinute: 2 });
+    const k = (await rt.scrapers.createApiKey("burst", ["read"])).key;
+    const hit = () =>
+      limited.request("/v1/projects", { headers: { authorization: `Bearer ${k}` } });
+    const first = await hit();
+    expect(first.headers.get("x-ratelimit-remaining")).toBe("1");
+    expect((await hit()).status).toBe(200);
+    const third = await hit();
+    expect(third.status).toBe(429);
+    expect(third.headers.get("retry-after")).toBe("60");
+  });
+
+  it("keeps idempotency keys per API key in the database", async () => {
+    const other = (await rt.scrapers.createApiKey("other", ["read", "write"])).key;
+    const p = (await (await req("POST", "/v1/projects", writeKey, { name: "idem" })).json()) as any;
+    const a = (await (
+      await req(
+        "POST",
+        "/v1/jobs",
+        writeKey,
+        { projectId: p.id, usernames: ["u1"] },
+        { "idempotency-key": "same" },
+      )
+    ).json()) as any;
+    const b = (await (
+      await req(
+        "POST",
+        "/v1/jobs",
+        other,
+        { projectId: p.id, usernames: ["u1"] },
+        { "idempotency-key": "same" },
+      )
+    ).json()) as any;
+    expect(a.job.id).not.toBe(b.job.id);
+    const { rows } = await rt.pg.query<{ n: number }>(
+      "select count(*)::int as n from ephemeral where key like 'idem:%'",
+    );
+    expect(rows[0]?.n).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("REST API: lead workflow and monitors", () => {
+  it("searches, pages with a cursor, sets status, updates projects and manages monitors", async () => {
+    const p = (await (await req("POST", "/v1/projects", writeKey, { name: "crm" })).json()) as any;
+    await req("POST", "/v1/jobs", writeKey, {
+      projectId: p.id,
+      usernames: ["user8", "user10", "user12"],
+    });
+    await settle(rt);
+    const first = (await (
+      await req("GET", `/v1/leads?project=${p.id}&limit=2`, readKey)
+    ).json()) as any;
+    expect(first.leads).toHaveLength(2);
+    expect(typeof first.nextCursor).toBe("string");
+    const second = (await (
+      await req("GET", `/v1/leads?project=${p.id}&limit=2&cursor=${first.nextCursor}`, readKey)
+    ).json()) as any;
+    expect(second.leads).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect(
+      ((await (await req("GET", `/v1/leads?project=${p.id}&q=user10`, readKey)).json()) as any)
+        .leads,
+    ).toHaveLength(1);
+
+    expect(
+      (
+        await req("POST", "/v1/leads/status", writeKey, {
+          projectId: p.id,
+          username: "user10",
+          status: "interested",
+          note: "اتصل الأحد",
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await req("POST", "/v1/leads/status", writeKey, {
+          projectId: p.id,
+          username: "ghost",
+          status: "interested",
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await req("POST", "/v1/leads/status", writeKey, {
+          projectId: p.id,
+          username: "user10",
+          status: "maybe",
+        })
+      ).status,
+    ).toBe(400);
+    const interested = (await (
+      await req("GET", `/v1/leads?project=${p.id}&status=interested`, readKey)
+    ).json()) as any;
+    expect(interested.leads[0]).toMatchObject({
+      username: "user10",
+      status: "interested",
+      statusNote: "اتصل الأحد",
+    });
+
+    const patched = (await (
+      await req("PATCH", `/v1/projects/${p.id}`, writeKey, {
+        autoExport: true,
+        watchKeywords: ["وكيل"],
+      })
+    ).json()) as any;
+    expect(patched).toMatchObject({ autoExport: true, watchKeywords: ["وكيل"] });
+
+    const m = (await (
+      await req("POST", "/v1/monitors", writeKey, {
+        projectId: p.id,
+        source: "@competitor",
+        everyDays: 3,
+      })
+    ).json()) as any;
+    expect(m).toMatchObject({ sourceType: "profile", everyDays: 3, enabled: true });
+    expect(
+      ((await (await req("GET", `/v1/monitors?project=${p.id}`, readKey)).json()) as any).monitors,
+    ).toHaveLength(1);
+    expect(
+      (await req("POST", "/v1/monitors", writeKey, { projectId: p.id, source: "https://evil.com" }))
+        .status,
+    ).toBe(400);
+    expect((await req("DELETE", `/v1/monitors/${m.id}`, writeKey)).status).toBe(200);
+  });
 });

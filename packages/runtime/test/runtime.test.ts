@@ -85,3 +85,61 @@ describe("exportLeads", () => {
     }
   });
 });
+
+describe("auto export", () => {
+  it("appends every lead with its score to the project sheet, creating one the first time", async () => {
+    const calls: { method: string; url: string; data?: any }[] = [];
+    const sheetsRequest: GoogleRequest = async (o) => {
+      calls.push(o);
+      if (o.method === "POST" && o.url.endsWith("/spreadsheets"))
+        return { spreadsheetId: "AUTO", spreadsheetUrl: "u" } as never;
+      if (o.method === "GET" && o.url.includes("fields="))
+        return { sheets: [{ properties: { title: "Scrapers" } }] } as never;
+      if (o.method === "GET") return { values: [["المعرّف"], ["user1"]] } as never;
+      return {} as never;
+    };
+    const rt = await createTestRuntime({ sheetsRequest });
+    try {
+      const p = await rt.scrapers.createProject({
+        name: "auto",
+        owner: rt.owner,
+        autoExport: true,
+      });
+      await rt.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(["user1", "user2"]),
+        limit: 5,
+      });
+      await settle(rt);
+      expect((await rt.scrapers.getProject(p.id))?.sheetId).toBe("AUTO");
+      const written = calls.find((c) => c.method === "PUT")?.data.values;
+      expect(written).toHaveLength(3); // header + both leads, personal accounts included
+      await rt.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(["user1", "user3"]),
+        limit: 5,
+      });
+      await settle(rt);
+      const appended = calls.filter((c) => c.url.includes(":append")).at(-1)?.data.values;
+      expect(appended.map((r: unknown[]) => r[0])).toEqual(["user3"]);
+      const titles = (await rt.scrapers.listNotifications()).map((n) => n.title);
+      expect(titles).toContain("صُدّر 2 عميلاً إلى شيت auto");
+    } finally {
+      await rt.close();
+    }
+  });
+
+  it("warns when auto export is on but Sheets is not configured", async () => {
+    const rt = await createTestRuntime();
+    try {
+      const p = await rt.scrapers.createProject({ name: "x", owner: rt.owner, autoExport: true });
+      await rt.scrapers.startJob({ projectId: p.id, source: uploadSource(["user2"]), limit: 1 });
+      await settle(rt);
+      expect((await rt.scrapers.listNotifications()).map((n) => n.title)).toContain(
+        "التصدير التلقائي مفعّل لكن Google Sheets غير مضبوط",
+      );
+    } finally {
+      await rt.close();
+    }
+  });
+});

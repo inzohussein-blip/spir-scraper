@@ -13,8 +13,8 @@ SECRET = "s3cret"
 PROFILE = {"igUserId": "1", "username": "acme", "isBusiness": True, "isVerified": False}
 
 
-def client(fetch, interval=0.0):
-    return TestClient(create_app(fetch=fetch, secret=SECRET, min_interval=interval))
+def client(fetch, interval=0.0, jitter=0.0):
+    return TestClient(create_app(fetch=fetch, secret=SECRET, min_interval=interval, jitter=jitter))
 
 
 def test_health():
@@ -112,6 +112,9 @@ def test_profile_to_dict_maps_fields_and_contact_button():
         "businessEmail": "a@acme.com",
         "businessPhone": "501234567",
         "businessPhoneCountryCode": "966",
+        "businessWhatsapp": None,
+        "city": None,
+        "recentPosts": None,
     }
 
 
@@ -147,3 +150,52 @@ def test_loader_fails_fast_on_429():
     loader = fetch_mod.make_loader()
     with pytest.raises(RateLimited):
         loader.context._rate_controller.handle_429("graphql")
+
+
+def test_profile_to_dict_reads_city_whatsapp_and_recent_posts():
+    d = profile_to_dict(
+        fake_profile(
+            business_address_json='{"city_name": "Baghdad", "street_address": "x"}',
+            whatsapp_number="+9647701234567",
+            edge_owner_to_timeline_media={
+                "edges": [
+                    {
+                        "node": {
+                            "edge_liked_by": {"count": 10},
+                            "edge_media_to_comment": {"count": 2},
+                        }
+                    },
+                    {"node": {"edge_media_preview_like": {"count": 7}}},
+                    "junk",
+                ]
+            },
+        )
+    )
+    assert d["city"] == "Baghdad"
+    assert d["businessWhatsapp"] == "+9647701234567"
+    assert d["recentPosts"] == [{"likes": 10, "comments": 2}, {"likes": 7, "comments": None}]
+
+
+def test_city_tolerates_bad_json():
+    assert profile_to_dict(fake_profile(business_address_json="{not json"))["city"] is None
+    assert profile_to_dict(fake_profile(city_name="Dubai"))["city"] == "Dubai"
+
+
+def test_loader_uses_proxy():
+    loader = fetch_mod.make_loader("http://proxy.example:8080")
+    assert loader.context._session.proxies == {
+        "http": "http://proxy.example:8080",
+        "https": "http://proxy.example:8080",
+    }
+
+
+def test_jitter_adds_random_wait(monkeypatch):
+    import ig_worker.app as app_mod
+
+    monkeypatch.setattr(app_mod.random, "uniform", lambda a, b: 0.25)
+    c = client(lambda u: PROFILE, interval=0.0, jitter=1.0)
+    h = {"x-worker-secret": SECRET}
+    start = time.monotonic()
+    c.get("/profile/acme", headers=h)
+    c.get("/profile/acme", headers=h)
+    assert time.monotonic() - start >= 0.25

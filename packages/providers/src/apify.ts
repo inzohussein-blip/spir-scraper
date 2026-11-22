@@ -43,6 +43,14 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 const pick = (o: Item, ...keys: string[]) =>
   keys.map((k) => o[k]).find((v) => v !== undefined && v !== null);
 
+function recentPosts(v: unknown): { likes: number | null; comments: number | null }[] | null {
+  if (!Array.isArray(v)) return null;
+  return (v as Item[]).slice(0, 12).map((p) => ({
+    likes: num(pick(p, "likesCount", "likes_count", "likes")),
+    comments: num(pick(p, "commentsCount", "comments_count", "comments")),
+  }));
+}
+
 /** Maps an Apify profile item onto RawProfile, accepting the field names actors use. */
 export function mapApifyProfile(o: Item): RawProfile {
   const username = str(pick(o, "username", "userName"));
@@ -70,6 +78,9 @@ export function mapApifyProfile(o: Item): RawProfile {
       ),
     ),
     businessPhoneCountryCode: str(pick(o, "publicPhoneCountryCode", "public_phone_country_code")),
+    businessWhatsapp: str(pick(o, "whatsappNumber", "whatsapp_number", "businessWhatsappNumber")),
+    city: str(pick(o, "cityName", "city_name", "city")),
+    recentPosts: recentPosts(pick(o, "latestPosts", "latest_posts")),
   };
 }
 

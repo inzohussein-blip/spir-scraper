@@ -1,4 +1,10 @@
-import { checkProviders, createKey, revokeKey, sendTestNotification } from "@/app/actions";
+import {
+  checkProviders,
+  connectTelegramCommands,
+  createKey,
+  revokeKey,
+  sendTestNotification,
+} from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Card, Dot, Field, fmtDate, Input } from "@/components/ui";
 import { twoFactorEnabled } from "@/lib/auth";
@@ -18,7 +24,14 @@ const LABELS: Record<keyof ReturnType<typeof integrationStatus>, [string, string
 
 export default async function Settings() {
   const rt = await getRuntime();
-  const [keys, twoFa] = await Promise.all([rt.scrapers.listApiKeys(), twoFactorEnabled()]);
+  const [keys, twoFa, health] = await Promise.all([
+    rt.scrapers.listApiKeys(),
+    twoFactorEnabled(),
+    rt.scrapers.systemHealth(),
+  ]);
+  const FREE_DB = 500 * 1024 * 1024;
+  const dbPct = Math.round((health.dbBytes / FREE_DB) * 100);
+  const resting = Object.entries(health.providers).filter(([, s]) => s.until > Date.now());
   const status = integrationStatus();
   const origin = appOrigin();
 
@@ -69,6 +82,14 @@ export default async function Settings() {
               <ActionForm action={sendTestNotification} submit="أرسل إشعار تجربة">
                 <span />
               </ActionForm>
+              <div className="mt-3">
+                <ActionForm
+                  action={connectTelegramCommands}
+                  submit="فعّل أوامر البوت (/run /status /top)"
+                >
+                  <span />
+                </ActionForm>
+              </div>
             </div>
           )}
         </Card>
@@ -83,6 +104,39 @@ export default async function Settings() {
           </ActionForm>
         </Card>
       </div>
+
+      <Card
+        title="صحة النظام"
+        icon="activity"
+        description="فكرة من لوحة بوت Spir: حالة الخادم والمصادر في مكان واحد."
+      >
+        <ul className="grid gap-3 text-sm sm:grid-cols-2">
+          <li className="flex items-center justify-between gap-3">
+            <span>آخر تشغيل للمهام الخلفية (cron)</span>
+            <Badge tone={health.lastCron ? "ok" : "warn"}>
+              {health.lastCron ? fmtDate(health.lastCron) : "لم يعمل بعد"}
+            </Badge>
+          </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>المصادر المتوقفة مؤقتاً</span>
+            <Badge tone={resting.length ? "warn" : "ok"}>
+              {resting.length ? resting.map(([id]) => id).join("، ") : "لا شيء"}
+            </Badge>
+          </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>حجم قاعدة البيانات (من 500MB المجانية)</span>
+            <Badge tone={dbPct > 80 ? "bad" : dbPct > 60 ? "warn" : "ok"}>
+              {(health.dbBytes / 1024 / 1024).toFixed(1)}MB · {dbPct}%
+            </Badge>
+          </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>العملاء · الملفات · المهام</span>
+            <span className="tabular-nums text-fg-2">
+              {health.leads} · {health.profiles} · {health.jobs}
+            </span>
+          </li>
+        </ul>
+      </Card>
 
       <Card title="مفاتيح API" icon="key">
         <div className="space-y-5">
