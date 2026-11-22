@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>مساعد Scrapers</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="top">
+      <strong>مساعد Scrapers</strong>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="manual" aria-selected="true">يدوي</button>
+        <button type="button" role="tab" data-tab="auto" aria-selected="false">تلقائي</button>
+        <button type="button" role="tab" data-tab="settings" aria-selected="false" title="الإعدادات">⚙</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="setup" class="notice warn" hidden>
+        أكمل الإعدادات أولاً: مزوّد الذكاء الاصطناعي ومفتاحه، ثم ربط المنصة.
+      </div>
+
+      <section data-panel="manual">
+        <div class="card">
+          <h2>الحساب المفتوح</h2>
+          <p class="hint">افتح أي حساب على إنستقرام ثم اضغط «اقرأ».</p>
+          <div class="row">
+            <button type="button" id="readProfile" class="primary">اقرأ هذا الحساب</button>
+            <button type="button" id="saveProfile" disabled>احفظ في المنصة</button>
+          </div>
+          <div id="profileOut" class="out" hidden></div>
+        </div>
+
+        <div class="card">
+          <h2>التقاط قائمة المتابعين</h2>
+          <p class="hint">
+            افتح قائمة المتابعين (أو المعجبين) بنفسك، اضغط «ابدأ الالتقاط»، ثم مرّر القائمة بيدك.
+            تُحفظ الأسماء الظاهرة كلما مررت.
+          </p>
+          <div class="row">
+            <button type="button" id="collectStart" class="primary">ابدأ الالتقاط</button>
+            <button type="button" id="collectClear">مسح</button>
+          </div>
+          <p class="count"><span id="collectCount">0</span> اسماً</p>
+          <div class="row">
+            <button type="button" id="collectSave" disabled>أرسل للمنصة</button>
+            <button type="button" id="collectCopy" disabled>نسخ</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>اسأل الذكاء الاصطناعي عن الصفحة</h2>
+          <p class="hint">يقرأ الصفحة فقط، ولا يضغط ولا يكتب.</p>
+          <div id="askLog" class="log"></div>
+          <form id="askForm" class="row">
+            <input id="askInput" placeholder="مثال: هل هذا الحساب عميل محتمل لوكالة تداول؟" />
+            <button type="submit" class="primary">اسأل</button>
+          </form>
+        </div>
+      </section>
+
+      <section data-panel="auto" hidden>
+        <div class="notice">
+          الوكيل يتصفح ويضغط بنفسه، خطوة كل بضع ثوانٍ، وفقط في المواقع المسموحة. إنستقرام يقيّد
+          التصفح الآلي: الاستخدام الكثيف قد يؤدي لتقييد الحساب. يمكنك الإيقاف في أي لحظة.
+        </div>
+        <div class="card">
+          <h2>المهمة</h2>
+          <textarea id="task" rows="3" placeholder="مثال: افتح قائمة متابعي هذا الحساب، اجمع 50 اسماً واحفظهم في المنصة"></textarea>
+          <div class="chips">
+            <button type="button" class="chip" data-task="اقرأ الحساب المفتوح، وقيّمه كعميل محتمل، واحفظه في المنصة إن كان مناسباً.">تقييم الحساب وحفظه</button>
+            <button type="button" class="chip" data-task="افتح قائمة متابعي الحساب المفتوح، مرّرها حتى تجمع 50 اسماً، ثم احفظهم في المنصة.">جمع 50 متابعاً</button>
+            <button type="button" class="chip" data-task="افتح آخر منشور للحساب المفتوح واجمع أسماء من علّقوا عليه، ثم احفظهم في المنصة.">المعلّقون على آخر منشور</button>
+          </div>
+          <div class="row">
+            <button type="button" id="runTask" class="primary">ابدأ</button>
+            <button type="button" id="stopTask" class="danger" disabled>إيقاف</button>
+          </div>
+        </div>
+        <div id="autoLog" class="log tall"></div>
+      </section>
+
+      <section data-panel="settings" hidden>
+        <form id="settingsForm">
+          <div class="card">
+            <h2>الذكاء الاصطناعي</h2>
+            <label>المزوّد
+              <select name="provider">
+                <option value="anthropic">Claude (Anthropic)</option>
+                <option value="openai">OpenAI أو متوافق (OpenRouter، Groq، DeepSeek، Ollama…)</option>
+                <option value="gemini">Google Gemini</option>
+              </select>
+            </label>
+            <label data-for="openai">الخادم
+              <select name="preset"></select>
+            </label>
+            <label data-for="openai">رابط الخادم
+              <input name="baseUrl" dir="ltr" placeholder="https://api.openai.com/v1" />
+            </label>
+            <label>النموذج
+              <input name="model" dir="ltr" list="models" required />
+              <datalist id="models"></datalist>
+            </label>
+            <label>المفتاح (API key)
+              <input name="apiKey" type="password" dir="ltr" autocomplete="off" />
+            </label>
+            <p class="hint">يُحفظ المفتاح على هذا الجهاز فقط ولا يُرسل إلا لمزوّد الذكاء الاصطناعي.</p>
+            <label class="check"><input type="checkbox" name="vision" /> إرسال لقطات الشاشة (النموذج يدعم الصور)</label>
+            <label data-for="anthropic">مستوى التفكير
+              <select name="effort">
+                <option value="low">منخفض (أسرع وأرخص)</option>
+                <option value="medium">متوسط</option>
+                <option value="high">عالٍ</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="card">
+            <h2>المنصة</h2>
+            <label>رابط المنصة
+              <input name="platformUrl" dir="ltr" placeholder="https://spir-scraper.vercel.app" />
+            </label>
+            <label>مفتاح API للمنصة
+              <input name="platformKey" type="password" dir="ltr" autocomplete="off" placeholder="sk_..." />
+            </label>
+            <p class="hint">من اللوحة: الإعدادات ← مفاتيح API ← مفتاح بصلاحية قراءة وكتابة.</p>
+            <div class="row">
+              <button type="button" id="loadProjects">تحميل المشاريع</button>
+            </div>
+            <label>المشروع الذي تُحفظ فيه الأسماء
+              <select name="projectId"><option value="">—</option></select>
+            </label>
+          </div>
+
+          <div class="card">
+            <h2>الأمان والسرعة</h2>
+            <label>المواقع المسموحة للوكيل (سطر لكل موقع)
+              <textarea name="allowedSites" rows="3" dir="ltr"></textarea>
+            </label>
+            <label>ثوانٍ بين كل خطوة في الوضع التلقائي
+              <input name="paceSeconds" type="number" min="1" max="60" />
+            </label>
+            <label>أقصى عدد خطوات للمهمة الواحدة
+              <input name="maxSteps" type="number" min="1" max="200" />
+            </label>
+            <label>حد الخطوات اليومي على إنستقرام
+              <input name="dailyInstagramActions" type="number" min="1" max="5000" />
+            </label>
+          </div>
+          <div class="row sticky">
+            <button type="submit" class="primary">حفظ</button>
+            <span id="saved" class="hint" hidden>حُفظت ✓</span>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>

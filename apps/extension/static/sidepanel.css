@@ -1,0 +1,227 @@
+:root {
+  --bg: #f7f7f8;
+  --card: #ffffff;
+  --text: #16181d;
+  --muted: #6b7180;
+  --line: #e3e5ea;
+  --accent: #2f6fed;
+  --accent-text: #ffffff;
+  --danger: #d23b3b;
+  --warn-bg: #fff6e0;
+  --warn-text: #7a5200;
+  --bubble: #eef3ff;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171c;
+    --card: #1e2128;
+    --text: #e8eaf0;
+    --muted: #9aa1b2;
+    --line: #2e323c;
+    --accent: #5b8cff;
+    --warn-bg: #3a2f12;
+    --warn-text: #f3d48a;
+    --bubble: #232b3d;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    14px / 1.6 system-ui,
+    "Segoe UI",
+    Tahoma,
+    sans-serif;
+}
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+input,
+select,
+textarea {
+  font: inherit;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+.tabs button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+main {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+section {
+  display: grid;
+  gap: 12px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.row input {
+  flex: 1;
+  min-width: 0;
+}
+label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+label.check input {
+  width: auto;
+}
+.notice {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bubble);
+  font-size: 13px;
+}
+.notice.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.count {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+.out {
+  white-space: pre-wrap;
+  font-size: 13px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg);
+}
+.log {
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.log.tall {
+  max-height: none;
+}
+.msg {
+  white-space: pre-wrap;
+  padding: 6px 9px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.msg.user {
+  background: var(--accent);
+  color: var(--accent-text);
+  justify-self: start;
+}
+.msg.ai {
+  background: var(--bubble);
+}
+.msg.tool {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 6px;
+  direction: ltr;
+  text-align: right;
+}
+.msg.err {
+  color: var(--danger);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.sticky {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 8px 0;
+}
+/* Last, so it wins over the layout rules above (same specificity). */
+[hidden] {
+  display: none;
+}

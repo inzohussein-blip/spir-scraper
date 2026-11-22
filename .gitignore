@@ -12,3 +12,4 @@ __pycache__/
 .next/
 .vercel/
 *.tsbuildinfo
+apps/extension/*.zip

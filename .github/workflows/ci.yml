@@ -122,3 +122,28 @@ jobs:
           BASE_URL: http://localhost:3100
       - if: failure()
         run: tail -n 100 /tmp/next.log /tmp/worker.log
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @scrapers/extension exec playwright install --with-deps chromium
+      - name: Extension end to end (real Chromium, local pages, scripted model)
+        run: pnpm --filter @scrapers/extension e2e
+      - name: Package the extension
+        run: |
+          pnpm --filter @scrapers/extension build
+          cd apps/extension/dist && zip -qr ../spir-extension.zip .
+      # Download from the run page (Actions → this run → Artifacts), unzip, then
+      # chrome://extensions → Developer mode → Load unpacked. See docs/EXTENSION.md.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spir-extension
+          path: apps/extension/spir-extension.zip
+          retention-days: 90

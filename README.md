@@ -3,6 +3,7 @@
 منصة لجمع العملاء المحتملين من البيانات العامة على إنستقرام. تتكون من نواة واحدة، وتعمل من الطرفية (CLI) أو عبر REST API أو خادم MCP لـ Claude أو لوحة ويب، وتصدّر النتائج إلى Google Sheets أو CSV أو XLSX.
 
 - **النشر على Vercel وربط Claude:** [docs/DEPLOY-VERCEL.md](docs/DEPLOY-VERCEL.md)
+- **إضافة المتصفح (مساعد بالذكاء الاصطناعي):** [docs/EXTENSION.md](docs/EXTENSION.md)
 - **سجل العمل (المراجعة والإصلاحات والنشر):** [docs/WORKLOG.md](docs/WORKLOG.md)
 - الخطة المتكاملة: [docs/PLAN.md](docs/PLAN.md) (القسم 14-ب: الأفكار المأخوذة من بوت Spir)
 - المراجع مفتوحة المصدر: [docs/references.md](docs/references.md)
@@ -70,6 +71,7 @@ cd services/ig-worker && uv run pytest && uv run ruff check .   # Python
 ```
 apps/web/              # Next.js: اللوحة + /api/v1 + /api/mcp + OAuth (Vercel)
 apps/cli/              # أمر scrapers (يشمل خادم MCP المحلي)
+apps/extension/        # إضافة Chrome: لوحة جانبية بذكاء اصطناعي (Claude/OpenAI/Gemini/محلي)
 packages/core/         # المهام والاستخراج والموجّه والإيقاف
 packages/providers/    # worker (Instaloader) و Apify
 packages/exporters/    # CSV و XLSX و Google Sheets
