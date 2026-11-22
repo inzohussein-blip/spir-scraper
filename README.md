@@ -3,6 +3,7 @@
 منصة لجمع العملاء المحتملين من البيانات العامة على إنستقرام. تتكون من نواة واحدة، وتعمل من الطرفية (CLI) أو عبر REST API أو خادم MCP لـ Claude أو لوحة ويب، وتصدّر النتائج إلى Google Sheets أو CSV أو XLSX.
 
 - **النشر على Vercel وربط Claude:** [docs/DEPLOY-VERCEL.md](docs/DEPLOY-VERCEL.md)
+- **سجل العمل (المراجعة والإصلاحات والنشر):** [docs/WORKLOG.md](docs/WORKLOG.md)
 - الخطة المتكاملة: [docs/PLAN.md](docs/PLAN.md) (القسم 14-ب: الأفكار المأخوذة من بوت Spir)
 - المراجع مفتوحة المصدر: [docs/references.md](docs/references.md)
 - ملاحظات المتطلبات: [docs/PROJECT_NOTES.md](docs/PROJECT_NOTES.md)
