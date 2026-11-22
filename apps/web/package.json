@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "node e2e/dashboard.e2e.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
@@ -27,6 +28,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "4.3.5",
-    "vitest": "5.1.1"
+    "vitest": "5.1.1",
+    "playwright": "1.65.1"
   }
 }

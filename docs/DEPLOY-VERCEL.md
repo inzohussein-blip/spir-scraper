@@ -41,6 +41,10 @@
 | `DASHBOARD_PASSWORD` | ✅ | كلمة مرور اللوحة، 12 حرفاً على الأقل |
 | `CRON_SECRET` | ✅ | `openssl rand -hex 32`، و Vercel يرسله تلقائياً مع مهام cron |
 | `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHAT_ID` | مستحسن | الإشعارات على تلكرام، وكود الدخول بخطوتين |
+| `VAPID_PUBLIC_KEY` و `VAPID_PRIVATE_KEY` | اختياري | إشعارات المتصفح والموبايل. تُولَّد بـ `pnpm scrapers push-keys` |
+| `PROFILE_CACHE_DAYS` | | إعادة استخدام الملف المجلوب خلال هذه الأيام (افتراضياً 7). يوفّر رصيد Apify |
+| `WEEKLY_SUMMARY_DAY` و `TIME_ZONE` | | يوم الملخص الأسبوعي (5 = الجمعة) والمنطقة الزمنية (افتراضياً Asia/Baghdad) |
+| `MCP_RATE_PER_MINUTE` | | حد طلبات MCP في الدقيقة (افتراضياً 120) |
 | `TWO_FACTOR` | | `off` لإطفاء كود الدخول عند الطوارئ |
 | `CANARY_USERNAME` | | حساب عام يُفحص به كل مصدر يومياً (افتراضياً `instagram`) |
 | `OWNER_EMAIL` | مستحسن | إيميلك، وتُشارَك معه الشيتات الجديدة |
@@ -84,3 +88,18 @@ claude mcp add --transport http scrapers https://<موقعك>/api/mcp --header "
 - إن بقي عمل، يستدعي التطبيق نفسه على `/api/jobs/drain` بـ `CRON_SECRET` ليكمل في استدعاء جديد.
 - صفحة المهمة المفتوحة، وكل طلب MCP، يدفعان المعالجة أيضاً.
 - مهمة cron يومية (`/api/cron`) تنظّف العملاء المنتهية مدتهم، وتجمع نتائج تقييم الدفعات، وتكمل أي مهمة عالقة.
+
+## أوامر تلكرام
+
+بعد ضبط `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHAT_ID` و `APP_URL` (رابط https)، اضغط **«فعّل أوامر البوت»** في صفحة الإعدادات. بعدها ترسل للبوت:
+
+- `/run https://instagram.com/competitor 200`: مهمة جديدة
+- `/run @a @b @c`: حسابات محددة
+- `/status`، و `/top 10`، و `/stats`
+- `/project اسم`: يختار المشروع الذي تعمل عليه الأوامر
+
+البوت يرد على محادثتك أنت فقط، ويتجاهل أي شخص آخر.
+
+## عامل Instaloader مع بروكسي
+
+على جهازك أو أي خادم آخر: ضع `PROXY_URL` (بروكسي سكني يقلل الحظر) و `JITTER_SECONDS` (افتراضياً 2) في بيئة العامل، ثم اربطه بـ `WORKER_URL`.

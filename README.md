@@ -41,6 +41,12 @@ pnpm scrapers report <job>                       # تقرير الجمهور
 pnpm scrapers export -p <project> -f sheet       # إلى Google Sheets
 pnpm scrapers keys create n8n -s read,write      # مفتاح للـ API و MCP
 pnpm scrapers mcp                                # خادم MCP محلي (stdio) لـ Claude Desktop/Code
+pnpm scrapers leads -p <project> --status interested -q coach   # تصفية وبحث
+pnpm scrapers lead status @user contacted -p <project> --note "..."
+pnpm scrapers project set <project> --auto-export --keywords "وكيل, IB"
+pnpm scrapers monitor add @competitor -p <project> -e 7          # مراقبة منافس (الجدد فقط)
+pnpm scrapers push-keys                          # مفاتيح إشعارات المتصفح
+pnpm scrapers doctor --live                      # فحص الإعداد والمصادر
 ```
 
 ## اللوحة محلياً

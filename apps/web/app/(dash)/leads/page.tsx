@@ -7,7 +7,7 @@ import {
   updateProjectSettings,
 } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
-import { STATUS_LABELS, StatusSelect } from "@/components/status-select";
+import { StatusSelect } from "@/components/status-select";
 import {
   Badge,
   Button,
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui";
 import { integrationStatus } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
+import { STATUS_LABELS } from "@/lib/status";
 
 type Search = {
   project?: string;
@@ -224,7 +225,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     <td className="px-2 py-2.5 tabular-nums">
                       {fmtNum(r.followers)}
                       {r.engagementRate !== null && (
-                        <div className="text-xs text-muted">تفاعل {r.engagementRate}%</div>
+                        <div className="text-xs text-muted">
+                          تفاعل {r.engagementRate.toFixed(1)}%
+                        </div>
                       )}
                     </td>
                     <td className="ltr px-2 py-2.5">{r.email ?? "—"}</td>

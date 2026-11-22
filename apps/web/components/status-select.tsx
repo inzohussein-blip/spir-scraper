@@ -2,15 +2,8 @@
 
 import { useTransition } from "react";
 import { setLeadStatus } from "@/app/actions";
+import { STATUS_LABELS } from "@/lib/status";
 import { cx } from "./ui";
-
-export const STATUS_LABELS: Record<string, string> = {
-  new: "جديد",
-  contacted: "تواصلت",
-  interested: "مهتم",
-  customer: "عميل",
-  rejected: "مرفوض",
-};
 
 const TONE: Record<string, string> = {
   new: "bg-bg-2 text-fg-2",
