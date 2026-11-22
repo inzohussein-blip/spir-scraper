@@ -25,6 +25,8 @@
 
 التطبيق يستخدم `DATABASE_URL_UNPOOLED` للطابور والجداول تلقائياً إن لم تضع `DIRECT_DATABASE_URL`، فلا تنسخ شيئاً يدوياً.
 
+إن وضعت **Custom Prefix** عند الربط، تصبح الأسماء مثل `NEON_DATABASE_URL`. التطبيق يقرأ البادئتين `NEON_` و `STORAGE_` تلقائياً. لأي بادئة أخرى أضف `DATABASE_ENV_PREFIX` بقيمتها، مثلاً `MYDB`.
+
 **أو يدوياً:** أنشئ مشروعاً على neon.tech، ومن **Connect** خذ:
 - الرابط مع **Connection pooling** مفعّلاً ← `DATABASE_URL`
 - الرابط مع **Connection pooling** مطفأً ← `DIRECT_DATABASE_URL`
@@ -32,7 +34,7 @@
 ملاحظات:
 - Neon يطفئ قاعدة البيانات بعد فترة خمول ويوقظها مع أول طلب، فقد يتأخر أول طلب بعد الخمول قليلاً. هذا طبيعي.
 - راجع حدود الخطة المجانية الحالية في صفحة أسعار Neon. ضع حد التخزين في `DB_SIZE_LIMIT_MB` ليُحسب شريط حجم قاعدة البيانات في صفحة الإعدادات صحيحاً.
-- طبّق الجداول مرة واحدة من جهازك بالرابط المباشر:
+- **الجداول تُنشأ تلقائياً:** كل بناء إنتاج على Vercel يطبّق الـ migrations قبل البناء (`migrate --if-configured` في `apps/web/vercel.json`)، ويتخطاها إن لم تكن قاعدة البيانات مربوطة بعد. لا تحتاج تشغيل أي شيء من جهازك. لتطبيقها يدوياً من جهازك إن أردت:
   ```bash
   DIRECT_DATABASE_URL="postgres://...neon.tech/neondb?sslmode=require" pnpm db:migrate
   ```
