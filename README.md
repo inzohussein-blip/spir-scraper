@@ -18,7 +18,7 @@ docker compose up -d              # Postgres + عامل Instaloader
 pnpm db:migrate
 ```
 
-لاستخدام Supabase بدل Postgres المحلي، ضع رابطَي الاتصال في `DATABASE_URL` و `DIRECT_DATABASE_URL`. الطابور (pg-boss) يستخدم `DIRECT_DATABASE_URL`، لأنه يحتاج اتصالاً مباشراً لا يمر عبر الـ pooler.
+لاستخدام Neon أو Supabase بدل Postgres المحلي، ضع رابطَي الاتصال في `DATABASE_URL` و `DIRECT_DATABASE_URL` (مع Neon على Vercel يكفي التكامل، فهو يضع `DATABASE_URL_UNPOOLED` ويقرؤه التطبيق تلقائياً). الطابور (pg-boss) يستخدم `DIRECT_DATABASE_URL`، لأنه يحتاج اتصالاً مباشراً لا يمر عبر الـ pooler.
 
 ## الاستخدام من الطرفية
 

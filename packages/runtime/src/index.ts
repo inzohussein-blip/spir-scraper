@@ -10,7 +10,7 @@ import {
   type Scorer,
   type Scrapers,
 } from "@scrapers/core";
-import { type AnyDb, createDb } from "@scrapers/db";
+import { type AnyDb, createDb, databaseUrl, directDatabaseUrl } from "@scrapers/db";
 import {
   exportToSheet,
   type GoogleRequest,
@@ -89,8 +89,9 @@ export async function createRuntime(
   let ownDb: ReturnType<typeof createDb> | undefined;
   let db = o.db;
   if (!db) {
-    if (!env.DATABASE_URL) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
-    ownDb = createDb(env.DATABASE_URL, o.serverless ? { max: 3 } : {});
+    const url = databaseUrl(env);
+    if (!url) throw new Error("DATABASE_URL is not set (copy .env.example to .env)");
+    ownDb = createDb(url, o.serverless ? { max: 3 } : {});
     db = ownDb;
   }
 
@@ -99,7 +100,7 @@ export async function createRuntime(
   if (!boss) {
     // pg-boss needs a session connection: Supabase's session pooler or direct URL, not the transaction pooler.
     boss = new PgBoss({
-      connectionString: env.DIRECT_DATABASE_URL ?? env.DATABASE_URL ?? "",
+      connectionString: directDatabaseUrl(env) ?? "",
       ...(o.serverless ? { supervise: false, schedule: false, max: 3 } : {}),
     });
     boss.on("error", (err) => console.error("[pg-boss]", err.message));

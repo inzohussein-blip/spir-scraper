@@ -29,8 +29,9 @@ export default async function Settings() {
     twoFactorEnabled(),
     rt.scrapers.systemHealth(),
   ]);
-  const FREE_DB = 500 * 1024 * 1024;
-  const dbPct = Math.round((health.dbBytes / FREE_DB) * 100);
+  // Storage limit of the database plan, for the health bar (Supabase free: 500MB, Neon free: per project).
+  const dbLimitMb = Number(process.env.DB_SIZE_LIMIT_MB) || 500;
+  const dbPct = Math.round((health.dbBytes / (dbLimitMb * 1024 * 1024)) * 100);
   const resting = Object.entries(health.providers).filter(([, s]) => s.until > Date.now());
   const status = integrationStatus();
   const origin = appOrigin();
@@ -124,7 +125,7 @@ export default async function Settings() {
             </Badge>
           </li>
           <li className="flex items-center justify-between gap-3">
-            <span>حجم قاعدة البيانات (من 500MB المجانية)</span>
+            <span>حجم قاعدة البيانات (من {dbLimitMb}MB)</span>
             <Badge tone={dbPct > 80 ? "bad" : dbPct > 60 ? "warn" : "ok"}>
               {(health.dbBytes / 1024 / 1024).toFixed(1)}MB · {dbPct}%
             </Badge>

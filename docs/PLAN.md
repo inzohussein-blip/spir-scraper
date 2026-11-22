@@ -451,8 +451,8 @@ const LeadScore = z.object({
 ## 11. الأمن والإعدادات
 
 ```env
-DATABASE_URL=                 # Supabase (pooler)
-DIRECT_DATABASE_URL=          # للـ migrations
+DATABASE_URL=                 # Neon أو Supabase (pooler)
+DIRECT_DATABASE_URL=          # للطابور والـ migrations (أو DATABASE_URL_UNPOOLED من Neon)
 SUPPRESSION_PEPPER=           # سر لتجزئة قائمة الإيقاف
 APIFY_TOKEN=
 APIFY_MONTHLY_CAP_USD=0       # 0 = الرصيد المجاني فقط

@@ -497,7 +497,7 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
         io.log(
           `${ok === null ? pc.dim("–") : ok ? pc.green("✓") : pc.red("✗")} ${label}${detail ? pc.dim(`  ${detail}`) : ""}`,
         );
-      line(!!env.DATABASE_URL, "DATABASE_URL");
+      line(!!(env.DATABASE_URL || env.POSTGRES_URL), "DATABASE_URL");
       line(!!env.SUPPRESSION_PEPPER, "SUPPRESSION_PEPPER");
       line(
         !!(env.WORKER_URL || env.APIFY_TOKEN || env.IG_GRAPH_TOKEN),
