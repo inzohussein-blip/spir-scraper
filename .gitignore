@@ -13,3 +13,5 @@ __pycache__/
 .vercel/
 *.tsbuildinfo
 apps/extension/*.zip
+# Built by the Vercel build for the dashboard's extension page.
+apps/web/public/downloads/

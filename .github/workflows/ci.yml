@@ -110,6 +110,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @scrapers/web exec playwright install --with-deps chromium
       - run: pnpm db:migrate
+      # As on Vercel: the extension zip is served by the dashboard's extension page.
+      - run: pnpm --filter @scrapers/extension build --zip ../web/public/downloads/spir-extension.zip
       - run: pnpm build
       - name: Start the fake worker and the dashboard
         run: |
