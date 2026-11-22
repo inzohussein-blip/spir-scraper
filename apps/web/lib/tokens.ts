@@ -59,3 +59,13 @@ export function isAllowedRedirect(uri: string): boolean {
     return false;
   }
 }
+
+/** Same-site paths only: "//host" and "/\host" are read by browsers as other sites. */
+export function safeNext(next: string): string {
+  const unsafe =
+    !next.startsWith("/") ||
+    next[1] === "/" ||
+    next.includes("\\") ||
+    [...next].some((ch) => ch.charCodeAt(0) < 0x20);
+  return unsafe ? "/" : next;
+}

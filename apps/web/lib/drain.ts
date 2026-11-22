@@ -2,6 +2,7 @@ import "server-only";
 import { after } from "next/server";
 import { appOrigin } from "./env";
 import { getRuntime } from "./runtime";
+import { safeEqual } from "./tokens";
 
 /** Seconds a drain may run inside one function call (keep under the route's maxDuration). */
 const BUDGET_MS = Number(process.env.DRAIN_BUDGET_SECONDS ?? 240) * 1000;
@@ -42,5 +43,5 @@ async function chain(origin: string) {
 
 export function isCronRequest(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  return !!secret && req.headers.get("authorization") === `Bearer ${secret}`;
+  return !!secret && safeEqual(req.headers.get("authorization") ?? "", `Bearer ${secret}`);
 }

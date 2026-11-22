@@ -5,7 +5,7 @@ import { getRuntime } from "./runtime";
 /** Client IP as seen by Vercel's proxy (first x-forwarded-for entry). */
 export async function clientIp(): Promise<string | null> {
   const h = await headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
+  return h.get("x-real-ip") || h.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
 }
 
 /** Records a dashboard action in the activity log; never fails the action itself. */

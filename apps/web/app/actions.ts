@@ -25,6 +25,7 @@ import { scheduleDrain } from "@/lib/drain";
 import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 import { telegramWebhookSecret } from "@/lib/telegram";
+import { safeNext } from "@/lib/tokens";
 
 export type ActionState = {
   error?: string;
@@ -40,8 +41,6 @@ const str = (f: FormData, k: string) => {
 const fail = (err: unknown): ActionState => ({
   error: err instanceof SourceError ? err.message : (err as Error).message || "حدث خطأ",
 });
-
-const safeNext = (next: string) => (next.startsWith("/") && !next.startsWith("//") ? next : "/");
 
 /** Refuses when too many wrong tries happened recently (per IP and in total). */
 async function lockedOut(): Promise<boolean> {

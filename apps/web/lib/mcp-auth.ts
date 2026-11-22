@@ -15,8 +15,10 @@ export async function authorizeMcp(
     const key = await rt.scrapers.verifyApiKey(token);
     if (key) who = { id: `key:${key.id}`, scopes: key.scopes };
   } else if (token) {
-    const access = await verify<{ cid?: string }>(authSecret(), "access", token);
-    if (access) who = { id: `oauth:${access.cid ?? "client"}`, scopes: ["read", "write"] };
+    const access = await verify<{ cid?: string; aud?: string }>(authSecret(), "access", token);
+    // Tokens are issued for this deployment's MCP endpoint only.
+    if (access && access.aud === `${appOrigin(req)}/api/mcp`)
+      who = { id: `oauth:${access.cid ?? "client"}`, scopes: ["read", "write"] };
   }
   if (who) {
     const limit = Number(process.env.MCP_RATE_PER_MINUTE ?? 120);

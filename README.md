@@ -9,7 +9,7 @@
 
 ## التشغيل المحلي
 
-المتطلبات: Node.js 22.12 أو أحدث (يُفضّل 24)، و pnpm 10، و Docker.
+المتطلبات: Node.js 22.12 أو أحدث (يُفضّل 24)، و pnpm 12، و Docker.
 
 ```bash
 pnpm install && pnpm build
