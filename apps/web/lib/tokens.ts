@@ -69,3 +69,18 @@ export function safeNext(next: string): string {
     [...next].some((ch) => ch.charCodeAt(0) < 0x20);
   return unsafe ? "/" : next;
 }
+
+/** Shortest dashboard password accepted; logins are also locked after repeated wrong tries. */
+export const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * What is wrong with the DASHBOARD_PASSWORD setting, in Arabic for the login
+ * page, or null when it is usable. The owner sees this instead of a server error.
+ */
+export function dashboardPasswordProblem(value: string | undefined): string | null {
+  if (!value)
+    return "كلمة مرور اللوحة غير مضبوطة. أضف DASHBOARD_PASSWORD في Vercel ثم أعد النشر (Redeploy).";
+  if (value.length < MIN_PASSWORD_LENGTH)
+    return `كلمة مرور اللوحة في Vercel أقصر من ${MIN_PASSWORD_LENGTH} أحرف. عدّل DASHBOARD_PASSWORD ثم أعد النشر (Redeploy).`;
+  return null;
+}

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedRedirect, pkceChallenge, safeEqual, safeNext, sign, verify } from "../lib/tokens";
+import {
+  dashboardPasswordProblem,
+  isAllowedRedirect,
+  MIN_PASSWORD_LENGTH,
+  pkceChallenge,
+  safeEqual,
+  safeNext,
+  sign,
+  verify,
+} from "../lib/tokens";
 
 const secret = new TextEncoder().encode("x".repeat(40));
 const other = new TextEncoder().encode("y".repeat(40));
@@ -60,5 +69,19 @@ describe("safeNext", () => {
     ]) {
       expect(safeNext(bad)).toBe("/");
     }
+  });
+});
+
+describe("dashboardPasswordProblem", () => {
+  it("accepts 8 characters or more", () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(8);
+    expect(dashboardPasswordProblem("12345678")).toBeNull();
+    expect(dashboardPasswordProblem("a-much-longer-password")).toBeNull();
+  });
+
+  it("explains in Arabic when the setting is missing or too short", () => {
+    expect(dashboardPasswordProblem(undefined)).toMatch(/غير مضبوطة/);
+    expect(dashboardPasswordProblem("")).toMatch(/غير مضبوطة/);
+    expect(dashboardPasswordProblem("1234567")).toMatch(/أقصر من 8/);
   });
 });
