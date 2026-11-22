@@ -1,0 +1,36 @@
+{
+  "name": "@scrapers/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@scrapers/ai": "workspace:*",
+    "@scrapers/core": "workspace:*",
+    "@scrapers/db": "workspace:*",
+    "@scrapers/exporters": "workspace:*",
+    "@scrapers/providers": "workspace:*",
+    "pg-boss": "12.39.0",
+    "@electric-sql/pglite": "0.5.17",
+    "drizzle-orm": "0.45.4",
+    "web-push": "4.0.0"
+  },
+  "devDependencies": {
+    "vitest": "5.1.1",
+    "exceljs": "4.4.0"
+  }
+}

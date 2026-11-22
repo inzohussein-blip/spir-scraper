@@ -1,0 +1,295 @@
+import { sql } from "drizzle-orm";
+import {
+  boolean,
+  char,
+  check,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgEnum,
+  pgTable,
+  smallint,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from "drizzle-orm/pg-core";
+
+const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
+
+export const sourceType = pgEnum("source_type", ["profile", "post", "hashtag", "upload"]);
+export const jobStatus = pgEnum("job_status", ["queued", "running", "done", "failed", "cancelled"]);
+export const contactSource = pgEnum("contact_source", ["business_button", "bio", "link"]);
+export const providerId = pgEnum("provider_id", ["graph", "apify", "worker", "upload"]);
+/** Where the owner is with each lead (idea from the Spir bot's review page). */
+export const leadStatus = pgEnum("lead_status", [
+  "new",
+  "contacted",
+  "interested",
+  "customer",
+  "rejected",
+]);
+
+export const projects = pgTable("projects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  owner: text("owner").notNull(),
+  /** Existing Google Sheet to append to (optional). */
+  sheetId: text("sheet_id"),
+  /** Free-text scoring criteria for the AI layer. */
+  aiCriteria: text("ai_criteria"),
+  retentionDays: integer("retention_days").notNull().default(90),
+  /** Append every lead (with its score) to the project's sheet when a job finishes. */
+  autoExport: boolean("auto_export").notNull().default(false),
+  /** Words in a name or bio that trigger an alert, e.g. وكيل, IB, partner. */
+  watchKeywords: text("watch_keywords").array(),
+  createdAt: createdAt(),
+});
+
+export type JobCounts = {
+  discovered?: number;
+  enriched?: number;
+  leads?: number;
+  /** Suppressed, private or missing accounts. */
+  skipped?: number;
+  failed?: number;
+  /** AI audience report (markdown). */
+  report?: string;
+  /** Pending Anthropic Message Batch for AI scoring. */
+  aiBatchId?: string;
+  aiCriteria?: string;
+  scored?: number;
+};
+
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sourceType: sourceType("source_type").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    limit: integer("limit").notNull(),
+    /** Provider actually used for discovery. */
+    provider: providerId("provider"),
+    status: jobStatus("status").notNull().default("queued"),
+    counts: jsonb("counts").$type<JobCounts>().notNull().default({}),
+    costUsd: numeric("cost_usd", { precision: 10, scale: 4 }).notNull().default("0"),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /** Skip accounts already in the project (used by monitors). */
+    onlyNew: boolean("only_new").notNull().default(false),
+    monitorId: uuid("monitor_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("jobs_limit_range", sql`${t.limit} between 1 and 5000`),
+    index("jobs_project_created_idx").on(t.projectId, t.createdAt.desc()),
+  ],
+);
+
+export const profiles = pgTable("profiles", {
+  igUserId: text("ig_user_id").primaryKey(),
+  username: text("username").notNull().unique(),
+  fullName: text("full_name"),
+  bio: text("bio"),
+  followers: integer("followers"),
+  following: integer("following"),
+  posts: integer("posts"),
+  isBusiness: boolean("is_business").notNull().default(false),
+  isVerified: boolean("is_verified").notNull().default(false),
+  category: text("category"),
+  externalUrl: text("external_url"),
+  /** Public contact-button fields, kept so a cached profile can be re-read without fetching. */
+  businessEmail: text("business_email"),
+  businessPhone: text("business_phone"),
+  businessPhoneCountryCode: text("business_phone_country_code"),
+  businessWhatsapp: text("business_whatsapp"),
+  city: text("city"),
+  /** Average (likes + comments) / followers over recent posts, in percent. */
+  engagementRate: numeric("engagement_rate", { precision: 7, scale: 3 }),
+  /** Heuristic warnings such as low_engagement or follow_farming. */
+  qualityFlags: text("quality_flags").array(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  fetchedBy: providerId("fetched_by").notNull(),
+});
+
+export const leads = pgTable(
+  "leads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.igUserId, { onDelete: "cascade" }),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    email: text("email"),
+    /** Verified number in E.164. */
+    phoneE164: text("phone_e164"),
+    /** Number as written, when its country could not be confirmed. */
+    phoneRaw: text("phone_raw"),
+    /** ISO 3166-1 alpha-2 country of the phone number. */
+    phoneCountry: char("phone_country", { length: 2 }),
+    contactSource: contactSource("contact_source"),
+    aiScore: smallint("ai_score"),
+    aiTags: text("ai_tags").array(),
+    aiReason: text("ai_reason"),
+    /** Suppression hash of the phone, so suppressing a number is an index lookup. */
+    phoneHash: text("phone_hash"),
+    status: leadStatus("status").notNull().default("new"),
+    statusNote: text("status_note"),
+    statusAt: timestamp("status_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("leads_project_profile_uq").on(t.projectId, t.profileId),
+    check("leads_ai_score_range", sql`${t.aiScore} between 0 and 100`),
+    check(
+      "leads_contact_has_source",
+      sql`(${t.email} is null and ${t.phoneE164} is null and ${t.phoneRaw} is null) or ${t.contactSource} is not null`,
+    ),
+    index("leads_project_score_idx").on(t.projectId, t.aiScore.desc()),
+    index("leads_expires_idx").on(t.expiresAt),
+    index("leads_profile_idx").on(t.profileId),
+    index("leads_phone_hash_idx").on(t.phoneHash),
+    index("leads_project_status_idx").on(t.projectId, t.status),
+  ],
+);
+
+export const suppression = pgTable(
+  "suppression",
+  {
+    /** sha256(normalize(value) + pepper) — the raw value is never stored. */
+    valueHash: text("value_hash").primaryKey(),
+    kind: text("kind").notNull(),
+    reason: text("reason"),
+    createdAt: createdAt(),
+  },
+  (t) => [check("suppression_kind", sql`${t.kind} in ('username', 'email', 'phone')`)],
+);
+
+export const apiKeys = pgTable("api_keys", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  scopes: text("scopes").array().notNull().default(sql`'{read}'::text[]`),
+  lastUsed: timestamp("last_used", { withTimezone: true }),
+  createdAt: createdAt(),
+});
+
+export type Project = typeof projects.$inferSelect;
+export type NewProject = typeof projects.$inferInsert;
+export type Job = typeof jobs.$inferSelect;
+export type NewJob = typeof jobs.$inferInsert;
+export type Profile = typeof profiles.$inferSelect;
+export type NewProfile = typeof profiles.$inferInsert;
+export type Lead = typeof leads.$inferSelect;
+export type NewLead = typeof leads.$inferInsert;
+export type Suppression = typeof suppression.$inferSelect;
+
+/** Who did what and from where: logins, failed logins and changes (dashboard "النشاط"). */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** owner | api:<key name> | mcp | system */
+    actor: text("actor").notNull(),
+    action: text("action").notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    ip: text("ip"),
+  },
+  (t) => [
+    index("audit_action_at_idx").on(t.action, t.at.desc()),
+    index("audit_at_idx").on(t.at.desc()),
+  ],
+);
+
+/** Bell notifications in the dashboard, also pushed to Telegram when configured. */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** job | provider | budget | ai | security | system */
+    type: text("type").notNull(),
+    /** info | ok | warn | bad */
+    level: text("level").notNull().default("info"),
+    title: text("title").notNull(),
+    body: text("body"),
+    url: text("url"),
+    /** Same key within 30 minutes is not repeated. */
+    dedupeKey: text("dedupe_key"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("notifications_at_idx").on(t.at.desc()),
+    index("notifications_key_idx").on(t.dedupeKey, t.at.desc()),
+  ],
+);
+
+export type AuditEntry = typeof auditLog.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
+
+/** Recurring jobs that watch a competitor and collect only new accounts. */
+export const monitors = pgTable(
+  "monitors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sourceType: sourceType("source_type").notNull(),
+    sourceUrl: text("source_url").notNull(),
+    limit: integer("limit").notNull().default(100),
+    everyDays: integer("every_days").notNull().default(7),
+    enabled: boolean("enabled").notNull().default(true),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("monitors_every_days", sql`${t.everyDays} between 1 and 90`),
+    check("monitors_limit_range", sql`${t.limit} between 1 and 5000`),
+  ],
+);
+
+/** Short-lived values shared by serverless instances: idempotency, used OAuth codes, provider state. */
+export const ephemeral = pgTable(
+  "ephemeral",
+  {
+    key: text("key").primaryKey(),
+    value: jsonb("value").$type<unknown>(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("ephemeral_expires_idx").on(t.expiresAt)],
+);
+
+/** Fixed-window counters, e.g. API requests per key per minute. */
+export const counters = pgTable(
+  "counters",
+  {
+    key: text("key").primaryKey(),
+    count: integer("count").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("counters_expires_idx").on(t.expiresAt)],
+);
+
+/** Browser push subscriptions for dashboard notifications. */
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  endpoint: text("endpoint").primaryKey(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  createdAt: createdAt(),
+});
+
+export type Monitor = typeof monitors.$inferSelect;
+export type LeadStatus = (typeof leadStatus.enumValues)[number];

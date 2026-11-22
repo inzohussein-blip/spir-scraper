@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      # Let both Node versions finish, so a failure on one does not hide the other.
+      fail-fast: false
+      matrix:
+        # 24 is what Vercel runs today; 26 is the newer LTS line.
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  ig-worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ig-worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: scrapers
+          POSTGRES_PASSWORD: scrapers
+          POSTGRES_DB: scrapers
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U scrapers"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgres://scrapers:scrapers@localhost:5432/scrapers
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - name: Schema matches migrations
+        run: pnpm --filter @scrapers/db exec drizzle-kit check
+      - run: pnpm --filter @scrapers/db --filter @scrapers/core build
+      - name: Core pipeline on real Postgres (production drivers)
+        run: pnpm --filter @scrapers/core exec vitest run test/postgres.integration.test.ts
+        env:
+          TEST_DATABASE_URL: postgres://scrapers:scrapers@localhost:5432/scrapers
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: scrapers
+          POSTGRES_PASSWORD: scrapers
+          POSTGRES_DB: scrapers
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U scrapers"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgres://scrapers:scrapers@localhost:5432/scrapers
+      SUPPRESSION_PEPPER: e2e-pepper
+      OWNER_EMAIL: owner@example.com
+      WORKER_URL: http://localhost:8765
+      WORKER_SHARED_SECRET: e2e
+      WORKER_RATE_PER_MINUTE: "6000"
+      AUTH_SECRET: e2e-auth-secret-0123456789abcdef0123456789
+      DASHBOARD_PASSWORD: e2e-dashboard-password
+      CRON_SECRET: e2e-cron
+      APP_URL: http://localhost:3100
+      DRAIN_BUDGET_SECONDS: "30"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @scrapers/web exec playwright install --with-deps chromium
+      - run: pnpm db:migrate
+      - run: pnpm build
+      - name: Start the fake worker and the dashboard
+        run: |
+          node apps/web/e2e/fake-worker.mjs > /tmp/worker.log 2>&1 &
+          (cd apps/web && pnpm exec next start -p 3100 > /tmp/next.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://localhost:3100/login > /dev/null && break; sleep 1; done
+      - name: Dashboard end to end
+        run: pnpm --filter @scrapers/web e2e
+        env:
+          BASE_URL: http://localhost:3100
+      - if: failure()
+        run: tail -n 100 /tmp/next.log /tmp/worker.log

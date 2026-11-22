@@ -1,0 +1,34 @@
+[project]
+name = "ig-worker"
+version = "0.1.0"
+description = "Internal service that fetches public Instagram profiles with Instaloader, without logging in."
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.165",
+    "instaloader>=4.16",
+    "uvicorn[standard]>=0.54",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.2",
+    "pytest>=9.2",
+    "ruff>=0.14",
+]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[project.scripts]
+ig-worker = "ig_worker.main:run"

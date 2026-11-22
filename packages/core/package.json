@@ -1,0 +1,31 @@
+{
+  "name": "@scrapers/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@scrapers/db": "workspace:*",
+    "csv-parse": "7.0.3",
+    "drizzle-orm": "0.45.4",
+    "libphonenumber-js": "1.13.17",
+    "pg-boss": "12.39.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.17",
+    "@vitest/coverage-v8": "5.1.1",
+    "vitest": "5.1.1",
+    "postgres": "4.1.1"
+  }
+}

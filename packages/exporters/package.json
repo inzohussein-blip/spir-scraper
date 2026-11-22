@@ -1,0 +1,26 @@
+{
+  "name": "@scrapers/exporters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@scrapers/core": "workspace:*",
+    "csv-stringify": "6.9.0",
+    "exceljs": "4.4.0",
+    "google-auth-library": "11.3.4"
+  },
+  "devDependencies": {
+    "vitest": "5.1.1"
+  }
+}

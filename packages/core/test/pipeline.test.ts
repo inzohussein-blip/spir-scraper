@@ -1,0 +1,225 @@
+import { leads as leadsTable } from "@scrapers/db";
+import { describe, expect, it } from "vitest";
+import { ENRICH_BATCH } from "../src/pipeline/service.js";
+import { parseSource, uploadSource } from "../src/source.js";
+import { NotFoundError, RateLimitedError } from "../src/types.js";
+import { FakeProvider, fakeProfile, setup } from "./helpers.js";
+
+const usernames = (n: number) => Array.from({ length: n }, (_, i) => `user${i + 1}`);
+
+async function waitFor<T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 20_000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (ok(v)) return v;
+    if (Date.now() > end) throw new Error(`timed out; last value: ${JSON.stringify(v)}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+describe("pipeline through pg-boss workers", () => {
+  it("runs an upload job end to end", async () => {
+    const worker = new FakeProvider("worker", ["profile"], { profile: fakeProfile });
+    const t = await setup([worker]);
+    try {
+      await t.scrapers.work({ pollingIntervalSeconds: 0.5 });
+      const project = await t.scrapers.createProject({ name: "p", owner: "o@example.com" });
+      const { job, estimatedCostUsd } = await t.scrapers.startJob({
+        projectId: project.id,
+        source: uploadSource(usernames(120)),
+        limit: 500,
+      });
+      expect(estimatedCostUsd).toBe(0);
+      const done = await waitFor(
+        () => t.scrapers.getJob(job.id),
+        (j) => j.status === "done",
+      );
+      expect(done.counts).toMatchObject({ discovered: 120, enriched: 120 });
+      expect(done.progress).toBe(1);
+      // kinds 0 and 1 are businesses with a contact; 2 has none; 3 is personal.
+      expect(done.counts.leads).toBe(60);
+
+      const rows = await t.scrapers.listLeads({ projectId: project.id, limit: 1000 });
+      expect(rows).toHaveLength(120);
+      const personal = rows.filter((r) => !r.isBusiness);
+      expect(personal.every((r) => r.email === null && r.phone === null)).toBe(true);
+      const saudi = rows.find((r) => r.username === "user4");
+      expect(saudi).toMatchObject({
+        phone: "+966501000004",
+        phoneCountry: "SA",
+        phoneConfirmed: true,
+        contactSource: "bio",
+      });
+      expect(rows.find((r) => r.username === "user1")?.email).toBe("user1@example-fx.com");
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("pipeline handlers", () => {
+  async function runJob(t: Awaited<ReturnType<typeof setup>>, projectId: string, names: string[]) {
+    const { job } = await t.scrapers.startJob({
+      projectId,
+      source: uploadSource(names),
+      limit: 1000,
+    });
+    await t.scrapers.handlers.discover({ jobId: job.id, usernames: names });
+    for (let i = 0; i < names.length; i += ENRICH_BATCH) {
+      await t.scrapers.handlers.enrich({
+        jobId: job.id,
+        usernames: names.slice(i, i + ENRICH_BATCH),
+      });
+    }
+    return t.scrapers.getJob(job.id);
+  }
+
+  it("falls back when a provider is rate limited and counts failures", async () => {
+    const limited = new FakeProvider("worker", ["profile"], {
+      profile: () => {
+        throw new RateLimitedError("429", "worker");
+      },
+    });
+    const backup = new FakeProvider("apify", ["profile"], {
+      profile: (u) => {
+        if (u === "ghost") throw new NotFoundError("gone", "apify");
+        if (u === "broken") throw new Error("boom");
+        return fakeProfile(u);
+      },
+    });
+    const t = await setup([limited, backup]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const job = await runJob(t, p.id, ["user1", "ghost", "broken", "user2"]);
+      expect(job.status).toBe("done");
+      expect(job.counts).toMatchObject({ discovered: 4, enriched: 2, skipped: 1, failed: 1 });
+      expect(limited.calls).toBe(1); // rested after the first 429
+      const rows = await t.scrapers.listLeads({ projectId: p.id });
+      expect(rows.map((r) => r.username).sort()).toEqual(["user1", "user2"]);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("skips suppressed usernames, emails and phones and deletes existing data", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await runJob(t, p.id, ["user1", "user4", "user5"]);
+      expect(await t.scrapers.listLeads({ projectId: p.id })).toHaveLength(3);
+
+      await t.scrapers.suppress("email", "USER5@example-fx.com");
+      await t.scrapers.suppress("phone", "00966 50 100 0004");
+      await t.scrapers.suppress("username", "@User1");
+      expect(await t.scrapers.listLeads({ projectId: p.id })).toHaveLength(0);
+
+      const again = await runJob(t, p.id, ["user1", "user4", "user5", "user8"]);
+      expect(again.counts).toMatchObject({ discovered: 4, skipped: 3, enriched: 1 });
+      expect((await t.scrapers.listLeads({ projectId: p.id })).map((r) => r.username)).toEqual([
+        "user8",
+      ]);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("filters leads", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await runJob(t, p.id, usernames(8));
+      expect(await t.scrapers.listLeads({ projectId: p.id, business: true })).toHaveLength(6);
+      expect(await t.scrapers.listLeads({ projectId: p.id, hasEmail: true })).toHaveLength(2);
+      expect(await t.scrapers.listLeads({ projectId: p.id, hasPhone: true })).toHaveLength(2);
+      expect(await t.scrapers.listLeads({ projectId: p.id, limit: 3, offset: 6 })).toHaveLength(2);
+      await t.db.update(leadsTable).set({ aiScore: 80 });
+      expect(await t.scrapers.listLeads({ projectId: p.id, minScore: 70 })).toHaveLength(8);
+      expect(await t.scrapers.listLeads({ projectId: p.id, minScore: 90 })).toHaveLength(0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("discovers engagers through a provider and records which one", async () => {
+    const apify = new FakeProvider(
+      "apify",
+      ["account_engagers"],
+      { engagers: () => ["User1", "user2", "user1"] },
+      6000,
+      2.5,
+    );
+    const worker = new FakeProvider("worker", ["profile"], { profile: fakeProfile });
+    const t = await setup([apify, worker]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const source = parseSource("https://instagram.com/competitor");
+      expect(t.scrapers.estimateCost(source, 1000)).toBe(2.5);
+      const { job } = await t.scrapers.startJob({ projectId: p.id, source, limit: 10 });
+      await t.scrapers.handlers.discover({ jobId: job.id });
+      const j = await t.scrapers.getJob(job.id);
+      expect(j).toMatchObject({ status: "running", provider: "apify", counts: { discovered: 2 } });
+      expect(j.progress).toBe(0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("fails a job with a helpful message when no provider can discover", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const { job } = await t.scrapers.startJob({
+        projectId: p.id,
+        source: parseSource("#forex"),
+        limit: 10,
+      });
+      await t.scrapers.handlers.discover({ jobId: job.id });
+      const j = await t.scrapers.getJob(job.id);
+      expect(j.status).toBe("failed");
+      expect(j.error).toMatch(/upload a CSV/);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("finishes empty jobs, honours cancellation and caps the limit", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      expect((await runJob(t, p.id, [])).status).toBe("done");
+
+      const { job } = await t.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(usernames(5)),
+        limit: 99_999,
+      });
+      expect(job.limit).toBe(1000);
+      await t.scrapers.handlers.discover({ jobId: job.id, usernames: usernames(5) });
+      expect((await t.scrapers.cancelJob(job.id)).status).toBe("cancelled");
+      await t.scrapers.handlers.enrich({ jobId: job.id, usernames: usernames(5) });
+      expect((await t.scrapers.getJob(job.id)).counts.enriched).toBeUndefined();
+      // Cancelling a finished job leaves it as it is.
+      expect((await t.scrapers.cancelJob(job.id)).status).toBe("cancelled");
+      await expect(t.scrapers.getJob("00000000-0000-0000-0000-000000000000")).rejects.toThrow(
+        /not found/,
+      );
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("deletes expired leads and orphaned profiles", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o", retentionDays: 30 });
+      await runJob(t, p.id, ["user1", "user2"]);
+      await t.db.update(leadsTable).set({ expiresAt: new Date(Date.now() - 1000) });
+      await t.scrapers.handlers.retention();
+      expect(await t.scrapers.listLeads({ projectId: p.id })).toHaveLength(0);
+      const { rows } = await t.pg.query<{ n: number }>("select count(*)::int as n from profiles");
+      expect(rows[0]?.n).toBe(0);
+    } finally {
+      await t.close();
+    }
+  });
+});
