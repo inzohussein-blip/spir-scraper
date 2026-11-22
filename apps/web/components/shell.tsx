@@ -19,6 +19,7 @@ const NAV: { href: string; label: string; icon: IconName }[] = [
   { href: "/leads", label: "العملاء", icon: "users" },
   { href: "/notifications", label: "الإشعارات", icon: "bell" },
   { href: "/activity", label: "النشاط", icon: "activity" },
+  { href: "/extension", label: "إضافة المتصفح", icon: "plug" },
   { href: "/settings", label: "الإعدادات", icon: "settings" },
 ];
 

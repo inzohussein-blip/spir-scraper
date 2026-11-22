@@ -10,7 +10,9 @@ export const maxDuration = 60;
 
 const handler = createMcpHandler(
   async () =>
-    buildMcpServer(await getRuntime(), { onJobStarted: () => scheduleDrain({ force: true }) }),
+    buildMcpServer(await getRuntime(), {
+      onJobStarted: () => scheduleDrain({ force: true, routeMaxSeconds: maxDuration }),
+    }),
   SERVERLESS_MCP_OPTIONS,
 );
 
@@ -19,7 +21,7 @@ async function handle(req: Request) {
   if (!auth.ok) return auth.response;
   const res = await handler.fetch(req);
   // Keep queued jobs moving while Claude is polling get_job.
-  scheduleDrain({ origin: new URL(req.url).origin });
+  scheduleDrain({ origin: new URL(req.url).origin, routeMaxSeconds: maxDuration });
   return res;
 }
 

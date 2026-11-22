@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "installCommand": "cd ../.. && npx -y pnpm@12.21.0 install --frozen-lockfile",
-  "buildCommand": "cd ../.. && pnpm --filter @scrapers/db migrate --if-configured && pnpm exec turbo run build --filter=@scrapers/web",
+  "buildCommand": "cd ../.. && pnpm --filter @scrapers/db migrate --if-configured && pnpm --filter @scrapers/extension build --zip ../web/public/downloads/spir-extension.zip && pnpm exec turbo run build --filter=@scrapers/web",
   "ignoreCommand": "[ \"$VERCEL_GIT_COMMIT_REF\" != \"main\" ]",
   "crons": [{ "path": "/api/cron", "schedule": "17 3 * * *" }]
 }

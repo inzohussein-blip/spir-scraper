@@ -68,6 +68,19 @@ try {
   assert.ok(await page.locator("text=صحة النظام").isVisible());
   step("API key and health card");
 
+  // The browser extension is offered from the dashboard (built into public/downloads by the deploy).
+  await page.goto(`${B}/extension`);
+  await page.waitForSelector("text=الإصدار");
+  const extDownload = page.waitForEvent("download");
+  await page.click("text=تحميل الإضافة");
+  const zip = await readFile(await (await extDownload).path());
+  assert.equal(zip.subarray(0, 2).toString(), "PK");
+  assert.ok(zip.includes("manifest.json"), "the zip holds the extension manifest");
+  await page.click('button:has-text("أنشئ مفتاحاً للإضافة")');
+  await page.waitForSelector("text=انسخ المفتاح الآن");
+  assert.match((await page.textContent("body")) ?? "", /sk_[A-Za-z0-9_-]{10,}/);
+  step("extension page: download and a key for the extension");
+
   await page.goto(`${B}/`);
   // Shortcuts work once React has hydrated the page.
   await page.waitForSelector("html[data-ready]", { state: "attached" });
