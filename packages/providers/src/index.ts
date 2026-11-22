@@ -41,6 +41,8 @@ export function providersFromEnv(env: NodeJS.ProcessEnv = process.env): Provider
       new ApifyProvider({
         token: env.APIFY_TOKEN,
         monthlyCapUsd: Number(env.APIFY_MONTHLY_CAP_USD ?? 0),
+        ...(env.APIFY_RECENT_POSTS ? { recentPosts: Number(env.APIFY_RECENT_POSTS) } : {}),
+        ...(env.APIFY_FOLLOWERS_ACTOR ? { actors: { followers: env.APIFY_FOLLOWERS_ACTOR } } : {}),
       }),
     );
   }

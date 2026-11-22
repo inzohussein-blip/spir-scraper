@@ -23,6 +23,19 @@ describe("parseSource", () => {
     expect(parseSource(input)).toMatchObject(expected);
   });
 
+  it("reads a followers list from its link or when asked for followers", () => {
+    const expected = {
+      type: "followers",
+      username: "competitor",
+      url: "https://www.instagram.com/competitor/followers/",
+    };
+    expect(parseSource("https://www.instagram.com/Competitor/followers/")).toEqual(expected);
+    expect(parseSource("@competitor", "followers")).toEqual(expected);
+    expect(parseSource("https://instagram.com/competitor", "followers")).toEqual(expected);
+    // A plain profile is still the commenters of its posts.
+    expect(parseSource("@competitor")).toMatchObject({ type: "profile" });
+  });
+
   it("treats a bare word as a hashtag when asked to", () => {
     expect(parseSource("forex", "hashtag")).toMatchObject({ type: "hashtag", tag: "forex" });
   });

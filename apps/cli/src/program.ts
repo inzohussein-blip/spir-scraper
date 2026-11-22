@@ -57,7 +57,7 @@ function sourceFrom(input: string, type: string | undefined, limit: number): Sou
     if (usernames.length === 0) throw new Error(`No valid usernames found in ${input}`);
     return uploadSource(usernames, input);
   }
-  return parseSource(input, type as "profile" | "post" | "hashtag" | undefined);
+  return parseSource(input, type as "profile" | "followers" | "post" | "hashtag" | undefined);
 }
 
 const pct = (p: number) => `${Math.round(p * 100)}%`;
@@ -194,6 +194,7 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
       .addOption(
         new Option("-t, --type <type>", "source type").choices([
           "profile",
+          "followers",
           "post",
           "hashtag",
           "upload",

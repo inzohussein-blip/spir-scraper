@@ -43,6 +43,13 @@
       "when": 1795294610924,
       "tag": "0005_rls_new_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795380584835,
+      "tag": "0006_massive_donald_blake",
+      "breakpoints": true
     }
   ]
 }

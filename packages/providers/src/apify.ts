@@ -18,7 +18,12 @@ export const DEFAULT_ACTORS = {
   posts: "apify~instagram-post-scraper",
   comments: "apify~instagram-comment-scraper",
   hashtag: "apify~instagram-hashtag-scraper",
+  /** Apify's own followers actor: no Instagram login of ours is involved. */
+  followers: "apify~instagram-followers-following-scraper",
 } as const;
+
+/** Recent posts of a competitor whose commenters are collected (more posts, more people). */
+export const DEFAULT_RECENT_POSTS = 20;
 
 export interface ApifyProviderOptions {
   token: string;
@@ -27,7 +32,7 @@ export interface ApifyProviderOptions {
    * Apify's free plan is the free monthly credit, so nothing is ever charged.
    */
   monthlyCapUsd?: number;
-  actors?: Partial<typeof DEFAULT_ACTORS>;
+  actors?: Partial<Record<keyof typeof DEFAULT_ACTORS, string>>;
   /** How many recent posts of a competitor to read commenters from. */
   recentPosts?: number;
   /** Approximate cost per 1000 results, used for estimates only. */
@@ -106,11 +111,12 @@ export class ApifyProvider implements Provider {
     "post_commenters",
     "hashtag_posters",
     "account_engagers",
+    "account_followers",
   ]);
   readonly ratePerMinute = 30;
   readonly costPer1k: number;
   private readonly fetch: FetchLike;
-  private readonly actors: typeof DEFAULT_ACTORS;
+  private readonly actors: Record<keyof typeof DEFAULT_ACTORS, string>;
   private readonly base: string;
 
   constructor(private readonly opts: ApifyProviderOptions) {
@@ -171,6 +177,17 @@ export class ApifyProvider implements Provider {
     source: Exclude<Source, { type: "upload" }>,
     limit: number,
   ): AsyncIterable<string> {
+    if (source.type === "followers") {
+      // The followers list itself. Instagram and the actor's plan may return
+      // fewer than asked (Apify's free usage covers the first page).
+      const items = await this.run(
+        this.actors.followers,
+        { usernames: [source.username], dataToScrape: "followers", resultsLimit: limit },
+        limit,
+      );
+      for (const u of usernamesFrom(items)) if (u !== source.username) yield u;
+      return;
+    }
     if (source.type === "hashtag") {
       yield* usernamesFrom(
         await this.run(this.actors.hashtag, { hashtags: [source.tag], resultsLimit: limit }, limit),
@@ -183,8 +200,11 @@ export class ApifyProvider implements Provider {
     } else {
       const posts = await this.run(
         this.actors.posts,
-        { username: [source.username], resultsLimit: this.opts.recentPosts ?? 5 },
-        this.opts.recentPosts ?? 5,
+        {
+          username: [source.username],
+          resultsLimit: this.opts.recentPosts ?? DEFAULT_RECENT_POSTS,
+        },
+        this.opts.recentPosts ?? DEFAULT_RECENT_POSTS,
       );
       postUrls = posts.map((p) => str(p.url)).filter((u): u is string => !!u);
     }

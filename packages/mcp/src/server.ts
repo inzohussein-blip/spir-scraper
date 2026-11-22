@@ -65,14 +65,16 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
       description:
         "Queue a job that collects public accounts related to an Instagram profile, post or hashtag, " +
         "or a list of usernames. Returns immediately with a job_id; follow progress with get_job. " +
-        `Profile/post/hashtag sources need the Apify provider; a usernames list always works. ${COMPLIANCE}`,
+        "source_type 'profile' collects people who comment on the account's recent posts; " +
+        "'followers' collects the account's followers list (Instagram may expose only part of it). " +
+        `Profile/followers/post/hashtag sources need the Apify provider; a usernames list always works. ${COMPLIANCE}`,
       inputSchema: z.object({
         source: z.string().optional().describe("Instagram URL, @username or #hashtag"),
         usernames: z
           .array(z.string())
           .optional()
           .describe("Explicit usernames to look up instead of a source"),
-        source_type: z.enum(["profile", "post", "hashtag"]).optional(),
+        source_type: z.enum(["profile", "followers", "post", "hashtag"]).optional(),
         limit: z.number().int().min(1).max(maxLimit).default(100),
         project: z.string().describe("Project name or id; created if it does not exist"),
       }),
