@@ -15,6 +15,12 @@ export interface Settings extends ModelSettings {
   maxSteps: number;
   /** Page actions per day on Instagram in auto mode (a guard against account limits). */
   dailyInstagramActions: number;
+  /** Show the lead badge on Instagram profiles. */
+  showBadge: boolean;
+  /** What the owner offers, for message drafts. */
+  offer: string;
+  /** What a good lead looks like, when the project has no AI criteria. */
+  criteria: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +37,9 @@ export const DEFAULT_SETTINGS: Settings = {
   paceSeconds: 4,
   maxSteps: 25,
   dailyInstagramActions: 200,
+  showBadge: true,
+  offer: "",
+  criteria: "",
 };
 
 const KEY = "settings";

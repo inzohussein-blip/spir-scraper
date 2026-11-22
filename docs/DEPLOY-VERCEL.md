@@ -71,7 +71,7 @@
 | `CRON_SECRET` | ✅ | `openssl rand -hex 32`، و Vercel يرسله تلقائياً مع مهام cron |
 | `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHAT_ID` | مستحسن | الإشعارات على تلكرام، وكود الدخول بخطوتين |
 | `VAPID_PUBLIC_KEY` و `VAPID_PRIVATE_KEY` | اختياري | إشعارات المتصفح والموبايل. تُولَّد بـ `pnpm scrapers push-keys` |
-| `PROFILE_CACHE_DAYS` | | إعادة استخدام الملف المجلوب خلال هذه الأيام (افتراضياً 7). يوفّر رصيد Apify |
+| `PROFILE_CACHE_DAYS` | | إعادة استخدام الملف المجلوب خلال هذه الأيام (افتراضياً 30). يوفّر رصيد Apify لأن المنافسين يتشاركون كثيراً من المتابعين |
 | `WEEKLY_SUMMARY_DAY` و `TIME_ZONE` | | يوم الملخص الأسبوعي (5 = الجمعة) والمنطقة الزمنية (افتراضياً Asia/Baghdad) |
 | `MCP_RATE_PER_MINUTE` | | حد طلبات MCP في الدقيقة (افتراضياً 120) |
 | `TWO_FACTOR` | | `off` لإطفاء كود الدخول عند الطوارئ |

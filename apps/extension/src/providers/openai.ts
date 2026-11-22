@@ -99,11 +99,16 @@ export class OpenAICompatibleModel implements ChatModel {
       body: JSON.stringify({
         model: this.settings.model,
         messages: this.messages,
-        tools: this.tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.parameters },
-        })),
-        tool_choice: "auto",
+        // Some servers reject an empty tools list, so one-shot requests send none.
+        ...(this.tools.length
+          ? {
+              tools: this.tools.map((t) => ({
+                type: "function",
+                function: { name: t.name, description: t.description, parameters: t.parameters },
+              })),
+              tool_choice: "auto",
+            }
+          : {}),
       }),
       ...(signal ? { signal } : {}),
     });

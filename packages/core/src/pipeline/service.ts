@@ -159,7 +159,7 @@ export function createScrapers(deps: {
     linkPage: (url) => fetchLinkPage(url),
     checkEmail: createMxChecker(),
   };
-  const cacheDays = config.profileCacheDays ?? 7;
+  const cacheDays = config.profileCacheDays ?? 30;
   const pepper = config.suppressionPepper;
 
   // ---- small shared stores (serverless-safe) ----

@@ -26,7 +26,7 @@ import { WebPushSink } from "./push.js";
 import { type FetchLike, TelegramNotifier } from "./telegram.js";
 
 /** Which database URL the app will use, for status checks (any accepted variable name). */
-export { databaseUrl, directDatabaseUrl } from "@scrapers/db";
+export { databaseRegion, databaseUrl, directDatabaseUrl } from "@scrapers/db";
 export * from "./commands.js";
 export * from "./push.js";
 export * from "./telegram.js";
@@ -164,7 +164,7 @@ export async function createRuntime(
       suppressionPepper: env.SUPPRESSION_PEPPER,
       maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 1000),
       defaultRetentionDays: Number(env.DEFAULT_RETENTION_DAYS ?? 90),
-      profileCacheDays: Number(env.PROFILE_CACHE_DAYS ?? 7),
+      profileCacheDays: Number(env.PROFILE_CACHE_DAYS ?? 30),
       weeklyDay: Number(env.WEEKLY_SUMMARY_DAY ?? 5),
       timeZone: env.TIME_ZONE || "Asia/Baghdad",
     },

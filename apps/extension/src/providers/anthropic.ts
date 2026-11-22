@@ -101,11 +101,15 @@ export class AnthropicModel implements ChatModel {
           model: this.settings.model,
           max_tokens: 16000,
           system: this.system,
-          tools: this.tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            input_schema: t.parameters,
-          })),
+          ...(this.tools.length
+            ? {
+                tools: this.tools.map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  input_schema: t.parameters,
+                })),
+              }
+            : {}),
           messages: this.messages,
           output_config: { effort: this.effort },
           ...(fallback ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),

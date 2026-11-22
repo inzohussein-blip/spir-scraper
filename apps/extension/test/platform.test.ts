@@ -45,3 +45,25 @@ describe("allowed sites", () => {
     ]);
   });
 });
+
+describe("Platform lead lookups", () => {
+  it("finds the exact account among search results and reads project criteria", async () => {
+    const urls: string[] = [];
+    const p = new Platform("https://x.app", "k", async (url) => {
+      urls.push(url);
+      if (url.includes("/projects/"))
+        return json({ id: "p1", name: "وكلاء", aiCriteria: "وسيط تداول في الخليج" });
+      return json({
+        leads: [
+          { username: "acme.fx", status: "contacted", aiScore: 80 },
+          { username: "acme", status: "interested", aiScore: 72 },
+        ],
+        nextCursor: null,
+      });
+    });
+    expect(await p.lead("p1", "@ACME")).toEqual({ status: "interested", aiScore: 72 });
+    expect(await p.lead("p1", "other")).toBeNull();
+    expect(urls[0]).toBe("https://x.app/api/v1/leads?project=p1&q=acme&limit=20");
+    expect(await p.project("p1")).toEqual({ name: "وكلاء", aiCriteria: "وسيط تداول في الخليج" });
+  });
+});

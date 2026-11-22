@@ -38,7 +38,7 @@ const profileHtml = `<!doctype html><html><head>
   <div>Acme Trading</div>
   <div>وسيط تداول معتمد
 للتواصل: info [at] acme [dot] sa
-واتساب ٠٥٠١٢٣٤٥٦٧</div>
+واتساب ٠٥٠١٢٣٤٥٦٧ أو +966 50 123 4567</div>
   <a href="https://acme.example/site">acme.example</a>
 </header>
 <a id="followersLink" href="/acme/followers/">12.5K followers</a>
@@ -154,10 +154,20 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(status, { "content-type": type, "access-control-allow-origin": "*" });
     res.end(typeof data === "string" ? data : JSON.stringify(data));
   };
-  if (req.url === "/acme/") return send(200, profileHtml, "text/html; charset=utf-8");
+  if (req.url === "/acme/" || req.url === "/known/")
+    return send(200, profileHtml, "text/html; charset=utf-8");
+  if (req.url === "/downloads/spir-extension.json") return send(200, { version: "99.0.0" });
   if (req.url === "/v1/chat/completions") {
     const parsed = JSON.parse(body);
     modelRequests.push(parsed);
+    // One-shot requests (no tools): scoring and message drafts.
+    if (!parsed.tools) {
+      const rating = /rate public Instagram accounts/.test(parsed.messages[0].content);
+      const content = rating
+        ? 'Here you go: {"score": 77, "reason": "وسيط تداول نشط"}'
+        : "مرحباً أكمي، أعجبني محتواكم عن التداول. هل تفكرون بشراكة؟";
+      return send(200, { choices: [{ finish_reason: "stop", message: { content } }] });
+    }
     try {
       return send(200, modelTurn(parsed.messages));
     } catch (err) {
@@ -168,6 +178,15 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.url === "/api/v1/projects")
     return send(200, { projects: [{ id: "11111111-1111-4111-8111-111111111111", name: "تجربة" }] });
+  if (req.url === "/api/v1/projects/11111111-1111-4111-8111-111111111111")
+    return send(200, { id: "1", name: "تجربة", aiCriteria: "وسطاء تداول في الخليج" });
+  if (req.url?.startsWith("/api/v1/leads?")) {
+    const q = new URL(req.url, origin).searchParams.get("q");
+    return send(200, {
+      leads: q === "known" ? [{ username: "known", status: "interested", aiScore: 72 }] : [],
+      nextCursor: null,
+    });
+  }
   if (req.url?.startsWith("/api/v1/profiles/"))
     return send(404, { error: "Profile not collected" });
   if (req.url === "/api/v1/jobs" && req.method === "POST") {
@@ -231,6 +250,9 @@ try {
     paceSeconds: 1,
     maxSteps: 20,
     dailyInstagramActions: 200,
+    showBadge: true,
+    criteria: "",
+    offer: "شراكة وكالة مع وسيط مرخّص",
   });
   await panel.reload();
   await site.bringToFront();
@@ -251,6 +273,26 @@ try {
     if (!out.includes(want)) fail(`profile card misses "${want}":\n${out}`);
   if (!/12[٬,.]?500|١٢٬٥٠٠/.test(out)) fail(`followers count missing:\n${out}`);
   step("manual: reads the profile (bio contacts, counts, link, platform status)");
+
+  // Score against the project's criteria, then draft a message with a WhatsApp link.
+  await panel.click("#scoreProfile");
+  await panel.waitForFunction(() =>
+    document.querySelector("#scoreOut")?.textContent?.includes("77"),
+  );
+  const scoreReq = modelRequests.at(-1);
+  if (scoreReq.tools || !scoreReq.messages[1].content.includes("وسطاء تداول في الخليج"))
+    fail("scoring did not use the project's criteria without tools");
+  await panel.click("#draftMessage");
+  await panel.waitForFunction(() =>
+    document.querySelector("#messageText")?.value?.includes("مرحباً أكمي"),
+  );
+  const wa = await panel.getAttribute("#whatsapp", "href");
+  if (!wa?.startsWith("https://wa.me/966501234567?text=")) fail(`WhatsApp link: ${wa}`);
+  if (!modelRequests.at(-1).messages[1].content.includes("شراكة وكالة")) fail("offer missing");
+  step("manual: scores with the project's criteria and drafts a message with a WhatsApp link");
+
+  if (await panel.locator("#update").isHidden()) fail("update notice not shown for a newer build");
+  step("shows a notice when the dashboard has a newer build");
 
   // Manual: open the followers list and scroll by hand while collecting.
   await site.click("#followersLink");
@@ -305,9 +347,10 @@ try {
   if (pw !== "") fail("the password field was filled");
   step("auto: refuses to type into the password field");
 
-  const sys = modelRequests[0].messages[0].content;
+  const autoReq = modelRequests.find((r) => r.tools);
+  const sys = autoReq.messages[0].content;
   if (!/untrusted/.test(sys)) fail("system prompt lacks the untrusted-content rule");
-  const toolNames = modelRequests[0].tools.map((t) => t.function.name);
+  const toolNames = autoReq.tools.map((t) => t.function.name);
   if (!toolNames.includes("click") || toolNames.includes("screenshot")) fail(`tools: ${toolNames}`);
   step("auto: sends the safety rules and the right tools to the model");
 
@@ -321,6 +364,18 @@ try {
     document.querySelector("#profileOut")?.textContent?.includes("ليست ضمن المواقع المسموحة"),
   );
   step("refuses sites that are not allowed");
+
+  // The badge on profile pages: new account with a save button, known lead with its status.
+  saved.length = 0;
+  await site.bringToFront();
+  await site.goto(`${origin}/acme/`);
+  await site.locator(".t").filter({ hasText: "حساب جديد" }).waitFor({ timeout: 10_000 });
+  await site.locator("button", { hasText: "احفظ" }).click();
+  await site.locator(".t").filter({ hasText: "أُرسل للمنصة" }).waitFor();
+  if (saved.join() !== "acme") fail(`badge saved ${saved.join()}`);
+  await site.goto(`${origin}/known/`);
+  await site.locator(".t").filter({ hasText: "في المنصة: مهتم · 72" }).waitFor({ timeout: 10_000 });
+  step("badge on profiles: shows a known lead's status and saves a new account");
 
   if (errors.length) fail(`page errors: ${errors.join("; ")}`);
   step("no page errors");

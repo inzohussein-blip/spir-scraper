@@ -53,6 +53,27 @@ export class Platform {
     }
   }
 
+  /** The project's name and AI criteria (what a good lead looks like). */
+  async project(projectId: string): Promise<{ name: string; aiCriteria: string | null }> {
+    const r = await this.call<{ name: string; aiCriteria: string | null }>(
+      `/projects/${encodeURIComponent(projectId)}`,
+    );
+    return { name: r.name, aiCriteria: r.aiCriteria ?? null };
+  }
+
+  /** The account's lead in this project (CRM status and score), or null. */
+  async lead(
+    projectId: string,
+    username: string,
+  ): Promise<{ status: string; aiScore: number | null } | null> {
+    const u = username.replace(/^@/, "").toLowerCase();
+    const r = await this.call<{
+      leads: { username: string; status: string; aiScore: number | null }[];
+    }>(`/leads?project=${encodeURIComponent(projectId)}&q=${encodeURIComponent(u)}&limit=20`);
+    const hit = r.leads.find((l) => l.username.toLowerCase() === u);
+    return hit ? { status: hit.status, aiScore: hit.aiScore ?? null } : null;
+  }
+
   /** Queues jobs (the API takes up to 1000 accounts each) that collect public details and contacts. */
   async save(projectId: string, usernames: string[]): Promise<{ jobIds: string[]; count: number }> {
     if (!projectId) throw new Error("اختر مشروعاً من الإعدادات");

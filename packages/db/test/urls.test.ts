@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { skipReason } from "../src/migrate.js";
-import { databaseUrl, directDatabaseUrl } from "../src/urls.js";
+import { databaseRegion, databaseUrl, directDatabaseUrl } from "../src/urls.js";
 
 describe("connection urls", () => {
   it("prefers our own names", () => {
@@ -56,5 +56,32 @@ describe("migrations on the Vercel build", () => {
   });
   it("never skips when run by hand", () => {
     expect(skipReason([], {})).toBeNull();
+  });
+});
+
+describe("databaseRegion", () => {
+  it("reads Neon's region and the Vercel region next to it", () => {
+    expect(
+      databaseRegion(
+        "postgres://u:p@ep-cool-name-123456-pooler.eu-central-1.aws.neon.tech/db?sslmode=require",
+      ),
+    ).toEqual({
+      host: "ep-cool-name-123456-pooler.eu-central-1.aws.neon.tech",
+      region: "eu-central-1",
+      vercelRegion: "fra1",
+    });
+    expect(databaseRegion("postgres://u:p@ep-x.us-east-1.aws.neon.tech/db").vercelRegion).toBe(
+      "iad1",
+    );
+  });
+
+  it("returns nulls for other hosts and bad input", () => {
+    expect(databaseRegion("postgres://localhost:5432/db")).toEqual({
+      host: "localhost",
+      region: null,
+      vercelRegion: null,
+    });
+    expect(databaseRegion(undefined).host).toBeNull();
+    expect(databaseRegion("not a url").host).toBeNull();
   });
 });

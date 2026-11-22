@@ -30,20 +30,36 @@ await build({
   legalComments: "none",
   logLevel: "warning",
 });
-// The content script is injected as a classic script: rebuild it as an IIFE.
-await build({
-  entryPoints: [`${root}src/page/content.ts`],
-  outfile: `${out}/content.js`,
-  bundle: true,
-  format: "iife",
-  target: "chrome116",
-  minify: !e2e,
-  logLevel: "warning",
-});
+// Content scripts run as classic scripts: build them as IIFEs.
+for (const name of ["content", "badge"]) {
+  await build({
+    entryPoints: [`${root}src/page/${name}.ts`],
+    outfile: `${out}/${name}.js`,
+    bundle: true,
+    format: "iife",
+    target: "chrome116",
+    minify: !e2e,
+    define: { __E2E__: String(e2e) },
+    logLevel: "warning",
+  });
+}
 await cp(`${root}static`, out, { recursive: true });
+
+// Every build gets its own version from the build time (1.<yy><day of year>.<hhmm>, UTC),
+// so the side panel can tell when the dashboard offers a newer one.
+const now = new Date();
+const dayOfYear = Math.floor((now - Date.UTC(now.getUTCFullYear(), 0, 0)) / 86_400_000);
+const version = `1.${(now.getUTCFullYear() % 100) * 1000 + dayOfYear}.${now.getUTCHours() * 100 + now.getUTCMinutes()}`;
+{
+  const manifest = JSON.parse(await readFile(`${out}/manifest.json`, "utf8"));
+  manifest.version = version;
+  await writeFile(`${out}/manifest.json`, JSON.stringify(manifest, null, 2));
+}
 if (e2e) {
   const manifest = JSON.parse(await readFile(`${out}/manifest.json`, "utf8"));
   manifest.host_permissions.push("<all_urls>");
+  // The badge also runs on the local test site.
+  manifest.content_scripts[0].matches.push("http://127.0.0.1/*");
   await writeFile(`${out}/manifest.json`, JSON.stringify(manifest, null, 2));
 }
 console.log(`extension built in ${out}${e2e ? " (e2e)" : ""}`);

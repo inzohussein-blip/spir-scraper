@@ -1,3 +1,4 @@
+import { databaseRegion, databaseUrl } from "@scrapers/runtime";
 import {
   checkProviders,
   connectTelegramCommands,
@@ -35,6 +36,9 @@ export default async function Settings() {
   const resting = Object.entries(health.providers).filter(([, s]) => s.until > Date.now());
   const status = integrationStatus();
   const origin = appOrigin();
+  const db = databaseRegion(databaseUrl());
+  const fnRegion = process.env.VERCEL_REGION ?? null;
+  const regionsMatch = !db.vercelRegion || !fnRegion || db.vercelRegion === fnRegion;
 
   return (
     <>
@@ -130,6 +134,21 @@ export default async function Settings() {
               {(health.dbBytes / 1024 / 1024).toFixed(1)}MB · {dbPct}%
             </Badge>
           </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>منطقة الخادم · منطقة قاعدة البيانات</span>
+            <Badge tone={regionsMatch ? "ok" : "warn"}>
+              <span className="ltr">
+                {fnRegion ?? "محلي"} · {db.region ?? "؟"}
+              </span>
+            </Badge>
+          </li>
+          {!regionsMatch && (
+            <li className="text-[12.5px] text-warn sm:col-span-2">
+              الخادم بعيد عن قاعدة البيانات، فكل صفحة أبطأ. ضع{" "}
+              <span className="ltr font-medium">"regions": ["{db.vercelRegion}"]</span> في
+              apps/web/vercel.json.
+            </li>
+          )}
           <li className="flex items-center justify-between gap-3">
             <span>العملاء · الملفات · المهام</span>
             <span className="tabular-nums text-fg-2">
