@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { drainBudgetMs } from "../lib/drain-budget";
 import {
   dashboardPasswordProblem,
   isAllowedRedirect,
@@ -83,5 +84,16 @@ describe("dashboardPasswordProblem", () => {
     expect(dashboardPasswordProblem(undefined)).toMatch(/غير مضبوطة/);
     expect(dashboardPasswordProblem("")).toMatch(/غير مضبوطة/);
     expect(dashboardPasswordProblem("1234567")).toMatch(/أقصر من 8/);
+  });
+});
+
+describe("drainBudgetMs", () => {
+  it("ends a drain before the route's time limit, leaving time to hand off", () => {
+    // MCP and Telegram routes run at most 60 s.
+    expect(drainBudgetMs(60)).toBe(35_000);
+    // The drain route itself (300 s) keeps the configured 240 s.
+    expect(drainBudgetMs(300)).toBe(240_000);
+    expect(drainBudgetMs(300, 100)).toBe(100_000);
+    expect(drainBudgetMs(10)).toBe(5_000);
   });
 });
