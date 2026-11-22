@@ -185,12 +185,16 @@ $<HTMLButtonElement>("#draftMessage").addEventListener("click", (e) =>
 );
 
 function updateWhatsapp() {
-  const link = $<HTMLAnchorElement>("#whatsapp");
+  const button = $<HTMLButtonElement>("#whatsapp");
   const phone = lastProfile?.phones.find((p) => whatsappLink(p, "x"));
   const href = phone ? whatsappLink(phone, $<HTMLTextAreaElement>("#messageText").value) : null;
-  link.hidden = !href;
-  if (href) link.href = href;
+  button.hidden = !href;
+  button.dataset.href = href ?? "";
 }
+$<HTMLButtonElement>("#whatsapp").addEventListener("click", (e) => {
+  const url = (e.currentTarget as HTMLButtonElement).dataset.href;
+  if (url) void chrome.tabs.create({ url });
+});
 $<HTMLTextAreaElement>("#messageText").addEventListener("input", updateWhatsapp);
 $<HTMLButtonElement>("#copyMessage").addEventListener("click", () =>
   navigator.clipboard.writeText($<HTMLTextAreaElement>("#messageText").value),
@@ -431,7 +435,8 @@ async function checkForUpdate() {
     if (!res.ok) return;
     const { version } = (await res.json()) as { version?: string };
     if (version && compareVersions(version, chrome.runtime.getManifest().version) > 0) {
-      $<HTMLAnchorElement>("#updateLink").href = `${settings.platformUrl}/extension`;
+      $("#updateLink").onclick = () =>
+        void chrome.tabs.create({ url: `${settings.platformUrl}/extension` });
       $("#update").hidden = false;
     }
   } catch {

@@ -221,7 +221,7 @@ label.check input {
   background: var(--bg);
   padding: 8px 0;
 }
-a.button {
+button.whatsapp {
   display: inline-block;
   border: 1px solid #25d366;
   background: #25d366;

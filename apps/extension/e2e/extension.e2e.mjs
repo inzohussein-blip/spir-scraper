@@ -286,7 +286,7 @@ try {
   await panel.waitForFunction(() =>
     document.querySelector("#messageText")?.value?.includes("مرحباً أكمي"),
   );
-  const wa = await panel.getAttribute("#whatsapp", "href");
+  const wa = await panel.getAttribute("#whatsapp", "data-href");
   if (!wa?.startsWith("https://wa.me/966501234567?text=")) fail(`WhatsApp link: ${wa}`);
   if (!modelRequests.at(-1).messages[1].content.includes("شراكة وكالة")) fail("offer missing");
   step("manual: scores with the project's criteria and drafts a message with a WhatsApp link");
