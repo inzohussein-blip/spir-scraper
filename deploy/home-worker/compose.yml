@@ -1,0 +1,38 @@
+# Instaloader worker on a computer at home, reachable from Vercel through Cloudflare Tunnel.
+#
+# A home connection is a residential IP, which Instagram blocks far less than the
+# data-centre IPs of Vercel, Railway and other clouds. The tunnel dials out to
+# Cloudflare, so no router port is opened and the home IP is never published.
+#
+#   cp .env.example .env    # fill in the three values
+#   docker compose up -d
+#
+# See docs/HOME-WORKER.md for the Cloudflare steps.
+services:
+  ig-worker:
+    build: ../../services/ig-worker
+    restart: unless-stopped
+    environment:
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}
+      MIN_INTERVAL_SECONDS: ${MIN_INTERVAL_SECONDS:-3}
+      JITTER_SECONDS: ${JITTER_SECONDS:-2}
+      # Optional: residential proxies rotated after the home IP, see .env.example.
+      PROXY_URLS: ${PROXY_URLS:-}
+      PROXY_INCLUDE_DIRECT: ${PROXY_URLS:+true}
+      EXIT_COOLDOWN_SECONDS: ${EXIT_COOLDOWN_SECONDS:-900}
+    # No ports: only the tunnel container talks to the worker.
+    networks: [internal]
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.1
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env (Cloudflare Zero Trust, Networks, Tunnels)}
+    depends_on:
+      ig-worker:
+        condition: service_healthy
+    networks: [internal]
+
+networks:
+  internal:
