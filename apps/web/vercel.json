@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
+  "installCommand": "cd ../.. && npx -y pnpm@12.21.0 install --frozen-lockfile",
   "buildCommand": "cd ../.. && pnpm exec turbo run build --filter=@scrapers/web",
   "ignoreCommand": "[ \"$VERCEL_GIT_COMMIT_REF\" != \"main\" ]",
   "crons": [{ "path": "/api/cron", "schedule": "17 3 * * *" }]

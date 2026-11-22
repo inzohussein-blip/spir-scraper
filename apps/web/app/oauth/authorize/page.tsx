@@ -70,7 +70,9 @@ export default async function Authorize({ searchParams }: { searchParams: Promis
 
   async function deny() {
     "use server";
-    if (!p.redirect_uri) redirect("/");
+    // Only send the browser back to a redirect URI the client registered.
+    const ok = await validate(p);
+    if ("error" in ok || !p.redirect_uri) redirect("/");
     const target = new URL(p.redirect_uri);
     target.searchParams.set("error", "access_denied");
     if (p.state) target.searchParams.set("state", p.state);

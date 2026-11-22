@@ -22,6 +22,7 @@ services:
     environment:
       WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}
       MIN_INTERVAL_SECONDS: ${MIN_INTERVAL_SECONDS:-3}
+      PROXY_URLS: ${PROXY_URLS:-}
     # Bound to localhost only: the worker is never exposed publicly.
     ports:
       - "127.0.0.1:8000:8000"

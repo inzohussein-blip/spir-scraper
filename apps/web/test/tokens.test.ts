@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedRedirect, pkceChallenge, safeEqual, sign, verify } from "../lib/tokens";
+import { isAllowedRedirect, pkceChallenge, safeEqual, safeNext, sign, verify } from "../lib/tokens";
 
 const secret = new TextEncoder().encode("x".repeat(40));
 const other = new TextEncoder().encode("y".repeat(40));
@@ -39,5 +39,26 @@ describe("helpers", () => {
     expect(isAllowedRedirect("https://x.com/cb#frag")).toBe(false);
     expect(isAllowedRedirect("javascript:alert(1)")).toBe(false);
     expect(isAllowedRedirect("nope")).toBe(false);
+  });
+});
+
+describe("safeNext", () => {
+  it("keeps same-site paths", () => {
+    expect(safeNext("/leads?status=new")).toBe("/leads?status=new");
+    expect(safeNext("/")).toBe("/");
+  });
+
+  it("refuses anything a browser could read as another site", () => {
+    for (const bad of [
+      "//evil.com",
+      "/\\evil.com",
+      "/\\/evil.com",
+      "https://evil.com",
+      "evil",
+      "/\tx",
+      "",
+    ]) {
+      expect(safeNext(bad)).toBe("/");
+    }
   });
 });

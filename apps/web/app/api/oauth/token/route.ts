@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { appOrigin, authSecret } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 import { pkceChallenge, sign, verify } from "@/lib/tokens";
@@ -18,7 +19,12 @@ async function issue(origin: string, clientId: string) {
         { aud: `${origin}/api/mcp`, cid: clientId.slice(-16) },
         ACCESS_TTL,
       ),
-      refresh_token: await sign(secret, "refresh", { cid: clientId.slice(-16) }, REFRESH_TTL),
+      refresh_token: await sign(
+        secret,
+        "refresh",
+        { cid: clientId.slice(-16), jti: randomUUID() },
+        REFRESH_TTL,
+      ),
       token_type: "Bearer",
       expires_in: ACCESS_TTL,
       scope: "scrapers",
@@ -58,8 +64,21 @@ export async function POST(req: Request) {
   }
 
   if (get("grant_type") === "refresh_token") {
-    const refresh = await verify<{ cid: string }>(secret, "refresh", get("refresh_token"));
+    const refresh = await verify<{ cid: string; jti?: string }>(
+      secret,
+      "refresh",
+      get("refresh_token"),
+    );
     if (!refresh || (clientId && refresh.cid !== clientId.slice(-16))) return err("invalid_grant");
+    // Refresh tokens rotate (OAuth 2.1 for public clients): each one works once,
+    // so a stolen token stops working as soon as either side uses it.
+    const rt = await getRuntime();
+    if (
+      !refresh.jti ||
+      !(await rt.scrapers.claimOnce(`oauth-refresh:${refresh.jti}`, REFRESH_TTL * 1000))
+    ) {
+      return err("invalid_grant");
+    }
     return issue(origin, clientId || refresh.cid);
   }
 

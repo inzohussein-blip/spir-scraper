@@ -9,7 +9,7 @@
 | اللوحة + API + MCP + OAuth | ✅ | تطبيق Next.js واحد |
 | معالجة المهام | ✅ | بدون عامل دائم: تُعالَج بعد كل طلب وتسلّم نفسها لاستدعاء جديد حتى تنتهي، ومهمة cron يومية كشبكة أمان |
 | Apify (الاكتشاف والجلب) | ✅ | الطريقة الموصى بها على Vercel |
-| عامل Instaloader (Python) | ❌ | خوادم Vercel عناوين مراكز بيانات يحجبها إنستقرام بسرعة. شغّله على جهازك واربطه بـ `WORKER_URL` عبر نفق (مثل Cloudflare Tunnel)، أو اكتفِ بـ Apify |
+| عامل Instaloader (Python) | ❌ | خوادم Vercel عناوين مراكز بيانات يحجبها إنستقرام بسرعة. شغّله على جهاز في البيت بأمر واحد عبر Cloudflare Tunnel: [docs/HOME-WORKER.md](HOME-WORKER.md) |
 
 > **تنبيه الخطة المجانية:** خطة Hobby في Vercel مخصصة للاستخدام الشخصي غير التجاري حسب شروطهم. للاستخدام التجاري تحتاج خطة Pro. راجع شروط Vercel الحالية.
 
@@ -54,6 +54,7 @@
 
 1. في vercel.com: **Add New → Project** واختر المستودع `spir-scraper` من GitHub.
 2. **Root Directory:** `apps/web`. أوامر التثبيت والبناء مضبوطة في `apps/web/vercel.json` فلا تغيّرها.
+   > إذا عرض Vercel عند الاستيراد **عدة خدمات** (Next.js و FastAPI و Hono وغيرها)، فلا تنشرها كلها. اضغط **Edit** بجانب Root Directory واختر `apps/web`، فيبني اللوحة وحدها. العامل (Python) لا يُنشر على Vercel، والـ API و MCP جزء من اللوحة نفسها.
    - **يبني Vercel فرع `main` فقط:** `ignoreCommand` في `vercel.json` يتخطى بناء أي فرع آخر، مثل فروع العمل وطلبات Dependabot، فلا تُستهلك دقائق البناء على نسخ تجريبية.
 3. أضف متغيرات البيئة (Settings → Environment Variables):
 
@@ -128,4 +129,6 @@ claude mcp add --transport http scrapers https://<موقعك>/api/mcp --header "
 
 ## عامل Instaloader مع بروكسي
 
-على جهازك أو أي خادم آخر: ضع `PROXY_URL` (بروكسي سكني يقلل الحظر) و `JITTER_SECONDS` (افتراضياً 2) في بيئة العامل، ثم اربطه بـ `WORKER_URL`.
+الطريقة الموصى بها: جهاز في البيت مع Cloudflare Tunnel، والتفاصيل في [docs/HOME-WORKER.md](HOME-WORKER.md).
+
+على أي خادم آخر: ضع `PROXY_URLS` (بروكسيات سكنية مفصولة بفواصل، تُدوَّر تلقائياً عند الحجب) و `JITTER_SECONDS` (افتراضياً 2) في بيئة العامل، ثم اربطه بـ `WORKER_URL`.

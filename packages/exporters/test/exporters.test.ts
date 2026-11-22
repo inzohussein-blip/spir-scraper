@@ -97,6 +97,32 @@ describe("toXlsx", () => {
     expect(ws?.getRow(3).getCell(8).value).toBeNull();
   });
 
+  it("keeps the header style, filter, colour scale and number cells", async () => {
+    const buf = await toXlsx([row({ aiScore: 80 }), row({ username: "b", aiScore: 20 })]);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as ArrayBuffer);
+    const ws = wb.getWorksheet("العملاء");
+    const scoreCol = COLUMNS.findIndex((c) => c.key === "ai_score") + 1;
+    expect(ws?.getRow(1).getCell(1).font?.bold).toBe(true);
+    expect(ws?.getRow(2).getCell(scoreCol).value).toBe(80);
+    expect(ws?.getColumn(1).width).toBe(COLUMNS[0]?.width);
+    expect(ws?.autoFilter).toBeTruthy();
+    const cf = (ws as unknown as { conditionalFormattings: { ref: string }[] })
+      .conditionalFormattings;
+    expect(cf[0]?.ref).toMatch(/2:[A-Z]+3$/);
+  });
+
+  it("drops characters XML forbids and cleans the sheet name", async () => {
+    const buf = await toXlsx([row({ fullName: 'a\u0000b\u0007 <x> & "y"' })], {
+      sheetName: "a/b:c*?",
+    });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as ArrayBuffer);
+    const ws = wb.worksheets[0];
+    expect(ws?.name).toBe("a b c");
+    expect(ws?.getRow(2).getCell(2).value).toBe('ab <x> & "y"');
+  });
+
   it("handles an empty export", async () => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load((await toXlsx([])) as unknown as ArrayBuffer);
