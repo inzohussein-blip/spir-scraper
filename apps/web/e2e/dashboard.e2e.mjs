@@ -46,12 +46,21 @@ try {
   await page.click('button:has-text("تطبيق")');
   await page.waitForURL(/q=user12/);
   assert.equal(await rows.count(), 1);
-  await page.selectOption('select[aria-label="حالة @user12"]', "interested");
-  await page.waitForTimeout(1000);
+  // Wait for hydration so the change reaches the server action, then for the save to finish
+  // (the select is disabled while it runs) instead of a fixed pause.
+  await page.waitForSelector("html[data-ready]", { state: "attached" });
+  const statusSelect = page.locator('select[aria-label="حالة @user12"]');
+  const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.ok());
+  await statusSelect.selectOption("interested");
+  await saved;
+  await statusSelect.waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => !document.querySelector('select[aria-label="حالة @user12"]')?.hasAttribute("disabled"),
+  );
   await page.goto(`${B}/leads?status=interested`);
   assert.equal(await page.locator("tbody tr").count(), 1);
   // Status chips show their label with the count.
-  assert.ok(await page.getByRole("link", { name: "مهتم 1" }).isVisible());
+  await page.getByRole("link", { name: "مهتم 1" }).waitFor({ timeout: 10_000 });
   step("search and CRM status");
 
   // Follow-up date (saved on change, kept after reload).
