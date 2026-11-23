@@ -83,6 +83,7 @@ describe("migrations", () => {
       "monitors",
       "notifications",
       "people",
+      "places",
       "profile_snapshots",
       "profiles",
       "projects",

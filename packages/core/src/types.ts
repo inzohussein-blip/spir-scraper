@@ -59,6 +59,29 @@ export interface Connector {
   getAccount(handle: string): Promise<RemoteAccount>;
 }
 
+/** A business from Google Maps as a provider returns it. */
+export interface RawPlace {
+  placeId: string;
+  name: string;
+  category?: string | null;
+  address?: string | null;
+  city?: string | null;
+  /** ISO 3166-1 alpha-2. */
+  country?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  rating?: number | null;
+  reviews?: number | null;
+  url?: string | null;
+}
+
+/** Searches Google Maps (e.g. through Apify). */
+export interface PlacesSearch {
+  /** Approximate USD per 1000 places. */
+  readonly placesCostPer1k: number;
+  searchPlaces(query: string, location: string, limit: number): Promise<RawPlace[]>;
+}
+
 export class AccountNotFoundError extends Error {
   constructor(message: string) {
     super(message);

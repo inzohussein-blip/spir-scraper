@@ -559,3 +559,52 @@ export async function linkProjectAccounts(_: ActionState, form: FormData): Promi
     message: `فُحص ${r.leads} عميلاً: ${r.found} حساباً جديداً على منصات أخرى، قُرئ منها ${r.read}. الباقي يُقرأ مع المهمة اليومية.`,
   };
 }
+
+/** Searches Google Maps and keeps the businesses in the project. */
+export async function searchPlaces(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  try {
+    const r = await (await getRuntime()).scrapers.searchPlaces({
+      projectId,
+      query: str(form, "query"),
+      location: str(form, "location"),
+      limit: Number(str(form, "limit")) || 30,
+    });
+    await audit("places.search", { query: str(form, "query"), found: r.found });
+    revalidatePath("/places");
+    return {
+      message: `وُجدت ${r.found} شركة (≈ $${r.costUsd.toFixed(3)}). حلّل مواقعها لتجد حساباتها على إنستقرام.`,
+    };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Reads the websites of businesses not analysed yet. */
+export async function analyzePlaces(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const r = await (await getRuntime()).scrapers.analyzePlaces(str(form, "project"), 20);
+  revalidatePath("/places");
+  return {
+    message: r.analyzed
+      ? `حُلّل ${r.analyzed} موقعاً، ووُجد ${r.instagram} حساب إنستقرام. الباقي مع الضغطة التالية أو المهمة اليومية.`
+      : "لا توجد مواقع جديدة للتحليل",
+  };
+}
+
+/** Sends the businesses' Instagram accounts to the project as leads. */
+export async function placesToLeads(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  try {
+    const r = await (await getRuntime()).scrapers.placesToLeads(projectId);
+    if (!r.jobId) return { error: "لا توجد حسابات إنستقرام جديدة. حلّل المواقع أولاً." };
+    await audit("places.to_leads", { sent: r.sent });
+    await scheduleDrain();
+    revalidatePath("/places");
+    return { message: `بدأت مهمة لـ ${r.sent} حساباً`, url: `/jobs/${r.jobId}` };
+  } catch (err) {
+    return fail(err);
+  }
+}

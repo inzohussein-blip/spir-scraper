@@ -4,6 +4,7 @@ import {
   createScrapers,
   type LeadFilters,
   type NotificationSink,
+  type PlacesSearch,
   type Provider,
   type ProviderHealthEvent,
   ProviderRouter,
@@ -80,6 +81,8 @@ export interface RuntimeOverrides {
   providers?: Provider[];
   /** Readers for other platforms; defaults to the ones configured in the environment. */
   connectors?: Connector[];
+  /** Google Maps search; defaults to the Apify provider when APIFY_TOKEN is set. */
+  places?: PlacesSearch;
   scorer?: Scorer | null;
   sheetsRequest?: GoogleRequest;
   sheetsEmail?: string;
@@ -181,6 +184,10 @@ export async function createRuntime(
     ...(o.resolve ? { resolve: o.resolve } : {}),
     onReadyToExport: (jobId) => autoExport(jobId),
     connectors: o.connectors ?? connectorsFromEnv(env),
+    ...(() => {
+      const apify = providers.find((p): p is ApifyProvider => p instanceof ApifyProvider);
+      return o.places ? { places: o.places } : apify ? { places: apify } : {};
+    })(),
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,
       maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 1000),

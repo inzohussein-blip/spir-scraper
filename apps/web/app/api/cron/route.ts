@@ -30,6 +30,16 @@ export async function GET(req: Request) {
   const competitors = await step("competitors", () => rt.scrapers.snapshotCompetitors(), null);
   const followUps = await step("follow-ups", () => rt.scrapers.sendDueFollowUps(), 0);
   const accountsRead = await step("accounts", () => rt.scrapers.refreshPendingAccounts(), 0);
+  const placesRead = await step(
+    "places",
+    async () => {
+      let n = 0;
+      for (const p of await rt.scrapers.listProjects())
+        n += (await rt.scrapers.analyzePlaces(p.id, 20)).analyzed;
+      return n;
+    },
+    0,
+  );
   const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
   let backupSent = false;
   if (weekly && rt.telegram) {
@@ -66,6 +76,7 @@ export async function GET(req: Request) {
     competitors,
     followUps,
     accountsRead,
+    placesRead,
     weeklySent: !!weekly,
     backupSent,
   });

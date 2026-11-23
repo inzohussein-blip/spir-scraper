@@ -575,6 +575,80 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "search_places",
+    {
+      title: "Find businesses on Google Maps",
+      description:
+        "Search Google Maps (through Apify, about $4 per 1000 places) for businesses such as exchange offices, " +
+        "brokers or trading academies in a place, and keep them in the project. Then analyze_places reads their " +
+        "websites for Instagram accounts and emails, and places_to_leads turns those accounts into leads.",
+      inputSchema: z.object({
+        project: z.string(),
+        query: z.string().min(2).max(100),
+        location: z.string().min(2).max(100),
+        limit: z.number().int().min(1).max(200).default(30),
+      }),
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.searchPlaces({
+          projectId: await projectIdFor(rt, a.project),
+          query: a.query,
+          location: a.location,
+          limit: a.limit,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "list_places",
+    {
+      title: "Businesses found",
+      description:
+        "The project's Google Maps businesses with phone, website, rating, Instagram and emails found.",
+      inputSchema: z.object({
+        project: z.string(),
+        limit: z.number().int().min(1).max(500).default(100),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json({
+        places: await rt.scrapers.listPlaces(await projectIdFor(rt, a.project), { limit: a.limit }),
+      }),
+    ),
+  );
+
+  server.registerTool(
+    "analyze_places",
+    {
+      title: "Read businesses' websites",
+      description:
+        "Read up to 20 businesses' websites (not read yet) for their Instagram account and emails.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) =>
+      json(await rt.scrapers.analyzePlaces(await projectIdFor(rt, a.project), 20)),
+    ),
+  );
+
+  server.registerTool(
+    "places_to_leads",
+    {
+      title: "Turn businesses into leads",
+      description:
+        "Start a job for the Instagram accounts found on businesses' websites, so they become leads.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) => {
+      const r = await rt.scrapers.placesToLeads(await projectIdFor(rt, a.project));
+      if (r.jobId) opts.onJobStarted?.(r.jobId);
+      return json(r);
+    }),
+  );
+
+  server.registerTool(
     "read_page",
     {
       title: "Read a web page",

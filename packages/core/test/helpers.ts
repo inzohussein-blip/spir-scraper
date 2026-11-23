@@ -12,6 +12,7 @@ import {
   type Capability,
   type Connector,
   NotFoundError,
+  type PlacesSearch,
   type Provider,
   type ProviderId,
   type RawProfile,
@@ -22,7 +23,7 @@ const migrationsFolder = fileURLToPath(new URL("../../db/drizzle", import.meta.u
 export async function setup(
   providers: Provider[],
   scorer?: Scorer,
-  opts: { connectors?: Connector[] } = {},
+  opts: { connectors?: Connector[]; places?: PlacesSearch } = {},
 ) {
   const pg = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(pg, { schema });
@@ -45,6 +46,7 @@ export async function setup(
     resolve: {},
     config: { suppressionPepper: "test-pepper" },
     ...(opts.connectors ? { connectors: opts.connectors } : {}),
+    ...(opts.places ? { places: opts.places } : {}),
   });
   await scrapers.init();
   return {

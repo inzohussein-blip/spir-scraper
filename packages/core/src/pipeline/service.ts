@@ -14,6 +14,7 @@ import {
   monitors,
   notifications,
   people,
+  places,
   profileSnapshots,
   profiles,
   projects,
@@ -62,6 +63,7 @@ import {
   AccountNotFoundError,
   type Connector,
   NotFoundError,
+  type PlacesSearch,
   type RawProfile,
   type Source,
 } from "../types.js";
@@ -212,6 +214,8 @@ export function createScrapers(deps: {
   onReadyToExport?: (jobId: string) => Promise<void>;
   /** Readers for other platforms (YouTube, Telegram...), one per platform. */
   connectors?: Connector[];
+  /** Google Maps search (Apify). */
+  places?: PlacesSearch;
 }) {
   const { db, boss, router, config, scorer } = deps;
   const sinks = deps.sinks ?? [];
@@ -1675,6 +1679,157 @@ export function createScrapers(deps: {
               : null,
         }))
         .sort((a, b) => b.revenue - a.revenue || b.customers - a.customers || b.leads - a.leads);
+    },
+
+    /** Whether Google Maps search is configured (needs APIFY_TOKEN). */
+    get placesAvailable() {
+      return !!deps.places;
+    },
+
+    /**
+     * Searches Google Maps and keeps the businesses in the project (a business
+     * found again is updated, not duplicated). The cost is estimated from the
+     * provider's price and returned.
+     */
+    async searchPlaces(input: {
+      projectId: string;
+      query: string;
+      location: string;
+      limit?: number;
+    }) {
+      if (!deps.places) throw new Error("البحث في خرائط جوجل يحتاج APIFY_TOKEN");
+      const limit = Math.min(Math.max(1, input.limit ?? 30), 200);
+      const found = await deps.places.searchPlaces(
+        input.query.trim(),
+        input.location.trim(),
+        limit,
+      );
+      const label = `${input.query.trim()} · ${input.location.trim()}`;
+      let saved = 0;
+      for (const f of found) {
+        const values = {
+          name: f.name.slice(0, 300),
+          category: f.category ?? null,
+          address: f.address ?? null,
+          city: f.city ?? null,
+          country: f.country && /^[A-Z]{2}$/.test(f.country) ? f.country : null,
+          phone: f.phone ?? null,
+          website: f.website ?? null,
+          rating: f.rating === null || f.rating === undefined ? null : f.rating.toFixed(1),
+          reviews: f.reviews ?? null,
+          url: f.url ?? null,
+        };
+        await db
+          .insert(places)
+          .values({ projectId: input.projectId, placeId: f.placeId, query: label, ...values })
+          .onConflictDoUpdate({ target: [places.projectId, places.placeId], set: values });
+        saved++;
+      }
+      return {
+        found: saved,
+        costUsd: Math.round(((deps.places.placesCostPer1k * found.length) / 1000) * 10000) / 10000,
+      };
+    },
+
+    async listPlaces(projectId: string, opts: { query?: string; limit?: number } = {}) {
+      return db
+        .select()
+        .from(places)
+        .where(
+          and(
+            eq(places.projectId, projectId),
+            opts.query ? eq(places.query, opts.query) : undefined,
+          ),
+        )
+        .orderBy(desc(places.createdAt))
+        .limit(Math.min(opts.limit ?? 500, 2000));
+    },
+
+    async placeQueries(projectId: string) {
+      const rows = await db
+        .select({ query: places.query, n: sql<number>`count(*)::int` })
+        .from(places)
+        .where(eq(places.projectId, projectId))
+        .groupBy(places.query);
+      return rows.map((r) => ({ query: r.query, count: Number(r.n) }));
+    },
+
+    /**
+     * Reads the websites of businesses not analysed yet (contact, about and
+     * partner pages) for their Instagram account and emails.
+     */
+    async analyzePlaces(projectId: string, limit = 20) {
+      const reader = connectors.get("website");
+      if (!reader) return { analyzed: 0, instagram: 0 };
+      const todo = await db
+        .select()
+        .from(places)
+        .where(
+          and(
+            eq(places.projectId, projectId),
+            isNull(places.analyzedAt),
+            isNotNull(places.website),
+          ),
+        )
+        .limit(Math.min(limit, 50));
+      let instagram = 0;
+      for (const p of todo) {
+        let ig: string | null = null;
+        let emails: string[] | null = null;
+        try {
+          const host = parseAccountUrl(p.website as string)?.handle;
+          const fromWebsite = p.website ? parseAccountUrl(p.website) : null;
+          // Some businesses list their Instagram page as the "website".
+          if (fromWebsite?.platform === "instagram") ig = fromWebsite.handle;
+          else if (host) {
+            const r = await reader.getAccount(host);
+            const igLink = (r.links ?? [])
+              .map((l) => parseAccountUrl(l))
+              .find((a) => a?.platform === "instagram");
+            ig = igLink?.handle ?? null;
+            const e = r.stats?.emails;
+            emails = Array.isArray(e) && e.length ? (e as string[]).slice(0, 5) : null;
+          }
+        } catch {
+          // An unreadable site is marked analysed so it is not retried every day.
+        }
+        if (ig) instagram++;
+        await db
+          .update(places)
+          .set({ instagram: ig, emails, analyzedAt: new Date() })
+          .where(eq(places.id, p.id));
+      }
+      return { analyzed: todo.length, instagram };
+    },
+
+    /**
+     * Starts a job for the Instagram accounts of the project's businesses that
+     * were not sent yet: they become ordinary leads (contacts, score, revenue).
+     */
+    async placesToLeads(projectId: string) {
+      const rows = await db
+        .select({ id: places.id, instagram: places.instagram, query: places.query })
+        .from(places)
+        .where(
+          and(eq(places.projectId, projectId), isNotNull(places.instagram), isNull(places.sentAt)),
+        );
+      if (rows.length === 0) return { sent: 0, jobId: null as string | null };
+      const names = [...new Set(rows.map((r) => r.instagram as string))].slice(0, maxLimit);
+      const { job } = await this.startJob({
+        projectId,
+        source: { type: "upload", usernames: names, url: `خرائط جوجل: ${rows[0]?.query ?? ""}` },
+        limit: names.length,
+      });
+      await db
+        .update(places)
+        .set({ sentAt: new Date() })
+        .where(
+          inArray(
+            places.id,
+            rows.map((r) => r.id),
+          ),
+        );
+      return { sent: names.length, jobId: job.id };
     },
 
     /** Platforms this server can read (an official connector is configured). */

@@ -547,3 +547,105 @@ describe("daily account reads", () => {
     }
   });
 });
+
+describe("Google Maps businesses", () => {
+  it("finds businesses, reads their sites for Instagram, and sends them as leads", async () => {
+    const searches: string[] = [];
+    const places = {
+      placesCostPer1k: 4,
+      searchPlaces: async (q: string, loc: string, limit: number) => {
+        searches.push(`${q}|${loc}|${limit}`);
+        return [
+          {
+            placeId: "p1",
+            name: "صرافة الأمان",
+            category: "مكتب صرافة",
+            city: "الرياض",
+            country: "SA",
+            website: "https://aman.example",
+            rating: 4.6,
+            reviews: 120,
+          },
+          {
+            placeId: "p2",
+            name: "مركز التداول",
+            website: "https://www.instagram.com/trade_center/",
+          },
+          { placeId: "p3", name: "بلا موقع", phone: "+966500000000" },
+        ];
+      },
+    };
+    const website = {
+      platform: "website",
+      getAccount: async (host: string) => ({
+        displayName: host,
+        bio: null,
+        followers: null,
+        stats: { emails: ["info@aman.example"] },
+        links: ["https://www.instagram.com/aman_fx/", "https://t.me/aman"],
+      }),
+    };
+    const t = await setup(
+      [new FakeProvider("worker", ["profile"], { profile: fakeProfile })],
+      undefined,
+      { connectors: [website], places },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      expect(t.scrapers.placesAvailable).toBe(true);
+      const r = await t.scrapers.searchPlaces({
+        projectId: p.id,
+        query: "مكتب صرافة",
+        location: "الرياض",
+        limit: 10,
+      });
+      expect(r).toEqual({ found: 3, costUsd: 0.012 });
+      expect(searches).toEqual(["مكتب صرافة|الرياض|10"]);
+      // Found again: updated, not duplicated.
+      await t.scrapers.searchPlaces({
+        projectId: p.id,
+        query: "مكتب صرافة",
+        location: "الرياض",
+        limit: 10,
+      });
+      expect(await t.scrapers.listPlaces(p.id)).toHaveLength(3);
+      expect(await t.scrapers.placeQueries(p.id)).toEqual([
+        { query: "مكتب صرافة · الرياض", count: 3 },
+      ]);
+
+      expect(await t.scrapers.analyzePlaces(p.id)).toEqual({ analyzed: 2, instagram: 2 });
+      expect(await t.scrapers.analyzePlaces(p.id)).toEqual({ analyzed: 0, instagram: 0 });
+      const list = await t.scrapers.listPlaces(p.id);
+      const by = (id: string) => list.find((x) => x.placeId === id);
+      expect(by("p1")).toMatchObject({
+        instagram: "aman_fx",
+        emails: ["info@aman.example"],
+        rating: "4.6",
+      });
+      expect(by("p2")?.instagram).toBe("trade_center");
+
+      const sent = await t.scrapers.placesToLeads(p.id);
+      expect(sent.sent).toBe(2);
+      await settle(t);
+      const leads = await t.scrapers.listLeads({ projectId: p.id });
+      expect(leads.map((l) => l.username).sort()).toEqual(["aman_fx", "trade_center"]);
+      expect(leads[0]?.sources?.[0]).toBe("خرائط جوجل: مكتب صرافة · الرياض");
+      expect((await t.scrapers.placesToLeads(p.id)).sent).toBe(0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("needs Apify for searches", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      expect(t.scrapers.placesAvailable).toBe(false);
+      await expect(
+        t.scrapers.searchPlaces({ projectId: p.id, query: "x", location: "y" }),
+      ).rejects.toThrow(/APIFY_TOKEN/);
+    } finally {
+      await t.close();
+    }
+  });
+});

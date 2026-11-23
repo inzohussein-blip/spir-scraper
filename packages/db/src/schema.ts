@@ -415,3 +415,40 @@ export const accounts = pgTable(
 );
 
 export type Account = typeof accounts.$inferSelect;
+
+/** Businesses found on Google Maps for a project (shops, offices, training centers...). */
+export const places = pgTable(
+  "places",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    placeId: text("place_id").notNull(),
+    /** The search that found it, e.g. "مكتب صرافة · الرياض". */
+    query: text("query").notNull(),
+    name: text("name").notNull(),
+    category: text("category"),
+    address: text("address"),
+    city: text("city"),
+    country: char("country", { length: 2 }),
+    phone: text("phone"),
+    website: text("website"),
+    rating: numeric("rating", { precision: 2, scale: 1 }),
+    reviews: integer("reviews"),
+    url: text("url"),
+    /** Found on its website. */
+    instagram: text("instagram"),
+    emails: text("emails").array(),
+    analyzedAt: timestamp("analyzed_at", { withTimezone: true }),
+    /** When its Instagram account was sent to the project as a lead. */
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("places_project_place_uq").on(t.projectId, t.placeId),
+    index("places_project_idx").on(t.projectId, t.createdAt.desc()),
+  ],
+);
+
+export type Place = typeof places.$inferSelect;

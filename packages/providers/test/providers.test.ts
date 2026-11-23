@@ -287,3 +287,50 @@ describe("providersFromEnv", () => {
     ).toBe(5);
   });
 });
+
+describe("Google Maps through Apify", () => {
+  it("maps the places actor's items", async () => {
+    const f = fakeFetch((url) =>
+      url.includes("/limits")
+        ? json({ data: { limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 0 } } })
+        : json([
+            {
+              placeId: "ChIJ1",
+              title: "صرافة",
+              categoryName: "Currency exchange",
+              city: "Riyadh",
+              countryCode: "sa",
+              phone: "+966 50",
+              website: "https://x.example",
+              totalScore: 4.4,
+              reviewsCount: 31,
+              url: "https://maps.google.com/?cid=1",
+            },
+            { title: "no id" },
+          ]),
+    );
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    const places = await p.searchPlaces("صرافة", "الرياض", 5);
+    expect(places).toEqual([
+      {
+        placeId: "ChIJ1",
+        name: "صرافة",
+        category: "Currency exchange",
+        address: null,
+        city: "Riyadh",
+        country: "SA",
+        phone: "+966 50",
+        website: "https://x.example",
+        rating: 4.4,
+        reviews: 31,
+        url: "https://maps.google.com/?cid=1",
+      },
+    ]);
+    const run = f.calls.find((c) => c.url.includes("crawler-google-places"));
+    expect(JSON.parse(String(run?.init?.body))).toMatchObject({
+      searchStringsArray: ["صرافة"],
+      locationQuery: "الرياض",
+      maxCrawledPlacesPerSearch: 5,
+    });
+  });
+});
