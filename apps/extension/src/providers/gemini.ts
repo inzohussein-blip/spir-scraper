@@ -75,15 +75,19 @@ export class GeminiModel implements ChatModel {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: this.system }] },
           contents: this.contents,
-          tools: [
-            {
-              functionDeclarations: this.tools.map((t) => ({
-                name: t.name,
-                description: t.description,
-                parameters: geminiSchema(t.parameters),
-              })),
-            },
-          ],
+          ...(this.tools.length
+            ? {
+                tools: [
+                  {
+                    functionDeclarations: this.tools.map((t) => ({
+                      name: t.name,
+                      description: t.description,
+                      parameters: geminiSchema(t.parameters),
+                    })),
+                  },
+                ],
+              }
+            : {}),
         }),
         ...(signal ? { signal } : {}),
       },

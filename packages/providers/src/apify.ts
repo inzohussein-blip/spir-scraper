@@ -130,8 +130,8 @@ export class ApifyProvider implements Provider {
     return { authorization: `Bearer ${this.opts.token}`, "content-type": "application/json" };
   }
 
-  /** USD still allowed this month: the account limit (or a lower cap) minus usage. */
-  async remainingBudgetUsd(): Promise<number> {
+  /** This month's spend and what is allowed: the account limit, or a lower cap. */
+  async usage(): Promise<{ usedUsd: number; allowedUsd: number }> {
     const res = await ensureOk(
       await this.fetch(`${this.base}/users/me/limits`, { headers: this.headers() }),
       this.id,
@@ -143,8 +143,13 @@ export class ApifyProvider implements Provider {
     const limit = body.data?.limits?.maxMonthlyUsageUsd ?? 0;
     const used = body.data?.current?.monthlyUsageUsd ?? 0;
     const cap = this.opts.monthlyCapUsd ?? 0;
-    const allowed = cap > 0 ? Math.min(limit, cap) : limit;
-    return Math.max(0, allowed - used);
+    return { usedUsd: used, allowedUsd: cap > 0 ? Math.min(limit, cap) : limit };
+  }
+
+  /** USD still allowed this month: the account limit (or a lower cap) minus usage. */
+  async remainingBudgetUsd(): Promise<number> {
+    const u = await this.usage();
+    return Math.max(0, u.allowedUsd - u.usedUsd);
   }
 
   private async run(actor: string, input: object, maxItems: number): Promise<Item[]> {

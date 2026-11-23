@@ -1,3 +1,4 @@
+import { databaseRegion, databaseUrl } from "@scrapers/runtime";
 import {
   checkProviders,
   connectTelegramCommands,
@@ -24,17 +25,24 @@ const LABELS: Record<keyof ReturnType<typeof integrationStatus>, [string, string
 
 export default async function Settings() {
   const rt = await getRuntime();
-  const [keys, twoFa, health] = await Promise.all([
+  const [keys, twoFa, health, apify] = await Promise.all([
     rt.scrapers.listApiKeys(),
     twoFactorEnabled(),
     rt.scrapers.systemHealth(),
+    rt.apifyUsage(),
   ]);
+  const apifyPct = apify?.allowedUsd ? Math.round((apify.usedUsd / apify.allowedUsd) * 100) : 0;
+  // Claude Haiku scoring: about 600 input and 80 output tokens per lead.
+  const aiEstimateUsd = health.scoredThisMonth * (600 * 1 + 80 * 5) * 1e-6;
   // Storage limit of the database plan, for the health bar (Supabase free: 500MB, Neon free: per project).
   const dbLimitMb = Number(process.env.DB_SIZE_LIMIT_MB) || 500;
   const dbPct = Math.round((health.dbBytes / (dbLimitMb * 1024 * 1024)) * 100);
   const resting = Object.entries(health.providers).filter(([, s]) => s.until > Date.now());
   const status = integrationStatus();
   const origin = appOrigin();
+  const db = databaseRegion(databaseUrl());
+  const fnRegion = process.env.VERCEL_REGION ?? null;
+  const regionsMatch = !db.vercelRegion || !fnRegion || db.vercelRegion === fnRegion;
 
   return (
     <>
@@ -107,6 +115,28 @@ export default async function Settings() {
       </div>
 
       <Card
+        title="الصرف هذا الشهر"
+        description="رصيد Apify يُقرأ من حسابك مباشرة، وتكلفة التقييم بالذكاء الاصطناعي تقديرية."
+      >
+        <ul className="grid gap-3 text-sm sm:grid-cols-2">
+          <li className="space-y-1.5">
+            <div className="flex items-center justify-between gap-3">
+              <span>Apify</span>
+              <Badge tone={!apify ? "warn" : apifyPct > 85 ? "bad" : apifyPct > 60 ? "warn" : "ok"}>
+                {apify
+                  ? `$${apify.usedUsd.toFixed(2)} من $${apify.allowedUsd.toFixed(2)} · ${apifyPct}%`
+                  : "غير متاح"}
+              </Badge>
+            </div>
+          </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>تقييم الذكاء الاصطناعي ({health.scoredThisMonth} عميلاً)</span>
+            <Badge tone="info">≈ ${aiEstimateUsd.toFixed(2)}</Badge>
+          </li>
+        </ul>
+      </Card>
+
+      <Card
         title="صحة النظام"
         icon="activity"
         description="فكرة من لوحة بوت Spir: حالة الخادم والمصادر في مكان واحد."
@@ -130,6 +160,21 @@ export default async function Settings() {
               {(health.dbBytes / 1024 / 1024).toFixed(1)}MB · {dbPct}%
             </Badge>
           </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>منطقة الخادم · منطقة قاعدة البيانات</span>
+            <Badge tone={regionsMatch ? "ok" : "warn"}>
+              <span className="ltr">
+                {fnRegion ?? "محلي"} · {db.region ?? "؟"}
+              </span>
+            </Badge>
+          </li>
+          {!regionsMatch && (
+            <li className="text-[12.5px] text-warn sm:col-span-2">
+              الخادم بعيد عن قاعدة البيانات، فكل صفحة أبطأ. ضع{" "}
+              <span className="ltr font-medium">"regions": ["{db.vercelRegion}"]</span> في
+              apps/web/vercel.json.
+            </li>
+          )}
           <li className="flex items-center justify-between gap-3">
             <span>العملاء · الملفات · المهام</span>
             <span className="tabular-nums text-fg-2">

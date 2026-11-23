@@ -1,3 +1,12 @@
+import {
+  askOnce,
+  MESSAGE_SYSTEM,
+  messagePrompt,
+  parseScore,
+  SCORE_SYSTEM,
+  scorePrompt,
+  whatsappLink,
+} from "./agent/leads.js";
 import { runAgent } from "./agent/loop.js";
 import { type AgentMode, systemPrompt, toolsFor } from "./agent/tools.js";
 import { activeTab, createExecutor, pageCall, tabIdOf } from "./browser.js";
@@ -17,6 +26,7 @@ import {
   saveSettings,
   siteAllowed,
 } from "./settings.js";
+import { compareVersions } from "./version.js";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 let settings: Settings = await loadSettings();
@@ -98,7 +108,10 @@ $<HTMLButtonElement>("#readProfile").addEventListener("click", (e) =>
       }
       profileOut.hidden = false;
       profileOut.textContent = lines.filter(Boolean).join("\n");
-      $<HTMLButtonElement>("#saveProfile").disabled = !p.username;
+      for (const id of ["#saveProfile", "#scoreProfile", "#draftMessage"])
+        $<HTMLButtonElement>(id).disabled = !p.username;
+      $("#scoreOut").hidden = true;
+      $("#messageBox").hidden = true;
     },
     profileOut,
   ),
@@ -114,6 +127,77 @@ $<HTMLButtonElement>("#saveProfile").addEventListener("click", (e) =>
     },
     profileOut,
   ),
+);
+
+// ---------- manual: score the profile and draft a first message ----------
+
+const scoreOut = $("#scoreOut");
+
+$<HTMLButtonElement>("#scoreProfile").addEventListener("click", (e) =>
+  withButton(
+    e.currentTarget as HTMLButtonElement,
+    async () => {
+      if (!lastProfile || needsSetup()) return;
+      // The project's own criteria first (set in the dashboard), then the extension's.
+      let criteria = settings.criteria;
+      if (platform().configured && settings.projectId) {
+        const project = await platform()
+          .project(settings.projectId)
+          .catch(() => null);
+        criteria = project?.aiCriteria || criteria;
+      }
+      if (!criteria)
+        throw new Error("اكتب «العميل المناسب لك» في الإعدادات، أو معايير المشروع في اللوحة");
+      scoreOut.hidden = false;
+      scoreOut.textContent = "يقيّم…";
+      const reply = await askOnce(
+        createModel(settings, SCORE_SYSTEM, []),
+        scorePrompt(lastProfile, criteria),
+      );
+      const s = parseScore(reply);
+      if (!s) throw new Error("لم يرجع النموذج درجة مفهومة؛ جرّب مرة أخرى");
+      scoreOut.textContent = `الدرجة: ${s.score} / 100\n${s.reason}`;
+    },
+    scoreOut,
+  ),
+);
+
+$<HTMLButtonElement>("#draftMessage").addEventListener("click", (e) =>
+  withButton(
+    e.currentTarget as HTMLButtonElement,
+    async () => {
+      if (!lastProfile || needsSetup()) return;
+      if (!settings.offer) throw new Error("اكتب «ماذا تقدّم» في الإعدادات أولاً");
+      const box = $("#messageBox");
+      const text = $<HTMLTextAreaElement>("#messageText");
+      box.hidden = false;
+      text.value = "يكتب…";
+      text.value = (
+        await askOnce(
+          createModel(settings, MESSAGE_SYSTEM, []),
+          messagePrompt(lastProfile, settings.offer),
+        )
+      ).trim();
+      updateWhatsapp();
+    },
+    profileOut,
+  ),
+);
+
+function updateWhatsapp() {
+  const button = $<HTMLButtonElement>("#whatsapp");
+  const phone = lastProfile?.phones.find((p) => whatsappLink(p, "x"));
+  const href = phone ? whatsappLink(phone, $<HTMLTextAreaElement>("#messageText").value) : null;
+  button.hidden = !href;
+  button.dataset.href = href ?? "";
+}
+$<HTMLButtonElement>("#whatsapp").addEventListener("click", (e) => {
+  const url = (e.currentTarget as HTMLButtonElement).dataset.href;
+  if (url) void chrome.tabs.create({ url });
+});
+$<HTMLTextAreaElement>("#messageText").addEventListener("input", updateWhatsapp);
+$<HTMLButtonElement>("#copyMessage").addEventListener("click", () =>
+  navigator.clipboard.writeText($<HTMLTextAreaElement>("#messageText").value),
 );
 
 // ---------- manual: collect a followers list while the owner scrolls ----------
@@ -271,6 +355,9 @@ function fillSettings() {
   field("paceSeconds").value = String(settings.paceSeconds);
   field("maxSteps").value = String(settings.maxSteps);
   field("dailyInstagramActions").value = String(settings.dailyInstagramActions);
+  field<HTMLInputElement>("showBadge").checked = settings.showBadge;
+  field<HTMLTextAreaElement>("criteria").value = settings.criteria;
+  field<HTMLTextAreaElement>("offer").value = settings.offer;
   syncProviderFields();
 }
 
@@ -314,6 +401,9 @@ form.addEventListener("submit", (e) => {
     paceSeconds: Math.max(1, Number(field("paceSeconds").value) || 4),
     maxSteps: Math.max(1, Number(field("maxSteps").value) || 25),
     dailyInstagramActions: Math.max(1, Number(field("dailyInstagramActions").value) || 200),
+    showBadge: field<HTMLInputElement>("showBadge").checked,
+    criteria: field<HTMLTextAreaElement>("criteria").value.trim(),
+    offer: field<HTMLTextAreaElement>("offer").value.trim(),
   };
   // Chrome asks the owner to approve access to the allowed sites and servers (must start in the click).
   const origins = [
@@ -335,5 +425,25 @@ form.addEventListener("submit", (e) => {
     });
 });
 
+/** Shows a notice when the dashboard offers a newer build than this one. */
+async function checkForUpdate() {
+  if (!/^https?:\/\//.test(settings.platformUrl)) return;
+  try {
+    const res = await fetch(`${settings.platformUrl}/downloads/spir-extension.json`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return;
+    const { version } = (await res.json()) as { version?: string };
+    if (version && compareVersions(version, chrome.runtime.getManifest().version) > 0) {
+      $("#updateLink").onclick = () =>
+        void chrome.tabs.create({ url: `${settings.platformUrl}/extension` });
+      $("#update").hidden = false;
+    }
+  } catch {
+    // Offline or no access yet: try again next time the panel opens.
+  }
+}
+
 fillSettings();
 if (needsSetup()) showTab("settings");
+void checkForUpdate();

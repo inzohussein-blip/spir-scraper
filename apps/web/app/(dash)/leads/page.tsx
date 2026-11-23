@@ -7,6 +7,7 @@ import {
   updateProjectSettings,
 } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
+import { FollowUpInput } from "@/components/follow-up";
 import { StatusSelect } from "@/components/status-select";
 import {
   Badge,
@@ -25,6 +26,7 @@ import {
 import { integrationStatus } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 import { STATUS_LABELS } from "@/lib/status";
+import { fillTemplate, waLink } from "@/lib/whatsapp";
 
 type Search = {
   project?: string;
@@ -171,6 +173,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         description="التصدير يشمل كل العملاء المطابقين مع درجتهم وحالتهم."
         actions={
           <div className="flex gap-2">
+            <LinkButton href={`/leads/board?project=${projectId}`}>لوحة الأعمدة</LinkButton>
             <LinkButton href={exportHref("xlsx")}>Excel</LinkButton>
             <LinkButton href={exportHref("csv")}>CSV</LinkButton>
           </div>
@@ -183,13 +186,20 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-line text-[12.5px] text-muted">
-                  {["الحساب", "المتابعون", "الإيميل", "الهاتف", "المصدر", "الدرجة", "الحالة"].map(
-                    (h) => (
-                      <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
-                        {h}
-                      </th>
-                    ),
-                  )}
+                  {[
+                    "الحساب",
+                    "المتابعون",
+                    "الإيميل",
+                    "الهاتف",
+                    "المصدر",
+                    "الدرجة",
+                    "الحالة",
+                    "متابعة",
+                  ].map((h) => (
+                    <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -239,6 +249,23 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                       {r.phoneCountry && (
                         <span className="ms-1 text-xs text-muted">{r.phoneCountry}</span>
                       )}
+                      {(() => {
+                        const wa = waLink(
+                          r.phone,
+                          r.phoneConfirmed,
+                          fillTemplate(project.messageTemplate, r),
+                        );
+                        return wa ? (
+                          <a
+                            href={wa}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 block text-xs text-ok hover:underline"
+                          >
+                            واتساب ←
+                          </a>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="px-2 py-2.5 text-xs">
                       {r.contactSource ? SOURCE[r.contactSource] : "—"}
@@ -252,6 +279,13 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                       {r.statusNote && (
                         <div className="mt-1 text-xs text-muted">{r.statusNote}</div>
                       )}
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <FollowUpInput
+                        projectId={projectId}
+                        username={r.username}
+                        at={r.followUpAt}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -301,6 +335,16 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               hint="إذا كُتبت والذكاء الاصطناعي مفعّل، تُقيَّم كل مهمة تلقائياً قبل التصدير."
             >
               <Textarea name="criteria" defaultValue={project.aiCriteria ?? ""} />
+            </Field>
+            <Field
+              label="قالب رسالة واتساب"
+              hint="يُستخدم في روابط واتساب لكل عميل. {name} = اسمه، {username} = معرّفه. أنت من يضغط إرسال."
+            >
+              <Textarea
+                name="template"
+                defaultValue={project.messageTemplate ?? ""}
+                placeholder="مرحباً {name}، أعجبني محتوى حسابك @{username}…"
+              />
             </Field>
             <Field
               label="كلمات المراقبة"

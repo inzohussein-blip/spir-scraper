@@ -6,7 +6,7 @@ export const maxDuration = 300;
 
 /**
  * Vercel Cron (daily on the Hobby plan): retention, AI batch collection,
- * provider checks, due competitor monitors, the weekly summary, and a drain
+ * provider checks, due competitor monitors, follow-up reminders, the weekly summary, and a drain
  * safety net for anything left in the queue.
  */
 export async function GET(req: Request) {
@@ -17,8 +17,16 @@ export async function GET(req: Request) {
     .healthCheck()
     .catch((err) => [{ provider: "all", ok: false, detail: String(err) }]);
   const monitorJobs = await rt.scrapers.runDueMonitors();
+  const followUps = await rt.scrapers.sendDueFollowUps().catch(() => 0);
   const weekly = await rt.scrapers.weeklySummary().catch(() => null);
   const drained = await rt.scrapers.drain({ budgetMs: 180_000 });
   await rt.scrapers.setValue("cron:last", new Date().toISOString(), 30 * 86_400_000);
-  return Response.json({ ok: true, ...drained, health, monitorJobs, weeklySent: !!weekly });
+  return Response.json({
+    ok: true,
+    ...drained,
+    health,
+    monitorJobs,
+    followUps,
+    weeklySent: !!weekly,
+  });
 }

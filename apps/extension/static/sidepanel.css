@@ -221,6 +221,19 @@ label.check input {
   background: var(--bg);
   padding: 8px 0;
 }
+button.whatsapp {
+  display: inline-block;
+  border: 1px solid #25d366;
+  background: #25d366;
+  color: #fff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  text-decoration: none;
+}
+#messageBox {
+  display: grid;
+  gap: 8px;
+}
 /* Last, so it wins over the layout rules above (same specificity). */
 [hidden] {
   display: none;

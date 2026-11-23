@@ -17,6 +17,10 @@
     </header>
 
     <main>
+      <div id="update" class="notice" hidden>
+        نسخة أحدث من الإضافة متاحة في لوحة المنصة.
+        <button type="button" id="updateLink">صفحة الإضافة</button>
+      </div>
       <div id="setup" class="notice warn" hidden>
         أكمل الإعدادات أولاً: مزوّد الذكاء الاصطناعي ومفتاحه، ثم ربط المنصة.
       </div>
@@ -28,8 +32,19 @@
           <div class="row">
             <button type="button" id="readProfile" class="primary">اقرأ هذا الحساب</button>
             <button type="button" id="saveProfile" disabled>احفظ في المنصة</button>
+            <button type="button" id="scoreProfile" disabled>قيّم</button>
+            <button type="button" id="draftMessage" disabled>اكتب رسالة</button>
           </div>
           <div id="profileOut" class="out" hidden></div>
+          <div id="scoreOut" class="out" hidden></div>
+          <div id="messageBox" hidden>
+            <textarea id="messageText" rows="5"></textarea>
+            <div class="row">
+              <button type="button" id="copyMessage">نسخ الرسالة</button>
+              <button type="button" id="whatsapp" class="whatsapp" hidden>فتح واتساب</button>
+            </div>
+            <p class="hint">أنت من يرسل الرسالة؛ الإضافة لا ترسل شيئاً بنفسها.</p>
+          </div>
         </div>
 
         <div class="card">
@@ -146,6 +161,17 @@
             </label>
             <label>حد الخطوات اليومي على إنستقرام
               <input name="dailyInstagramActions" type="number" min="1" max="5000" />
+            </label>
+            <label class="check"><input type="checkbox" name="showBadge" /> إظهار علامة «في المنصة / جديد» على حسابات إنستقرام</label>
+          </div>
+
+          <div class="card">
+            <h2>التقييم والرسائل</h2>
+            <label>العميل المناسب لك (يُستخدم إن لم يكن للمشروع معايير)
+              <textarea name="criteria" rows="2" placeholder="مثال: وسطاء ومسوّقو تداول في الخليج لديهم جمهور نشط"></textarea>
+            </label>
+            <label>ماذا تقدّم (لكتابة الرسائل)
+              <textarea name="offer" rows="2" placeholder="مثال: شراكة وكالة مع وسيط مرخّص بعمولات أسبوعية"></textarea>
             </label>
           </div>
           <div class="row sticky">

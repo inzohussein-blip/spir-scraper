@@ -54,6 +54,26 @@ try {
   assert.ok(await page.getByRole("link", { name: "مهتم 1" }).isVisible());
   step("search and CRM status");
 
+  // Follow-up date (saved on change, kept after reload).
+  await page.fill('input[aria-label="تذكير متابعة @user12"]', "2030-01-15");
+  await page.waitForTimeout(1000);
+  await page.reload();
+  assert.equal(await page.inputValue('input[aria-label="تذكير متابعة @user12"]'), "2030-01-15");
+  step("follow-up reminder date");
+
+  // Kanban board: move a card with the keyboard-friendly select.
+  await page.goto(`${B}/leads/board`);
+  const interested = page.locator('section[data-status="interested"]');
+  await interested.getByText("@user12").waitFor();
+  await page.selectOption('select[aria-label="نقل @user12"]', "customer");
+  await page.locator('section[data-status="customer"]').getByText("@user12").waitFor();
+  await page.waitForTimeout(1000);
+  await page.reload();
+  await page.locator('section[data-status="customer"]').getByText("@user12").waitFor();
+  step("leads board: move a card between columns");
+
+  await page.goto(`${B}/leads`);
+
   const download = page.waitForEvent("download");
   await page.click("text=Excel");
   // An XLSX file is a ZIP archive: it starts with "PK".
@@ -66,7 +86,8 @@ try {
   await page.click('button:has-text("إنشاء مفتاح")');
   await page.waitForSelector("text=انسخ المفتاح الآن");
   assert.ok(await page.locator("text=صحة النظام").isVisible());
-  step("API key and health card");
+  assert.ok(await page.locator("text=الصرف هذا الشهر").isVisible());
+  step("API key, health and spend cards");
 
   // The browser extension is offered from the dashboard (built into public/downloads by the deploy).
   await page.goto(`${B}/extension`);

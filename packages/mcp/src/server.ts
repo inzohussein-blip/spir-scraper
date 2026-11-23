@@ -282,12 +282,14 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
       title: "Set a lead's status",
       description:
         "Record where the owner is with a lead: new, contacted, interested, customer or rejected, with an optional note. " +
+        "follow_up_at (ISO date) sets a reminder the owner receives on that day; null clears it. " +
         "Kept when the account is collected again.",
       inputSchema: z.object({
         project: z.string(),
         username: z.string(),
         status: z.enum(STATUSES),
         note: z.string().max(500).optional(),
+        follow_up_at: z.iso.datetime({ offset: true }).or(z.iso.date()).nullable().optional(),
       }),
     },
     guard(async (a) => {
@@ -298,6 +300,12 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         status: a.status,
         ...(a.note !== undefined ? { note: a.note } : {}),
       });
+      if (updated && a.follow_up_at !== undefined)
+        await rt.scrapers.setFollowUp({
+          projectId,
+          username: a.username,
+          at: a.follow_up_at === null ? null : new Date(a.follow_up_at),
+        });
       return updated
         ? json({ updated: true })
         : fail(`@${a.username} is not a lead in this project`);
