@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   type AnyDb,
+  accounts,
   apiKeys,
   auditLog,
   competitorSnapshots,
@@ -12,6 +13,7 @@ import {
   leads,
   monitors,
   notifications,
+  people,
   profileSnapshots,
   profiles,
   projects,
@@ -37,12 +39,15 @@ import {
 } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import {
+  type AccountRef,
   analyzePosts,
   assignPersona,
   createMxChecker,
   detectLanguage,
   fetchLinkPage,
   growthPercent,
+  linkedAccounts,
+  parseAccountUrl,
   profileChanges,
   profileQuality,
   type ResolveDeps,
@@ -53,7 +58,13 @@ import {
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadQuery, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
-import { NotFoundError, type RawProfile, type Source } from "../types.js";
+import {
+  AccountNotFoundError,
+  type Connector,
+  NotFoundError,
+  type RawProfile,
+  type Source,
+} from "../types.js";
 import { NoProviderError, type ProviderRouter } from "./router.js";
 
 export const QUEUES = {
@@ -110,6 +121,8 @@ export interface LeadFilters {
   signal?: string;
   /** Words or phrases with the same meaning; a lead matches any of them. */
   terms?: string[];
+  /** Has an account on this other platform (youtube, telegram, tiktok, website...). */
+  platform?: string;
   limit?: number;
   offset?: number;
   /** Opaque cursor from a previous page (keyset pagination). */
@@ -197,6 +210,8 @@ export function createScrapers(deps: {
   resolve?: ResolveDeps;
   /** Called when a finished job (scored, if the project has AI criteria) is ready to export. */
   onReadyToExport?: (jobId: string) => Promise<void>;
+  /** Readers for other platforms (YouTube, Telegram...), one per platform. */
+  connectors?: Connector[];
 }) {
   const { db, boss, router, config, scorer } = deps;
   const sinks = deps.sinks ?? [];
@@ -205,6 +220,7 @@ export function createScrapers(deps: {
     checkEmail: createMxChecker(),
   };
   const cacheDays = config.profileCacheDays ?? 30;
+  const connectors = new Map((deps.connectors ?? []).map((c) => [c.platform, c]));
   const pepper = config.suppressionPepper;
 
   // ---- small shared stores (serverless-safe) ----
@@ -461,11 +477,18 @@ export function createScrapers(deps: {
       ...(rise.rising ? ["rising"] : []),
       ...(before && !before.isBusiness && p.isBusiness ? ["became_business"] : []),
     ];
-    const row = { ...values, signals: signals.length ? signals : null };
+    // Every Instagram account belongs to a person; their other platforms hang off the person.
+    let personId = before?.personId ?? null;
+    if (!personId) {
+      const [person] = await db.insert(people).values({}).returning({ id: people.id });
+      personId = person?.id ?? null;
+    }
+    const row = { ...values, personId, signals: signals.length ? signals : null };
     await db
       .insert(profiles)
       .values(row)
       .onConflictDoUpdate({ target: profiles.igUserId, set: row });
+    if (personId) await linkAccounts(personId, linkedAccounts(p.bio, p.externalUrl), "bio_link");
     const changes = before ? profileChanges(before, values) : [];
     if (rise.rising && !before?.signals?.includes("rising"))
       changes.push(`ينمو بسرعة (+${rise.percent}% خلال ${rise.days} يوماً)`);
@@ -825,6 +848,57 @@ export function createScrapers(deps: {
     await collectPendingScores();
   }
 
+  /**
+   * Attaches accounts to a person. An account already attached to someone
+   * else stays where it is (two people never share an account).
+   */
+  async function linkAccounts(personId: string, refs: AccountRef[], source: "bio_link" | "manual") {
+    const own = refs.filter((r) => !(r.platform === "instagram"));
+    if (own.length === 0) return [];
+    return db
+      .insert(accounts)
+      .values(
+        own.map((r) => ({ personId, platform: r.platform, handle: r.handle, url: r.url, source })),
+      )
+      .onConflictDoNothing({ target: [accounts.platform, accounts.handle] })
+      .returning({ id: accounts.id, platform: accounts.platform });
+  }
+
+  /** Reads an account through its platform's connector and stores what it found. */
+  async function refreshAccount(id: string) {
+    const [acc] = await db.select().from(accounts).where(eq(accounts.id, id));
+    if (!acc) return null;
+    const connector = connectors.get(acc.platform);
+    if (!connector) return acc;
+    try {
+      const r = await connector.getAccount(acc.handle);
+      const [updated] = await db
+        .update(accounts)
+        .set({
+          displayName: r.displayName,
+          bio: r.bio?.slice(0, 2000) ?? null,
+          followers: r.followers,
+          stats: r.stats ?? null,
+          fetchedAt: new Date(),
+          error: null,
+        })
+        .where(eq(accounts.id, id))
+        .returning();
+      return updated ?? acc;
+    } catch (err) {
+      const message =
+        err instanceof AccountNotFoundError
+          ? "غير موجود أو خاص"
+          : (err as Error).message.slice(0, 300);
+      const [updated] = await db
+        .update(accounts)
+        .set({ error: message, fetchedAt: new Date() })
+        .where(eq(accounts.id, id))
+        .returning();
+      return updated ?? acc;
+    }
+  }
+
   /** Puts every lead of the project in the persona whose words it uses most. */
   async function assignPersonas(
     projectId: string,
@@ -964,6 +1038,10 @@ export function createScrapers(deps: {
     if (f.minFollowers !== undefined) conds.push(gte(profiles.followers, f.minFollowers));
     if (f.maxFollowers !== undefined) conds.push(lte(profiles.followers, f.maxFollowers));
     if (f.persona) conds.push(eq(leads.persona, f.persona));
+    if (f.platform)
+      conds.push(
+        sql`exists (select 1 from ${accounts} a where a.person_id = ${profiles.personId} and a.platform = ${f.platform})`,
+      );
     if (f.signal) conds.push(sql`${profiles.signals} @> array[${f.signal}]::text[]`);
     const terms = (f.terms ?? []).map((t) => t.trim().toLowerCase()).filter((t) => t.length > 1);
     if (terms.length)
@@ -1588,6 +1666,136 @@ export function createScrapers(deps: {
         .sort((a, b) => b.revenue - a.revenue || b.customers - a.customers || b.leads - a.leads);
     },
 
+    /** Platforms this server can read (an official connector is configured). */
+    connectedPlatforms(): string[] {
+      return [...connectors.keys()];
+    },
+
+    /** A lead's person's accounts on other platforms. */
+    async personAccounts(username: string) {
+      const [p] = await db
+        .select({ personId: profiles.personId })
+        .from(profiles)
+        .where(eq(profiles.username, username.replace(/^@/, "").toLowerCase()));
+      if (!p?.personId) return [];
+      return db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.personId, p.personId))
+        .orderBy(accounts.platform, accounts.handle);
+    },
+
+    /**
+     * Adds an account on another platform to a lead (pasted by the owner),
+     * then reads it if a connector exists. Returns null for an address that
+     * is not an account, or the account when it already belongs to someone else.
+     */
+    async addAccount(input: { username: string; url: string }) {
+      const ref = parseAccountUrl(input.url);
+      if (!ref || ref.platform === "instagram")
+        return { ok: false as const, reason: "not_account" };
+      const [p] = await db
+        .select({ igUserId: profiles.igUserId, personId: profiles.personId })
+        .from(profiles)
+        .where(eq(profiles.username, input.username.replace(/^@/, "").toLowerCase()));
+      if (!p) return { ok: false as const, reason: "no_lead" };
+      let personId = p.personId;
+      if (!personId) {
+        const [person] = await db.insert(people).values({}).returning({ id: people.id });
+        personId = person?.id ?? null;
+        await db.update(profiles).set({ personId }).where(eq(profiles.igUserId, p.igUserId));
+      }
+      if (!personId) return { ok: false as const, reason: "no_lead" };
+      const [existing] = await db
+        .select()
+        .from(accounts)
+        .where(and(eq(accounts.platform, ref.platform), eq(accounts.handle, ref.handle)));
+      if (existing && existing.personId !== personId)
+        return { ok: false as const, reason: "taken", account: existing };
+      const [added] = existing ? [existing] : await linkAccounts(personId, [ref], "manual");
+      if (!added) return { ok: false as const, reason: "not_account" };
+      return { ok: true as const, account: await refreshAccount(added.id) };
+    },
+
+    refreshAccount,
+
+    /**
+     * Reads accounts found in bios that were never read, for the platforms with
+     * a connector (the daily task). YouTube's free quota covers about 10,000 a day.
+     */
+    async refreshPendingAccounts(limit = 200) {
+      const platforms = [...connectors.keys()];
+      if (platforms.length === 0) return 0;
+      const pending = await db
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(and(isNull(accounts.fetchedAt), inArray(accounts.platform, platforms)))
+        .orderBy(accounts.createdAt)
+        .limit(limit);
+      for (const a of pending) await refreshAccount(a.id);
+      return pending.length;
+    },
+
+    async removeAccount(id: string) {
+      await db.delete(accounts).where(eq(accounts.id, id));
+    },
+
+    /**
+     * Finds other-platform accounts in the bios and links of a project's leads
+     * (no network: only what is already stored), then reads up to `read` of
+     * them through the connectors. For leads collected before this existed.
+     */
+    async linkProjectAccounts(projectId: string, opts: { read?: number } = {}) {
+      const rows = await db
+        .select({
+          igUserId: profiles.igUserId,
+          personId: profiles.personId,
+          bio: profiles.bio,
+          externalUrl: profiles.externalUrl,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(eq(leads.projectId, projectId))
+        .limit(20_000);
+      let found = 0;
+      const toRead: string[] = [];
+      for (const r of rows) {
+        const refs = linkedAccounts(r.bio, r.externalUrl);
+        if (refs.length === 0) continue;
+        let personId = r.personId;
+        if (!personId) {
+          const [person] = await db.insert(people).values({}).returning({ id: people.id });
+          personId = person?.id ?? null;
+          await db.update(profiles).set({ personId }).where(eq(profiles.igUserId, r.igUserId));
+        }
+        if (!personId) continue;
+        const added = await linkAccounts(personId, refs, "bio_link");
+        found += added.length;
+        for (const a of added) if (connectors.has(a.platform)) toRead.push(a.id);
+      }
+      let read = 0;
+      for (const id of toRead.slice(0, opts.read ?? 50)) {
+        await refreshAccount(id);
+        read++;
+      }
+      return { leads: rows.length, found, read };
+    },
+
+    /** How many of a project's leads have an account on each platform. */
+    async platformCounts(projectId: string) {
+      const rows = await db
+        .select({ platform: accounts.platform, n: sql<number>`count(distinct ${leads.id})::int` })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .innerJoin(accounts, eq(accounts.personId, profiles.personId))
+        .where(eq(leads.projectId, projectId))
+        .groupBy(accounts.platform);
+      return Object.fromEntries(rows.map((r) => [r.platform, Number(r.n)])) as Record<
+        string,
+        number
+      >;
+    },
+
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */
     async bulkUpdateLeads(input: {
       projectId: string;
@@ -1667,7 +1875,18 @@ export function createScrapers(deps: {
         .select({ bio: profiles.bio })
         .from(profiles)
         .where(eq(profiles.username, u));
-      return { lead: row, bio: p?.bio ?? null, events };
+      const [pp] = await db
+        .select({ personId: profiles.personId })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      const accs = pp?.personId
+        ? await db
+            .select()
+            .from(accounts)
+            .where(eq(accounts.personId, pp.personId))
+            .orderBy(accounts.platform, accounts.handle)
+        : [];
+      return { lead: row, bio: p?.bio ?? null, events, accounts: accs };
     },
 
     /** Understands a question in plain language and returns the matching leads. */

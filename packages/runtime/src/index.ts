@@ -1,5 +1,6 @@
 import { AnthropicScorer } from "@scrapers/ai";
 import {
+  type Connector,
   createScrapers,
   type LeadFilters,
   type NotificationSink,
@@ -20,7 +21,7 @@ import {
   toCsv,
   toXlsx,
 } from "@scrapers/exporters";
-import { ApifyProvider, providersFromEnv } from "@scrapers/providers";
+import { ApifyProvider, connectorsFromEnv, providersFromEnv } from "@scrapers/providers";
 import { PgBoss } from "pg-boss";
 import { WebPushSink } from "./push.js";
 import { type FetchLike, TelegramNotifier } from "./telegram.js";
@@ -69,6 +70,8 @@ export interface RuntimeOverrides {
   db?: AnyDb;
   boss?: PgBoss;
   providers?: Provider[];
+  /** Readers for other platforms; defaults to the ones configured in the environment. */
+  connectors?: Connector[];
   scorer?: Scorer | null;
   sheetsRequest?: GoogleRequest;
   sheetsEmail?: string;
@@ -169,6 +172,7 @@ export async function createRuntime(
     ...(env.APP_URL ? { appUrl: env.APP_URL } : {}),
     ...(o.resolve ? { resolve: o.resolve } : {}),
     onReadyToExport: (jobId) => autoExport(jobId),
+    connectors: o.connectors ?? connectorsFromEnv(env),
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,
       maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 1000),

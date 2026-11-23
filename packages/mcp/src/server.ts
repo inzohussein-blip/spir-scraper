@@ -176,6 +176,20 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
           .enum(["rising", "became_business"])
           .optional()
           .describe("rising: grew 20%+ over 2+ weeks while 1k-200k followers"),
+        platform: z
+          .enum([
+            "tiktok",
+            "youtube",
+            "telegram",
+            "x",
+            "facebook",
+            "linkedin",
+            "snapchat",
+            "threads",
+            "website",
+          ])
+          .optional()
+          .describe("Only leads with an account on this other platform"),
         terms: z
           .array(z.string())
           .max(20)
@@ -207,6 +221,7 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         ...(a.persona ? { persona: a.persona } : {}),
         ...(a.signal ? { signal: a.signal } : {}),
         ...(a.terms?.length ? { terms: a.terms } : {}),
+        ...(a.platform ? { platform: a.platform } : {}),
         ...(a.cursor ? { cursor: a.cursor } : {}),
         limit: a.limit,
       });
@@ -557,6 +572,48 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         );
       return json(await rt.scrapers.buildPersonas(await projectIdFor(rt, a.project)));
     }),
+  );
+
+  server.registerTool(
+    "add_account",
+    {
+      title: "Add a lead's account on another platform",
+      description:
+        "Attach a lead's TikTok, YouTube, Telegram, X, Facebook, LinkedIn or website by its address. YouTube channels " +
+        "and public Telegram channels are then read through their official APIs (name, description, subscribers or members). " +
+        "lead_detail lists every account a lead has.",
+      inputSchema: z.object({ username: z.string(), url: z.string().max(500) }),
+    },
+    guard(async (a) => {
+      const r = await rt.scrapers.addAccount({ username: a.username, url: a.url });
+      if (r.ok) return json({ account: r.account });
+      return fail(
+        r.reason === "taken"
+          ? "That account is already linked to another lead"
+          : r.reason === "no_lead"
+            ? `@${a.username} is not a collected account`
+            : "Not an account address on a known platform",
+      );
+    }),
+  );
+
+  server.registerTool(
+    "link_accounts",
+    {
+      title: "Link leads' other platforms",
+      description:
+        "Scan the bios and links of a project's leads for their accounts on other platforms (no network), link them, " +
+        "and read up to `read` of them through the official connectors. New leads are linked automatically.",
+      inputSchema: z.object({
+        project: z.string(),
+        read: z.number().int().min(0).max(200).default(30),
+      }),
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.linkProjectAccounts(await projectIdFor(rt, a.project), { read: a.read }),
+      ),
+    ),
   );
 
   server.registerTool(

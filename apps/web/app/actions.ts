@@ -513,3 +513,49 @@ export async function buildPersonas(_: ActionState, form: FormData): Promise<Act
     );
   }
 }
+
+/** Adds a lead's account on another platform from a pasted link, and reads it. */
+export async function addAccount(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const username = str(form, "username");
+  const r = await (await getRuntime()).scrapers.addAccount({ username, url: str(form, "url") });
+  if (!r.ok)
+    return {
+      error:
+        r.reason === "taken"
+          ? "هذا الحساب مربوط بعميل آخر"
+          : r.reason === "no_lead"
+            ? "العميل غير موجود"
+            : "الرابط ليس حساباً على منصة (مثال: t.me/قناة أو youtube.com/@قناة أو tiktok.com/@حساب)",
+    };
+  await audit("account.add", { username, platform: r.account?.platform ?? null });
+  revalidatePath(`/leads/${username}`);
+  return { message: r.account?.error ? `أُضيف، لكن: ${r.account.error}` : "أُضيف الحساب" };
+}
+
+/** Reads one account again through its platform's connector. */
+export async function refreshAccount(id: string, username: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.refreshAccount(id);
+  revalidatePath(`/leads/${username}`);
+}
+
+export async function removeAccount(id: string, username: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.removeAccount(id);
+  await audit("account.remove", { id });
+  revalidatePath(`/leads/${username}`);
+}
+
+/** Finds other-platform accounts in the bios of a project's leads and reads some of them. */
+export async function linkProjectAccounts(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const r = await (await getRuntime()).scrapers.linkProjectAccounts(str(form, "project"), {
+    read: 30,
+  });
+  await audit("project.link_accounts", r);
+  revalidatePath("/leads");
+  return {
+    message: `فُحص ${r.leads} عميلاً: ${r.found} حساباً جديداً على منصات أخرى، قُرئ منها ${r.read}. الباقي يُقرأ مع المهمة اليومية.`,
+  };
+}

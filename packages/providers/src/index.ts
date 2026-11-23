@@ -1,9 +1,13 @@
-import type { Provider } from "@scrapers/core";
+import type { Connector, Provider } from "@scrapers/core";
 import { ApifyProvider } from "./apify.js";
+import { TelegramConnector } from "./connectors/telegram.js";
+import { YouTubeConnector } from "./connectors/youtube.js";
 import { GraphProvider } from "./graph.js";
 import { WorkerProvider } from "./worker.js";
 
 export * from "./apify.js";
+export * from "./connectors/telegram.js";
+export * from "./connectors/youtube.js";
 export * from "./graph.js";
 export * from "./http.js";
 export * from "./worker.js";
@@ -46,5 +50,16 @@ export function providersFromEnv(env: NodeJS.ProcessEnv = process.env): Provider
       }),
     );
   }
+  return list;
+}
+
+/**
+ * Readers for other platforms, through official interfaces only:
+ * YouTube Data API (YOUTUBE_API_KEY) and the Telegram Bot API (TELEGRAM_BOT_TOKEN).
+ */
+export function connectorsFromEnv(env: NodeJS.ProcessEnv = process.env): Connector[] {
+  const list: Connector[] = [];
+  if (env.YOUTUBE_API_KEY) list.push(new YouTubeConnector(env.YOUTUBE_API_KEY));
+  if (env.TELEGRAM_BOT_TOKEN) list.push(new TelegramConnector(env.TELEGRAM_BOT_TOKEN));
   return list;
 }

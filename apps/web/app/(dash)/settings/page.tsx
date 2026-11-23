@@ -20,7 +20,8 @@ const LABELS: Record<keyof ReturnType<typeof integrationStatus>, [string, string
   graph: ["Instagram Graph API (حساب تجاري/صانع محتوى)", "IG_GRAPH_TOKEN"],
   ai: ["التقييم بالذكاء الاصطناعي", "ANTHROPIC_API_KEY"],
   sheets: ["Google Sheets", "GOOGLE_SERVICE_ACCOUNT_JSON"],
-  telegram: ["إشعارات تلكرام وكود الدخول", "TELEGRAM_BOT_TOKEN"],
+  telegram: ["إشعارات تلكرام وكود الدخول، وقراءة قنوات تلكرام العامة", "TELEGRAM_BOT_TOKEN"],
+  youtube: ["قراءة قنوات يوتيوب (مجاني، الواجهة الرسمية)", "YOUTUBE_API_KEY"],
   cron: ["المهام الخلفية", "CRON_SECRET"],
 };
 

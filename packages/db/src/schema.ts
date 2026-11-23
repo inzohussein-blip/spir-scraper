@@ -103,8 +103,16 @@ export const jobs = pgTable(
   ],
 );
 
+/** One real person or business, whatever platforms they are on. */
+export const people = pgTable("people", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdAt: createdAt(),
+});
+
 export const profiles = pgTable("profiles", {
   igUserId: text("ig_user_id").primaryKey(),
+  /** The person this Instagram account belongs to (see accounts for their other platforms). */
+  personId: uuid("person_id").references(() => people.id, { onDelete: "set null" }),
   username: text("username").notNull().unique(),
   fullName: text("full_name"),
   bio: text("bio"),
@@ -373,3 +381,37 @@ export const profileSnapshots = pgTable(
   },
   (t) => [index("profile_snapshots_profile_idx").on(t.profileId, t.at.desc())],
 );
+
+/**
+ * A person's accounts on other platforms (TikTok, YouTube, Telegram, X, their
+ * website...). Found in their own bio or link, or added by the owner.
+ */
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    personId: uuid("person_id")
+      .notNull()
+      .references(() => people.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    handle: text("handle").notNull(),
+    url: text("url").notNull(),
+    /** bio_link (in their own bio or link) | manual (added by the owner) */
+    source: text("source").notNull(),
+    displayName: text("display_name"),
+    bio: text("bio"),
+    /** Followers, subscribers or members, whatever the platform counts. */
+    followers: integer("followers"),
+    /** Platform-specific numbers, e.g. videos and views for YouTube. */
+    stats: jsonb("stats").$type<Record<string, number | string | null>>(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+    error: text("error"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("accounts_platform_handle_uq").on(t.platform, t.handle),
+    index("accounts_person_idx").on(t.personId),
+  ],
+);
+
+export type Account = typeof accounts.$inferSelect;

@@ -2,6 +2,7 @@ import { competitorSnapshots, profiles as profilesTable } from "@scrapers/db";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { parseSource, uploadSource } from "../src/source.js";
+import { AccountNotFoundError } from "../src/types.js";
 import { FakeProvider, FakeScorer, fakeProfile, setup } from "./helpers.js";
 
 type T = Awaited<ReturnType<typeof setup>>;
@@ -407,6 +408,140 @@ describe("meaning, segments and timing", () => {
     try {
       const p = await t.scrapers.createProject({ name: "p", owner: "o" });
       await expect(t.scrapers.buildPersonas(p.id)).rejects.toThrow(/ANTHROPIC_API_KEY/);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("people across platforms", () => {
+  it("links accounts from bios, reads them through connectors and filters by platform", async () => {
+    const bios: Record<string, string> = {
+      a1: "مدرب ذهب | يوتيوب: @FxArab · تلكرام @gold_signals",
+      a2: "no links here",
+      a3: "https://www.tiktok.com/@a3coach",
+    };
+    const reads: string[] = [];
+    const youtube = {
+      platform: "youtube",
+      getAccount: async (h: string) => {
+        reads.push(`yt:${h}`);
+        return { displayName: "FX Arab", bio: "قناة", followers: 15400, stats: { videos: 210 } };
+      },
+    };
+    const telegram = {
+      platform: "telegram",
+      getAccount: async (h: string) => {
+        reads.push(`tg:${h}`);
+        if (h === "private_one") throw new AccountNotFoundError("chat not found");
+        return { displayName: "إشارات", bio: null, followers: 8200 };
+      },
+    };
+    const t = await setup(
+      [
+        new FakeProvider("worker", ["profile"], {
+          profile: (u) => ({ ...fakeProfile(u), bio: bios[u] ?? "" }),
+        }),
+      ],
+      undefined,
+      { connectors: [youtube, telegram] },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await t.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(Object.keys(bios)),
+        limit: 10,
+      });
+      await settle(t);
+
+      // Found in the bios while collecting; nothing read yet.
+      let a1 = await t.scrapers.personAccounts("a1");
+      expect(a1.map((a) => `${a.platform}:${a.handle}:${a.source}`)).toEqual([
+        "telegram:gold_signals:bio_link",
+        "youtube:fxarab:bio_link",
+      ]);
+      expect(a1.every((a) => a.fetchedAt === null)).toBe(true);
+      expect(await t.scrapers.platformCounts(p.id)).toEqual({ telegram: 1, tiktok: 1, youtube: 1 });
+
+      // Reading them for leads collected before (or not yet read).
+      const linked = await t.scrapers.linkProjectAccounts(p.id);
+      expect(linked).toMatchObject({ leads: 3, found: 0, read: 0 });
+      for (const a of a1) await t.scrapers.refreshAccount(a.id);
+      a1 = await t.scrapers.personAccounts("a1");
+      expect(a1.find((a) => a.platform === "youtube")).toMatchObject({
+        displayName: "FX Arab",
+        followers: 15400,
+        stats: { videos: 210 },
+        error: null,
+      });
+      expect(reads.sort()).toEqual(["tg:gold_signals", "yt:fxarab"]);
+
+      // The owner pastes a link; a private chat is recorded as such.
+      const added = await t.scrapers.addAccount({
+        username: "a2",
+        url: "https://t.me/private_one",
+      });
+      expect(added).toMatchObject({
+        ok: true,
+        account: { platform: "telegram", error: "غير موجود أو خاص" },
+      });
+      expect(
+        await t.scrapers.addAccount({ username: "a2", url: "https://www.youtube.com/watch?v=1" }),
+      ).toEqual({
+        ok: false,
+        reason: "not_account",
+      });
+      // An account already linked to someone else is not moved.
+      const taken = await t.scrapers.addAccount({
+        username: "a2",
+        url: "https://t.me/gold_signals",
+      });
+      expect(taken).toMatchObject({ ok: false, reason: "taken" });
+
+      expect(
+        (await t.scrapers.listLeads({ projectId: p.id, platform: "youtube" })).map(
+          (l) => l.username,
+        ),
+      ).toEqual(["a1"]);
+      const detail = await t.scrapers.leadDetail(p.id, "a1");
+      expect(detail?.accounts).toHaveLength(2);
+      expect(t.scrapers.connectedPlatforms().sort()).toEqual(["telegram", "youtube"]);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("daily account reads", () => {
+  it("reads accounts that were never read, only for connected platforms", async () => {
+    const t = await setup(
+      [
+        new FakeProvider("worker", ["profile"], {
+          profile: (u) => ({ ...fakeProfile(u), bio: "يوتيوب: @chan1 تيك توك: @tt1" }),
+        }),
+      ],
+      undefined,
+      {
+        connectors: [
+          {
+            platform: "youtube",
+            getAccount: async () => ({ displayName: "C", bio: null, followers: 10 }),
+          },
+        ],
+      },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(["b1"]), limit: 1 });
+      await settle(t);
+      expect(await t.scrapers.refreshPendingAccounts()).toBe(1);
+      expect(await t.scrapers.refreshPendingAccounts()).toBe(0);
+      const accs = await t.scrapers.personAccounts("b1");
+      expect(accs.map((a) => [a.platform, a.followers])).toEqual([
+        ["tiktok", null],
+        ["youtube", 10],
+      ]);
     } finally {
       await t.close();
     }

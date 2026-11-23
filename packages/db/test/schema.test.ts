@@ -71,6 +71,7 @@ describe("migrations", () => {
        where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname`,
     );
     expect(rows.map((r) => r.relname)).toEqual([
+      "accounts",
       "api_keys",
       "audit_log",
       "competitor_snapshots",
@@ -81,6 +82,7 @@ describe("migrations", () => {
       "leads",
       "monitors",
       "notifications",
+      "people",
       "profile_snapshots",
       "profiles",
       "projects",

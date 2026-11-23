@@ -37,6 +37,33 @@ export interface RecentPost {
   url?: string | null;
 }
 
+/** What a connector reads about an account on another platform. */
+export interface RemoteAccount {
+  displayName: string | null;
+  bio: string | null;
+  /** Followers, subscribers or members. */
+  followers: number | null;
+  stats?: Record<string, number | string | null>;
+}
+
+/**
+ * Reads public accounts on one platform through its official interface
+ * (YouTube Data API, Telegram Bot API, ...). One connector per platform.
+ */
+export interface Connector {
+  /** A Platform from extract/accounts (tiktok, youtube, telegram, ...). */
+  readonly platform: string;
+  /** Throws AccountNotFoundError when the account does not exist or is private. */
+  getAccount(handle: string): Promise<RemoteAccount>;
+}
+
+export class AccountNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AccountNotFoundError";
+  }
+}
+
 export type ProviderId = "graph" | "apify" | "worker";
 
 export type SourceType = "profile" | "followers" | "post" | "hashtag" | "upload";

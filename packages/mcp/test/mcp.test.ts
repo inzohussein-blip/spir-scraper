@@ -39,6 +39,7 @@ describe("MCP server over Streamable HTTP", () => {
   it("lists the planned tools, resources and prompts", async () => {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(tools).toEqual([
+      "add_account",
       "add_lead_note",
       "analyze_competitor",
       "build_personas",
@@ -48,6 +49,7 @@ describe("MCP server over Streamable HTTP", () => {
       "get_job",
       "get_profile",
       "lead_detail",
+      "link_accounts",
       "list_leads",
       "list_monitors",
       "score_leads",

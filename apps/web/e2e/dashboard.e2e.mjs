@@ -101,6 +101,15 @@ try {
   await page.waitForSelector("li >> text=طلب عرض الأسعار");
   step("lead page: history and notes");
 
+  await page.fill(
+    'input[aria-label="رابط حساب على منصة أخرى"]',
+    "https://www.tiktok.com/@gold.coach",
+  );
+  await page.click('button:has-text("أضف")');
+  await page.waitForSelector("text=أُضيف الحساب");
+  await page.waitForSelector("a:has-text('@gold.coach')");
+  step("lead page: an account on another platform");
+
   // A closed deal shows up as revenue for the source that found the lead.
   await page.fill('input[aria-label="قيمة الصفقة بالدولار"]', "750");
   await page.click('button:has-text("حفظ")');

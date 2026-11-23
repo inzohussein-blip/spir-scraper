@@ -27,6 +27,7 @@ export function integrationStatus() {
     ai: !!process.env.ANTHROPIC_API_KEY,
     sheets: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
     telegram: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    youtube: !!process.env.YOUTUBE_API_KEY,
     cron: !!process.env.CRON_SECRET,
   };
 }

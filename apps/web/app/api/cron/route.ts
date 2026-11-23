@@ -29,6 +29,7 @@ export async function GET(req: Request) {
   const monitorJobs = await step("monitors", () => rt.scrapers.runDueMonitors(), [] as string[]);
   const competitors = await step("competitors", () => rt.scrapers.snapshotCompetitors(), null);
   const followUps = await step("follow-ups", () => rt.scrapers.sendDueFollowUps(), 0);
+  const accountsRead = await step("accounts", () => rt.scrapers.refreshPendingAccounts(), 0);
   const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
   let backupSent = false;
   if (weekly && rt.telegram) {
@@ -64,6 +65,7 @@ export async function GET(req: Request) {
     monitorJobs,
     competitors,
     followUps,
+    accountsRead,
     weeklySent: !!weekly,
     backupSent,
   });

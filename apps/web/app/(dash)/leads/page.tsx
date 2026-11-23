@@ -1,8 +1,9 @@
-import { LANGUAGE_LABELS } from "@scrapers/core";
+import { LANGUAGE_LABELS, PLATFORM_LABELS, type Platform } from "@scrapers/core";
 import Link from "next/link";
 import {
   addMonitor,
   bulkLeads,
+  linkProjectAccounts,
   removeMonitor,
   suppress,
   toggleMonitor,
@@ -47,6 +48,7 @@ type Search = {
   ask?: string;
   persona?: string;
   signal?: string;
+  platform?: string;
 };
 
 /** Countries offered in the filter; the most common markets first. */
@@ -136,7 +138,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       };
     }
   }
-  const [page, counts, monitors] = await Promise.all([
+  const [page, counts, monitors, platformCounts] = await Promise.all([
     rt.scrapers.listLeadsPage({
       projectId,
       ...(q.job ? { jobId: q.job } : {}),
@@ -150,12 +152,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       ...(language ? { language } : {}),
       ...(minSources && minSources > 1 ? { minSources } : {}),
       ...(q.persona ? { persona: q.persona } : {}),
+      ...(q.platform && q.platform in PLATFORM_LABELS ? { platform: q.platform } : {}),
       ...(q.signal === "rising" || q.signal === "became_business" ? { signal: q.signal } : {}),
       ...(q.cursor ? { cursor: q.cursor } : {}),
       limit: PAGE,
     }),
     rt.scrapers.leadStatusCounts(projectId),
     rt.scrapers.listMonitors(projectId),
+    rt.scrapers.platformCounts(projectId),
   ]);
   const rows = askedRows ?? page.leads;
   const total = Object.values(counts).reduce((a, b) => a + (b ?? 0), 0);
@@ -274,6 +278,25 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           />
           <Button type="submit">اسأل</Button>
         </form>
+        {Object.keys(platformCounts).length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-xs text-muted">لهم حساب على:</span>
+            {Object.entries(platformCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([pl, n]) => (
+                <Link
+                  key={pl}
+                  href={href({ platform: q.platform === pl ? undefined : pl })}
+                  className={cx(
+                    "rounded-full px-3 py-1",
+                    q.platform === pl ? "bg-accent-soft text-accent" : "bg-bg-2 text-fg-2",
+                  )}
+                >
+                  {PLATFORM_LABELS[pl as Platform] ?? pl} {n}
+                </Link>
+              ))}
+          </div>
+        )}
         {asked?.error && (
           <div className="mt-3">
             <Notice tone="warn">{asked.error}</Notice>
@@ -595,6 +618,16 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                 placeholder="وكيل، IB، شراكة"
               />
             </Field>
+          </ActionForm>
+        </Card>
+
+        <Card
+          title="الحسابات في المنصات الأخرى"
+          icon="plug"
+          description="يبحث في بايو وروابط كل عملاء المشروع عن حساباتهم في تيك توك ويوتيوب وتلكرام وX ومواقعهم، ويربطها بهم. الجدد يُربطون تلقائياً."
+        >
+          <ActionForm action={linkProjectAccounts} submit="اربط حسابات العملاء الحاليين">
+            <input type="hidden" name="project" value={projectId} />
           </ActionForm>
         </Card>
 

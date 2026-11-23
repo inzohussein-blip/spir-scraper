@@ -1,6 +1,6 @@
-import { LANGUAGE_LABELS } from "@scrapers/core";
+import { LANGUAGE_LABELS, PLATFORM_LABELS, type Platform } from "@scrapers/core";
 import Link from "next/link";
-import { addLeadNote, saveDeal } from "@/app/actions";
+import { addAccount, addLeadNote, refreshAccount, removeAccount, saveDeal } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { FollowUpInput } from "@/components/follow-up";
 import { StatusSelect } from "@/components/status-select";
@@ -35,6 +35,8 @@ export default async function LeadPage({
   if (!detail) return <Notice tone="warn">هذا الحساب غير موجود في المشروع {project.name}.</Notice>;
   const { lead: r, bio, events } = detail;
   const similar = await rt.scrapers.similarLeads(projectId, r.username, 8);
+  const connected = new Set(rt.scrapers.connectedPlatforms());
+  const COUNT_LABEL: Record<string, string> = { youtube: "مشترك", telegram: "عضو" };
   const wa = waLink(r.phone, r.phoneConfirmed, fillTemplate(project.messageTemplate, r));
 
   return (
@@ -111,6 +113,80 @@ export default async function LeadPage({
               </Badge>
             )}
           </div>
+        </Card>
+
+        <Card
+          title="حساباته في المنصات الأخرى"
+          icon="plug"
+          description="من روابط البايو، أو ما تضيفه أنت. يوتيوب وتلكرام تُقرأ من واجهاتهما الرسمية."
+        >
+          {detail.accounts.length === 0 ? (
+            <p className="mb-3 text-sm text-muted">لم يُذكر في البايو حساب على منصة أخرى.</p>
+          ) : (
+            <ul className="mb-4 divide-y divide-line text-sm">
+              {detail.accounts.map((a) => (
+                <li key={a.id} className="flex flex-wrap items-center gap-2 py-2.5">
+                  <Badge tone="plain" dot={false}>
+                    {PLATFORM_LABELS[a.platform as Platform] ?? a.platform}
+                  </Badge>
+                  <a
+                    href={a.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ltr font-medium text-accent hover:underline"
+                  >
+                    {a.platform === "website" ? a.handle : `@${a.handle}`}
+                  </a>
+                  {a.displayName && <span className="text-muted">{a.displayName}</span>}
+                  {a.followers !== null && (
+                    <span className="tabular-nums">
+                      {fmtNum(a.followers)} {COUNT_LABEL[a.platform] ?? "متابع"}
+                    </span>
+                  )}
+                  {typeof a.stats?.videos === "number" && (
+                    <span className="text-xs text-muted">{fmtNum(a.stats.videos)} فيديو</span>
+                  )}
+                  {a.error && <span className="text-xs text-warn">{a.error}</span>}
+                  <span className="ms-auto flex gap-1">
+                    {connected.has(a.platform) && (
+                      <form action={refreshAccount.bind(null, a.id, r.username)}>
+                        <button
+                          type="submit"
+                          className="rounded px-2 py-0.5 text-xs text-muted hover:bg-bg-2"
+                        >
+                          {a.fetchedAt ? "حدّث" : "اقرأ"}
+                        </button>
+                      </form>
+                    )}
+                    <form action={removeAccount.bind(null, a.id, r.username)}>
+                      <button
+                        type="submit"
+                        className="rounded px-2 py-0.5 text-xs text-muted hover:bg-bad-soft hover:text-bad"
+                        aria-label={`حذف ${a.handle}`}
+                      >
+                        ×
+                      </button>
+                    </form>
+                  </span>
+                  {a.bio && (
+                    <p className="w-full whitespace-pre-line text-xs text-muted">
+                      {a.bio.slice(0, 280)}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <ActionForm action={addAccount} submit="أضف" className="flex items-start gap-2">
+            <input type="hidden" name="username" value={r.username} />
+            <Input
+              name="url"
+              required
+              className="ltr"
+              placeholder="https://t.me/channel أو youtube.com/@channel"
+              aria-label="رابط حساب على منصة أخرى"
+            />
+          </ActionForm>
         </Card>
 
         <Card title="السجل والملاحظات" icon="activity">
