@@ -475,3 +475,115 @@ export const siteWatches = pgTable("site_watches", {
 });
 
 export type SiteWatch = typeof siteWatches.$inferSelect;
+
+/** People who bring clients (coaches, channel owners) with their own tracking link. */
+export const partners = pgTable("partners", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  /** Short code in the tracking link and the broker's sub id. */
+  code: text("code").notNull().unique(),
+  instagram: text("instagram"),
+  /** Share of the commission the partner earns, in percent. */
+  sharePercent: integer("share_percent").notNull().default(0),
+  /** Secret for the partner's read-only page. */
+  portalToken: text("portal_token").notNull().unique(),
+  active: boolean("active").notNull().default(true),
+  createdAt: createdAt(),
+});
+
+export const partnerClicks = pgTable(
+  "partner_clicks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    partnerId: uuid("partner_id")
+      .notNull()
+      .references(() => partners.id, { onDelete: "cascade" }),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("partner_clicks_partner_idx").on(t.partnerId, t.at.desc())],
+);
+
+/**
+ * What the broker reports: registrations, first deposits, deposits, trades and
+ * commissions. Emails and phones are kept only as hashes, for matching.
+ */
+export const brokerEvents = pgTable(
+  "broker_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** registration | ftd | deposit | trade | commission */
+    event: text("event").notNull(),
+    /** The broker's client id. */
+    externalId: text("external_id"),
+    emailHash: text("email_hash"),
+    phoneHash: text("phone_hash"),
+    amount: numeric("amount", { precision: 14, scale: 2 }),
+    currency: text("currency"),
+    /** Sub id from the tracking link (a partner's code). */
+    sub: text("sub"),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    partnerId: uuid("partner_id").references(() => partners.id, { onDelete: "set null" }),
+    /** postback | csv */
+    source: text("source").notNull(),
+    /** Same report line twice is stored once. */
+    dedupeKey: text("dedupe_key").notNull().unique(),
+  },
+  (t) => [
+    index("broker_events_lead_idx").on(t.leadId),
+    index("broker_events_partner_idx").on(t.partnerId),
+    index("broker_events_at_idx").on(t.at.desc()),
+  ],
+);
+
+/** The owner's own Instagram posts (Graph API), for comments and what each post brought. */
+export const ownPosts = pgTable("own_posts", {
+  mediaId: text("media_id").primaryKey(),
+  caption: text("caption"),
+  permalink: text("permalink"),
+  type: text("type"),
+  postedAt: timestamp("posted_at", { withTimezone: true }),
+  likes: integer("likes"),
+  comments: integer("comments"),
+  /** Comments showing buying intent. */
+  intentComments: integer("intent_comments").notNull().default(0),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const ownComments = pgTable(
+  "own_comments",
+  {
+    id: text("id").primaryKey(),
+    mediaId: text("media_id")
+      .notNull()
+      .references(() => ownPosts.mediaId, { onDelete: "cascade" }),
+    username: text("username"),
+    text: text("text"),
+    at: timestamp("at", { withTimezone: true }),
+    intent: text("intent").array(),
+    /** The commenter was sent to a project as a lead. */
+    leadSent: boolean("lead_sent").notNull().default(false),
+  },
+  (t) => [index("own_comments_media_idx").on(t.mediaId)],
+);
+
+/** Direct messages to the owner's account (Meta webhook), and the replies sent from here. */
+export const inboxMessages = pgTable(
+  "inbox_messages",
+  {
+    id: text("id").primaryKey(),
+    /** The other person's Instagram-scoped id: one thread per person. */
+    threadId: text("thread_id").notNull(),
+    username: text("username"),
+    direction: text("direction").notNull(),
+    text: text("text"),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+  },
+  (t) => [index("inbox_thread_idx").on(t.threadId, t.at.desc())],
+);
+
+export type Partner = typeof partners.$inferSelect;
+export type BrokerEvent = typeof brokerEvents.$inferSelect;
+export type OwnPost = typeof ownPosts.$inferSelect;
+export type InboxMessage = typeof inboxMessages.$inferSelect;

@@ -4,15 +4,21 @@ import {
   accounts,
   apiKeys,
   auditLog,
+  brokerEvents,
   competitorSnapshots,
   counters,
   ephemeral,
+  inboxMessages,
   jobs,
   type LeadStatus,
   leadEvents,
   leads,
   monitors,
   notifications,
+  ownComments,
+  ownPosts,
+  partnerClicks,
+  partners,
   people,
   places,
   profileSnapshots,
@@ -40,10 +46,13 @@ import {
   sql,
 } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
+import type { BrokerEventInput } from "../broker.js";
+import { checkMessage } from "../compliance.js";
 import {
   type AccountRef,
   analyzePosts,
   assignPersona,
+  commentIntent,
   createMxChecker,
   detectLanguage,
   fetchLinkPage,
@@ -70,6 +79,12 @@ import {
   type TrainedModel,
   trainModel,
 } from "../learn/model.js";
+import {
+  type ContentPlan,
+  MARKET_TOPICS,
+  type MarketTopic,
+  templateContentPlan,
+} from "../market.js";
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadQuery, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
@@ -78,6 +93,7 @@ import {
   type Connector,
   type FollowingSource,
   NotFoundError,
+  type OwnAccount,
   type PlacesSearch,
   type RawProfile,
   type Source,
@@ -235,6 +251,8 @@ export function createScrapers(deps: {
   connectors?: Connector[];
   /** Google Maps search (Apify). */
   places?: PlacesSearch;
+  /** The owner's own Instagram account (Graph API), for comments and messages. */
+  own?: OwnAccount;
   /** Who an account follows (Apify), for finding new sources from the best customers. */
   following?: FollowingSource;
   /** Reads one public web page (for watching competitor sites). */
@@ -997,6 +1015,35 @@ export function createScrapers(deps: {
   /** Customers and interested leads are wins; rejected ones are losses; the rest are unknown. */
   const outcomeOf = (status: string): 0 | 1 | null =>
     status === "customer" || status === "interested" ? 1 : status === "rejected" ? 0 : null;
+
+  /**
+   * A lead's deal value from the broker's events: commissions when the broker
+   * reports them, otherwise deposits. Status becomes customer on a deposit.
+   */
+  async function refreshDealFromBroker(leadId: string) {
+    const [agg] = await db
+      .select({
+        commission: sql<string>`coalesce(sum(${brokerEvents.amount}) filter (where ${brokerEvents.event} = 'commission'), 0)`,
+        deposits: sql<string>`coalesce(sum(${brokerEvents.amount}) filter (where ${brokerEvents.event} in ('ftd', 'deposit')), 0)`,
+        funded: sql<number>`count(*) filter (where ${brokerEvents.event} in ('ftd', 'deposit', 'commission'))::int`,
+        first: sql<Date | null>`min(${brokerEvents.at}) filter (where ${brokerEvents.event} in ('ftd', 'deposit', 'commission'))`,
+      })
+      .from(brokerEvents)
+      .where(eq(brokerEvents.leadId, leadId));
+    if (!agg || Number(agg.funded) === 0) return;
+    const commission = Number(agg.commission);
+    const value = commission > 0 ? commission : Number(agg.deposits);
+    await db
+      .update(leads)
+      .set({
+        status: "customer",
+        statusAt: sql`coalesce(${leads.statusAt}, now())`,
+        dealValue: value.toFixed(2),
+        dealAt: sql`coalesce(${leads.dealAt}, ${agg.first ? new Date(agg.first).toISOString() : new Date().toISOString()}::timestamptz)`,
+        followUpAt: null,
+      })
+      .where(eq(leads.id, leadId));
+  }
 
   /** Puts every lead of the project in the persona whose words it uses most. */
   async function assignPersonas(
@@ -2466,6 +2513,563 @@ export function createScrapers(deps: {
       return { ok: true as const, changed: r.changed };
     },
 
+    /**
+     * Stores what the broker reported and matches each event to a lead (by
+     * email or phone, newest lead first) and to a partner (by the sub id in
+     * the tracking link). Matched deposits and commissions update the lead's
+     * deal; the same report line sent twice is stored once.
+     */
+    async ingestBrokerEvents(events: BrokerEventInput[], source: "postback" | "csv") {
+      let stored = 0;
+      let matched = 0;
+      let duplicates = 0;
+      const touched = new Set<string>();
+      const partnerByCode = new Map(
+        (await db.select({ id: partners.id, code: partners.code }).from(partners)).map((x) => [
+          x.code.toLowerCase(),
+          x.id,
+        ]),
+      );
+      for (const e of events) {
+        const phoneHash = e.phone ? suppressionHash("phone", e.phone, pepper) : null;
+        const emailHash = e.email ? suppressionHash("email", e.email, pepper) : null;
+        let leadId: string | null = null;
+        if (e.email || phoneHash) {
+          const [lead] = await db
+            .select({ id: leads.id })
+            .from(leads)
+            .where(
+              or(
+                e.email ? sql`lower(${leads.email}) = ${e.email.toLowerCase()}` : undefined,
+                phoneHash ? eq(leads.phoneHash, phoneHash) : undefined,
+              ),
+            )
+            .orderBy(desc(leads.createdAt))
+            .limit(1);
+          leadId = lead?.id ?? null;
+        }
+        const partnerId = e.sub ? (partnerByCode.get(e.sub.toLowerCase()) ?? null) : null;
+        const dedupeKey = createHash("sha256")
+          .update(
+            [
+              e.event,
+              e.externalId ?? emailHash ?? phoneHash ?? "",
+              e.amount ?? "",
+              e.at?.toISOString() ?? "",
+              e.sub ?? "",
+            ].join("|"),
+          )
+          .digest("hex");
+        const [row] = await db
+          .insert(brokerEvents)
+          .values({
+            event: e.event,
+            externalId: e.externalId,
+            emailHash,
+            phoneHash,
+            amount: e.amount === null ? null : e.amount.toFixed(2),
+            currency: e.currency,
+            sub: e.sub,
+            leadId,
+            partnerId,
+            source,
+            dedupeKey,
+            ...(e.at ? { at: e.at } : {}),
+          })
+          .onConflictDoNothing({ target: brokerEvents.dedupeKey })
+          .returning({ id: brokerEvents.id });
+        if (!row) {
+          duplicates++;
+          continue;
+        }
+        stored++;
+        if (leadId) {
+          matched++;
+          touched.add(leadId);
+        }
+      }
+      for (const id of touched) await refreshDealFromBroker(id);
+      if (stored > 0)
+        await notify({
+          type: "system",
+          level: "ok",
+          title: `وصل من الوسيط ${stored} حدثاً`,
+          body: `طوبق منها ${matched} مع عملائك${duplicates ? ` · ${duplicates} مكرر` : ""}`,
+          url: "/insights",
+          key: `broker:${new Date().toISOString().slice(0, 13)}`,
+        });
+      return { stored, matched, duplicates };
+    },
+
+    /** Totals of what the broker reported, and how much of it matched a lead. */
+    async brokerSummary(opts: { since?: Date } = {}) {
+      const rows = await db
+        .select({
+          event: brokerEvents.event,
+          n: sql<number>`count(*)::int`,
+          matched: sql<number>`count(${brokerEvents.leadId})::int`,
+          amount: sql<string>`coalesce(sum(${brokerEvents.amount}), 0)`,
+        })
+        .from(brokerEvents)
+        .where(opts.since ? gte(brokerEvents.at, opts.since) : undefined)
+        .groupBy(brokerEvents.event);
+      const last = await db
+        .select({
+          at: brokerEvents.at,
+          event: brokerEvents.event,
+          amount: brokerEvents.amount,
+          matched: brokerEvents.leadId,
+        })
+        .from(brokerEvents)
+        .orderBy(desc(brokerEvents.at))
+        .limit(10);
+      return {
+        byEvent: Object.fromEntries(
+          rows.map((r) => [
+            r.event,
+            { count: Number(r.n), matched: Number(r.matched), amount: Number(r.amount) },
+          ]),
+        ) as Record<string, { count: number; matched: number; amount: number }>,
+        last: last.map((l) => ({
+          ...l,
+          matched: !!l.matched,
+          amount: l.amount === null ? null : Number(l.amount),
+        })),
+      };
+    },
+
+    // ---- partner network ----
+    async createPartner(input: {
+      name: string;
+      instagram?: string | null;
+      sharePercent?: number;
+      code?: string;
+    }) {
+      const code = (input.code?.trim().toLowerCase() || randomBytes(4).toString("hex"))
+        .replace(/[^a-z0-9_-]/g, "")
+        .slice(0, 24);
+      if (code.length < 3) throw new Error("الكود قصير جداً");
+      const [p] = await db
+        .insert(partners)
+        .values({
+          name: input.name.trim().slice(0, 100),
+          code,
+          instagram: input.instagram?.replace(/^@/, "").toLowerCase() || null,
+          sharePercent: Math.min(100, Math.max(0, Math.round(input.sharePercent ?? 0))),
+          portalToken: randomBytes(18).toString("base64url"),
+        })
+        .returning();
+      if (!p) throw new Error("Partner insert returned nothing");
+      // Events that arrived with this code before the partner existed belong to them.
+      await db
+        .update(brokerEvents)
+        .set({ partnerId: p.id })
+        .where(and(isNull(brokerEvents.partnerId), sql`lower(${brokerEvents.sub}) = ${code}`));
+      return p;
+    },
+
+    async updatePartner(
+      id: string,
+      patch: { active?: boolean; sharePercent?: number; name?: string },
+    ) {
+      const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      if (Object.keys(clean).length)
+        await db.update(partners).set(clean).where(eq(partners.id, id));
+    },
+
+    async partnerByCode(code: string) {
+      const [p] = await db.select().from(partners).where(eq(partners.code, code.toLowerCase()));
+      return p ?? null;
+    },
+
+    async partnerByToken(token: string) {
+      const [p] = await db.select().from(partners).where(eq(partners.portalToken, token));
+      return p ?? null;
+    },
+
+    async recordClick(partnerId: string) {
+      await db.insert(partnerClicks).values({ partnerId });
+    },
+
+    /**
+     * Each partner's clicks and what the broker reported for their code:
+     * registrations, first deposits, deposit total, commission, and their share.
+     */
+    async partnerStats(opts: { partnerId?: string; since?: Date } = {}) {
+      const list = await db
+        .select()
+        .from(partners)
+        .where(opts.partnerId ? eq(partners.id, opts.partnerId) : undefined)
+        .orderBy(desc(partners.createdAt));
+      const clicks = await db
+        .select({ partnerId: partnerClicks.partnerId, n: sql<number>`count(*)::int` })
+        .from(partnerClicks)
+        .where(opts.since ? gte(partnerClicks.at, opts.since) : undefined)
+        .groupBy(partnerClicks.partnerId);
+      const ev = await db
+        .select({
+          partnerId: brokerEvents.partnerId,
+          registrations: sql<number>`count(*) filter (where ${brokerEvents.event} = 'registration')::int`,
+          ftds: sql<number>`count(*) filter (where ${brokerEvents.event} = 'ftd')::int`,
+          deposits: sql<string>`coalesce(sum(${brokerEvents.amount}) filter (where ${brokerEvents.event} in ('ftd', 'deposit')), 0)`,
+          commission: sql<string>`coalesce(sum(${brokerEvents.amount}) filter (where ${brokerEvents.event} = 'commission'), 0)`,
+        })
+        .from(brokerEvents)
+        .where(
+          and(
+            isNotNull(brokerEvents.partnerId),
+            opts.since ? gte(brokerEvents.at, opts.since) : undefined,
+          ),
+        )
+        .groupBy(brokerEvents.partnerId);
+      return list.map((p) => {
+        const c = clicks.find((x) => x.partnerId === p.id);
+        const e = ev.find((x) => x.partnerId === p.id);
+        const commission = Number(e?.commission ?? 0);
+        return {
+          ...p,
+          clicks: Number(c?.n ?? 0),
+          registrations: Number(e?.registrations ?? 0),
+          ftds: Number(e?.ftds ?? 0),
+          deposits: Number(e?.deposits ?? 0),
+          commission,
+          partnerShare: Math.round(commission * p.sharePercent) / 100,
+        };
+      });
+    },
+
+    /**
+     * Who to invite as a partner: leads with an audience (5k+ followers) that
+     * engage it, ranked by growth, the project's model and AI score.
+     */
+    async recruitCandidates(projectId: string, limit = 15) {
+      const taken = new Set(
+        (await db.select({ ig: partners.instagram }).from(partners))
+          .map((x) => x.ig)
+          .filter(Boolean),
+      );
+      const rows = await db
+        .select({
+          username: profiles.username,
+          fullName: profiles.fullName,
+          followers: profiles.followers,
+          engagementRate: profiles.engagementRate,
+          signals: profiles.signals,
+          persona: leads.persona,
+          winProb: leads.winProb,
+          aiScore: leads.aiScore,
+          status: leads.status,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(
+          and(
+            eq(leads.projectId, projectId),
+            gte(profiles.followers, 5000),
+            ne(leads.status, "rejected"),
+          ),
+        )
+        .limit(500);
+      const score = (r: (typeof rows)[number]) =>
+        Math.log10(1 + (r.followers ?? 0)) * 10 +
+        Math.min(Number(r.engagementRate ?? 0), 10) * 3 +
+        (r.signals?.includes("rising") ? 15 : 0) +
+        (r.winProb ?? 0) * 0.3 +
+        (r.aiScore ?? 0) * 0.2;
+      return rows
+        .filter((r) => !taken.has(r.username))
+        .map((r) => ({
+          ...r,
+          engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
+          rank: Math.round(score(r)),
+        }))
+        .sort((a, b) => b.rank - a.rank)
+        .slice(0, limit);
+    },
+
+    /** Whether the owner's own account is connected (IG_BUSINESS_ACCOUNT_ID + IG_GRAPH_TOKEN). */
+    get ownAccountAvailable() {
+      return !!deps.own;
+    },
+
+    /**
+     * Reads the owner's recent posts and their comments. Commenters showing
+     * buying intent ("بكم؟", "التفاصيل", "price") are sent to the project as
+     * leads, one job per post so revenue is credited to the post that brought them.
+     */
+    async syncOwnAccount(projectId: string, opts: { posts?: number } = {}) {
+      if (!deps.own) throw new Error("ربط حسابك يحتاج IG_BUSINESS_ACCOUNT_ID و IG_GRAPH_TOKEN");
+      const media = await deps.own.listMedia(opts.posts ?? 20);
+      let newComments = 0;
+      let hot = 0;
+      const jobsStarted: string[] = [];
+      for (const m of media) {
+        await db
+          .insert(ownPosts)
+          .values({
+            mediaId: m.id,
+            caption: m.caption,
+            permalink: m.permalink,
+            type: m.type,
+            postedAt: m.timestamp ? new Date(m.timestamp) : null,
+            likes: m.likes,
+            comments: m.comments,
+          })
+          .onConflictDoUpdate({
+            target: ownPosts.mediaId,
+            set: {
+              likes: m.likes,
+              comments: m.comments,
+              caption: m.caption,
+              fetchedAt: new Date(),
+            },
+          });
+        const comments = m.comments ? await deps.own.listComments(m.id, 100) : [];
+        const fresh: string[] = [];
+        for (const c of comments) {
+          const intent = commentIntent(c.text);
+          const [row] = await db
+            .insert(ownComments)
+            .values({
+              id: c.id,
+              mediaId: m.id,
+              username: c.username,
+              text: c.text.slice(0, 1000),
+              at: c.timestamp ? new Date(c.timestamp) : null,
+              intent: intent.length ? intent : null,
+            })
+            .onConflictDoNothing({ target: ownComments.id })
+            .returning({ id: ownComments.id });
+          if (!row) continue;
+          newComments++;
+          if (intent.length && c.username) fresh.push(c.username);
+        }
+        const [{ n } = { n: 0 }] = await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(ownComments)
+          .where(and(eq(ownComments.mediaId, m.id), isNotNull(ownComments.intent)));
+        await db
+          .update(ownPosts)
+          .set({ intentComments: Number(n) })
+          .where(eq(ownPosts.mediaId, m.id));
+        // Interested commenters not sent yet (also those the webhook delivered between syncs).
+        const pending = await db
+          .select({ username: ownComments.username })
+          .from(ownComments)
+          .where(
+            and(
+              eq(ownComments.mediaId, m.id),
+              isNotNull(ownComments.intent),
+              eq(ownComments.leadSent, false),
+              isNotNull(ownComments.username),
+            ),
+          );
+        const names = [...new Set([...fresh, ...pending.map((x) => x.username as string)])];
+        if (names.length) {
+          hot += names.length;
+          const { job } = await this.startJob({
+            projectId,
+            source: { type: "upload", usernames: names, url: `منشوري: ${m.permalink ?? m.id}` },
+            limit: names.length,
+          });
+          jobsStarted.push(job.id);
+          await db
+            .update(ownComments)
+            .set({ leadSent: true })
+            .where(and(eq(ownComments.mediaId, m.id), inArray(ownComments.username, names)));
+        }
+      }
+      if (hot > 0)
+        await notify({
+          type: "system",
+          level: "ok",
+          title: `${hot} عملاء ساخنون علّقوا على منشوراتك`,
+          body: "كتبوا ما يدل على اهتمام (بكم، التفاصيل، أبغى…). أُضيفوا للعملاء.",
+          url: "/own",
+          key: `own-hot:${new Date().toISOString().slice(0, 13)}`,
+        });
+      return { posts: media.length, newComments, hot, jobs: jobsStarted };
+    },
+
+    /**
+     * Each own post with its interest and what it brought: leads from its
+     * commenters, customers and revenue (the "منشوري:" sources).
+     */
+    async ownPostPerformance(projectId: string) {
+      const posts = await db.select().from(ownPosts).orderBy(desc(ownPosts.postedAt)).limit(100);
+      const perf = await this.sourcePerformance(projectId);
+      return posts.map((p) => {
+        const s = perf.sources.find((x) => x.source === `منشوري: ${p.permalink ?? p.mediaId}`);
+        return {
+          ...p,
+          leads: s?.leads ?? 0,
+          customers: s?.customers ?? 0,
+          revenue: s?.revenue ?? 0,
+        };
+      });
+    },
+
+    /** A comment delivered by the Meta webhook; leads are created at the next sync. */
+    async storeComment(c: {
+      id: string;
+      mediaId: string;
+      username: string | null;
+      text: string;
+      at?: Date;
+    }) {
+      await db
+        .insert(ownPosts)
+        .values({ mediaId: c.mediaId })
+        .onConflictDoNothing({ target: ownPosts.mediaId });
+      const intent = commentIntent(c.text);
+      const [row] = await db
+        .insert(ownComments)
+        .values({
+          id: c.id,
+          mediaId: c.mediaId,
+          username: c.username?.toLowerCase() ?? null,
+          text: c.text.slice(0, 1000),
+          at: c.at ?? new Date(),
+          intent: intent.length ? intent : null,
+        })
+        .onConflictDoNothing({ target: ownComments.id })
+        .returning({ id: ownComments.id });
+      if (row && intent.length)
+        await notify({
+          type: "system",
+          level: "ok",
+          title: `🔥 @${c.username ?? "?"} مهتم بمنشورك`,
+          body: c.text.slice(0, 200),
+          url: "/own",
+          key: `own-comment:${c.id}`,
+        });
+      return !!row;
+    },
+
+    async hotComments(limit = 30) {
+      return db
+        .select()
+        .from(ownComments)
+        .where(isNotNull(ownComments.intent))
+        .orderBy(sql`${ownComments.at} desc nulls last`)
+        .limit(limit);
+    },
+
+    /** Stores a direct message (from the Meta webhook, or a reply sent from here). */
+    async storeMessage(m: {
+      id: string;
+      threadId: string;
+      username?: string | null;
+      direction: "in" | "out";
+      text: string;
+      at?: Date;
+    }) {
+      const [row] = await db
+        .insert(inboxMessages)
+        .values({
+          id: m.id,
+          threadId: m.threadId,
+          username: m.username ?? null,
+          direction: m.direction,
+          text: m.text.slice(0, 4000),
+          ...(m.at ? { at: m.at } : {}),
+          ...(m.direction === "out" ? { readAt: new Date() } : {}),
+        })
+        .onConflictDoNothing({ target: inboxMessages.id })
+        .returning({ id: inboxMessages.id });
+      if (row && m.direction === "in") {
+        const intent = commentIntent(m.text);
+        await notify({
+          type: "system",
+          level: intent.length ? "ok" : "info",
+          title: `${intent.length ? "🔥 " : ""}رسالة جديدة${m.username ? ` من @${m.username}` : ""}`,
+          body: m.text.slice(0, 200),
+          url: `/inbox?thread=${encodeURIComponent(m.threadId)}`,
+          key: `dm:${m.id}`,
+        });
+      }
+      return !!row;
+    },
+
+    async listThreads(limit = 50) {
+      const rows = await db
+        .select({
+          threadId: inboxMessages.threadId,
+          username: sql<string | null>`max(${inboxMessages.username})`,
+          last: sql<Date>`max(${inboxMessages.at})`,
+          unread: sql<number>`count(*) filter (where ${inboxMessages.direction} = 'in' and ${inboxMessages.readAt} is null)::int`,
+          lastIn: sql<Date | null>`max(${inboxMessages.at}) filter (where ${inboxMessages.direction} = 'in')`,
+        })
+        .from(inboxMessages)
+        .groupBy(inboxMessages.threadId)
+        .orderBy(sql`max(${inboxMessages.at}) desc`)
+        .limit(limit);
+      return rows.map((r) => ({ ...r, unread: Number(r.unread) }));
+    },
+
+    async threadMessages(threadId: string) {
+      const msgs = await db
+        .select()
+        .from(inboxMessages)
+        .where(eq(inboxMessages.threadId, threadId))
+        .orderBy(inboxMessages.at)
+        .limit(200);
+      await db
+        .update(inboxMessages)
+        .set({ readAt: new Date() })
+        .where(and(eq(inboxMessages.threadId, threadId), isNull(inboxMessages.readAt)));
+      return msgs;
+    },
+
+    /** A reply drafted by the AI for the owner to edit (empty without a key). */
+    async draftReply(threadId: string, offer: string) {
+      if (!scorer?.replyDraft) return "";
+      const msgs = await db
+        .select({ direction: inboxMessages.direction, text: inboxMessages.text })
+        .from(inboxMessages)
+        .where(eq(inboxMessages.threadId, threadId))
+        .orderBy(inboxMessages.at)
+        .limit(30);
+      return scorer.replyDraft(
+        msgs.map((m) => ({
+          from: m.direction === "out" ? ("me" as const) : ("them" as const),
+          text: m.text ?? "",
+        })),
+        offer,
+      );
+    },
+
+    /**
+     * Sends the owner's reply (they pressed send). Meta allows replies within
+     * 24 hours of the person's last message; claims that break financial
+     * promotion rules are refused.
+     */
+    async sendReply(threadId: string, text: string, now = new Date()) {
+      if (!deps.own) throw new Error("الرد يحتاج ربط حسابك (IG_GRAPH_TOKEN)");
+      const check = checkMessage(text);
+      if (!check.ok)
+        throw new Error(
+          `لم تُرسل: ${check.issues
+            .filter((i) => i.severity === "block")
+            .map((i) => i.message)
+            .join(" ")}`,
+        );
+      const [lastIn] = await db
+        .select({ at: inboxMessages.at })
+        .from(inboxMessages)
+        .where(and(eq(inboxMessages.threadId, threadId), eq(inboxMessages.direction, "in")))
+        .orderBy(desc(inboxMessages.at))
+        .limit(1);
+      if (!lastIn || now.getTime() - lastIn.at.getTime() > 24 * 3_600_000)
+        throw new Error(
+          "مرّ أكثر من 24 ساعة على آخر رسالة منه؛ Meta لا تسمح بالرد من هنا. رد من تطبيق إنستقرام.",
+        );
+      const sent = await deps.own.sendMessage(threadId, text);
+      await this.storeMessage({ id: sent.id, threadId, direction: "out", text, at: now });
+      await this.audit({ actor: "owner", action: "inbox.reply", detail: { threadId } });
+      return sent;
+    },
+
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */
     async bulkUpdateLeads(input: {
       projectId: string;
@@ -2825,6 +3429,233 @@ export function createScrapers(deps: {
         started.push(job.id);
       }
       return started;
+    },
+
+    /**
+     * The market over the last 30 days: which watched competitors grow fastest,
+     * which accounts in the owner's data are rising, and which topics new
+     * leads talk about, month by month.
+     */
+    async marketIndex(now = new Date(), days = 30) {
+      const since = new Date(now.getTime() - days * 86_400_000);
+      const comp = await db
+        .select({
+          username: competitorSnapshots.username,
+          first: sql<
+            number | null
+          >`(array_agg(${competitorSnapshots.followers} order by ${competitorSnapshots.at}))[1]`,
+          last: sql<
+            number | null
+          >`(array_agg(${competitorSnapshots.followers} order by ${competitorSnapshots.at} desc))[1]`,
+          points: sql<number>`count(*)::int`,
+        })
+        .from(competitorSnapshots)
+        .where(and(gte(competitorSnapshots.at, since), isNotNull(competitorSnapshots.followers)))
+        .groupBy(competitorSnapshots.username);
+      const competitors = comp
+        .map((c) => ({
+          username: c.username,
+          followers: c.last === null ? null : Number(c.last),
+          change: c.first === null || c.last === null ? null : Number(c.last) - Number(c.first),
+          percent: Number(c.points) > 1 ? growthPercent(c.first, c.last) : null,
+        }))
+        .sort((a, b) => (b.percent ?? -1e9) - (a.percent ?? -1e9));
+
+      const growthExpr = sql<number>`((array_agg(${profileSnapshots.followers} order by ${profileSnapshots.at} desc))[1] - (array_agg(${profileSnapshots.followers} order by ${profileSnapshots.at}))[1])::float / nullif((array_agg(${profileSnapshots.followers} order by ${profileSnapshots.at}))[1], 0)`;
+      const risingRows = await db
+        .select({
+          profileId: profileSnapshots.profileId,
+          first: sql<number>`(array_agg(${profileSnapshots.followers} order by ${profileSnapshots.at}))[1]`,
+          last: sql<number>`(array_agg(${profileSnapshots.followers} order by ${profileSnapshots.at} desc))[1]`,
+          growth: growthExpr,
+        })
+        .from(profileSnapshots)
+        .where(and(gte(profileSnapshots.at, since), isNotNull(profileSnapshots.followers)))
+        .groupBy(profileSnapshots.profileId)
+        .having(
+          sql`count(*) > 1 and (array_agg(${profileSnapshots.followers} order by ${profileSnapshots.at} desc))[1] >= 1000`,
+        )
+        .orderBy(sql`${growthExpr} desc nulls last`)
+        .limit(10);
+      const names = risingRows.length
+        ? await db
+            .select({ id: profiles.igUserId, username: profiles.username, bio: profiles.bio })
+            .from(profiles)
+            .where(
+              inArray(
+                profiles.igUserId,
+                risingRows.map((r) => r.profileId),
+              ),
+            )
+        : [];
+      const rising = risingRows
+        .filter((r) => Number(r.growth) > 0)
+        .map((r) => {
+          const p = names.find((n) => n.id === r.profileId);
+          return {
+            username: p?.username ?? r.profileId,
+            followers: Number(r.last),
+            percent: Math.round(Number(r.growth) * 1000) / 10,
+          };
+        });
+
+      // Topics in the bios of leads found each month (last six months).
+      const sixMonths = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1));
+      const month = sql<string>`to_char(date_trunc('month', ${leads.createdAt}), 'YYYY-MM')`;
+      const topicKeys = Object.keys(MARKET_TOPICS) as MarketTopic[];
+      const counts = await db
+        .select({
+          month,
+          total: sql<number>`count(*)::int`,
+          ...Object.fromEntries(
+            topicKeys.map((k) => [
+              k,
+              sql<number>`count(*) filter (where coalesce(${profiles.bio}, '') || ' ' || coalesce(${profiles.category}, '') ~* ${MARKET_TOPICS[k].pattern})::int`,
+            ]),
+          ),
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(gte(leads.createdAt, sixMonths))
+        .groupBy(month)
+        .orderBy(month);
+      const months = counts.map((c) => {
+        const row = c as unknown as Record<string, number | string>;
+        return {
+          month: String(row.month),
+          total: Number(row.total),
+          topics: Object.fromEntries(
+            topicKeys.map((k) => [
+              k,
+              Number(row.total) ? Math.round((Number(row[k]) / Number(row.total)) * 1000) / 10 : 0,
+            ]),
+          ) as Record<MarketTopic, number>,
+        };
+      });
+      const lastM = months.at(-1);
+      const prevM = months.at(-2);
+      const topics = topicKeys
+        .map((k) => ({
+          key: k,
+          label: MARKET_TOPICS[k].label,
+          share: lastM?.topics[k] ?? 0,
+          change: lastM && prevM ? Math.round((lastM.topics[k] - prevM.topics[k]) * 10) / 10 : null,
+        }))
+        .sort((a, b) => (b.change ?? 0) - (a.change ?? 0) || b.share - a.share);
+      return { since, competitors, rising, months, topics };
+    },
+
+    /** The monthly market report in Arabic (sent once a month by the daily cron). */
+    async monthlyMarketReport(now = new Date()) {
+      const key = `market:report:${now.toISOString().slice(0, 7)}`;
+      if (await getValue(key)) return null;
+      const m = await this.marketIndex(now);
+      const lines = [`📈 تقرير السوق الشهري (${now.toISOString().slice(0, 7)})`];
+      const growing = m.competitors.filter((c) => c.percent !== null).slice(0, 5);
+      if (growing.length)
+        lines.push(
+          "",
+          "المنافسون الأسرع نمواً:",
+          ...growing.map(
+            (c) =>
+              `• @${c.username}: ${c.change !== null && c.change > 0 ? "+" : ""}${(c.change ?? 0).toLocaleString("en")} (${c.percent}%)`,
+          ),
+        );
+      if (m.rising.length)
+        lines.push(
+          "",
+          "حسابات صاعدة في بياناتك:",
+          ...m.rising
+            .slice(0, 5)
+            .map((r) => `• @${r.username}: ${r.percent}% (${r.followers.toLocaleString("en")})`),
+        );
+      const t = m.topics.filter((x) => x.share > 0).slice(0, 4);
+      if (t.length)
+        lines.push(
+          "",
+          "المواضيع في حسابات العملاء الجدد:",
+          ...t.map(
+            (x) =>
+              `• ${x.label}: ${x.share}%${x.change !== null ? ` (${x.change > 0 ? "+" : ""}${x.change} عن الشهر السابق)` : ""}`,
+          ),
+        );
+      if (lines.length === 1) lines.push("", "لا توجد بيانات كافية بعد: راقب منافسين واجمع عملاء.");
+      const text = lines.join("\n");
+      await setValue(key, true, 40 * 86_400_000);
+      await notify({
+        type: "system",
+        level: "info",
+        title: "تقرير السوق الشهري",
+        body: text.slice(0, 1500),
+        url: "/market",
+        key,
+      });
+      return text;
+    },
+
+    /**
+     * A week of content and three reel scripts from what brings money: the
+     * owner's best posts, rising topics, fast-growing competitors and the
+     * project's segments. Written by AI when a key is set; every script is
+     * checked against financial promotion rules.
+     */
+    async contentPlan(projectId: string, now = new Date()) {
+      const project = await this.getProject(projectId);
+      if (!project) throw new Error("المشروع غير موجود");
+      const posts = await this.ownPostPerformance(projectId).catch(() => []);
+      const best = [...posts]
+        .sort((a, b) => b.revenue - a.revenue || (b.intentComments ?? 0) - (a.intentComments ?? 0))
+        .slice(0, 5)
+        .map((p) => ({
+          caption: (p.caption ?? "").slice(0, 300),
+          type: p.type,
+          interest: p.intentComments ?? 0,
+          revenue: p.revenue,
+        }));
+      const market = await this.marketIndex(now);
+      const input = {
+        offer: project.aiCriteria ?? "",
+        personas: (project.personas ?? []).map((p) => ({
+          name: p.name,
+          description: p.description,
+        })),
+        bestPosts: best,
+        risingTopics: market.topics
+          .filter((t) => t.share > 0)
+          .slice(0, 3)
+          .map((t) => ({ topic: t.label, change: t.change ?? 0 })),
+        competitors: market.competitors
+          .slice(0, 5)
+          .map((c) => ({ username: c.username, percent: c.percent })),
+      };
+      let plan: ContentPlan | null = null;
+      let byAi = false;
+      if (scorer?.contentPlan) {
+        try {
+          plan = await scorer.contentPlan(input);
+          byAi = true;
+        } catch {
+          plan = null;
+        }
+      }
+      plan ??= templateContentPlan(input);
+      const reels = plan.reels.map((r) => {
+        const check = checkMessage(`${r.hook}\n${r.script}\n${r.cta}`);
+        return { ...r, issues: check.issues.map((i) => i.message) };
+      });
+      const saved = { ...plan, reels, byAi, createdAt: now.toISOString(), projectId };
+      await setValue(`content:plan:${projectId}`, saved, 30 * 86_400_000);
+      return saved;
+    },
+
+    async savedContentPlan(projectId: string) {
+      return getValue<
+        Omit<ContentPlan, "reels"> & {
+          reels: (ContentPlan["reels"][number] & { issues: string[] })[];
+          byAi: boolean;
+          createdAt: string;
+        }
+      >(`content:plan:${projectId}`);
     },
 
     /** Friday summary (idea from the Spir bot's weekly post): sent once per week. */

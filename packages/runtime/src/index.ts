@@ -5,6 +5,7 @@ import {
   type FollowingSource,
   type LeadFilters,
   type NotificationSink,
+  type OwnAccount,
   type PlacesSearch,
   type Provider,
   type ProviderHealthEvent,
@@ -26,6 +27,7 @@ import {
 import {
   ApifyProvider,
   connectorsFromEnv,
+  GraphOwnAccount,
   type PageReading,
   providersFromEnv,
   readPage,
@@ -84,6 +86,8 @@ export interface RuntimeOverrides {
   connectors?: Connector[];
   /** Web page reader for watched competitor sites; defaults to the safe reader. */
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
+  /** The owner's own account; defaults to the Graph API when IG_BUSINESS_ACCOUNT_ID and IG_GRAPH_TOKEN are set. */
+  own?: OwnAccount;
   /** Who an account follows; defaults to the Apify provider when APIFY_TOKEN is set. */
   following?: FollowingSource;
   /** Google Maps search; defaults to the Apify provider when APIFY_TOKEN is set. */
@@ -190,6 +194,15 @@ export async function createRuntime(
     onReadyToExport: (jobId) => autoExport(jobId),
     connectors: o.connectors ?? connectorsFromEnv(env),
     readPage: o.readPage ?? ((url) => readPage(url)),
+    ...(o.own
+      ? { own: o.own }
+      : env.IG_BUSINESS_ACCOUNT_ID && env.IG_GRAPH_TOKEN
+        ? {
+            own: new GraphOwnAccount(env.IG_BUSINESS_ACCOUNT_ID, env.IG_GRAPH_TOKEN, {
+              ...(env.META_GRAPH_VERSION ? { version: env.META_GRAPH_VERSION } : {}),
+            }),
+          }
+        : {}),
     ...(() => {
       const apify = providers.find((p): p is ApifyProvider => p instanceof ApifyProvider);
       return {

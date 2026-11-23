@@ -91,6 +91,30 @@ export interface FollowingSource {
   listFollowing(username: string, limit: number): Promise<string[]>;
 }
 
+export interface OwnMedia {
+  id: string;
+  caption: string | null;
+  permalink: string | null;
+  type: string | null;
+  timestamp: string | null;
+  likes: number | null;
+  comments: number | null;
+}
+
+export interface OwnComment {
+  id: string;
+  text: string;
+  username: string | null;
+  timestamp: string | null;
+}
+
+/** The owner's own Instagram account (Graph API): posts, comments and replies. */
+export interface OwnAccount {
+  listMedia(limit: number): Promise<OwnMedia[]>;
+  listComments(mediaId: string, limit: number): Promise<OwnComment[]>;
+  sendMessage(recipientId: string, text: string): Promise<{ id: string }>;
+}
+
 export class AccountNotFoundError extends Error {
   constructor(message: string) {
     super(message);

@@ -72,7 +72,15 @@ describe("MCP server over Streamable HTTP", () => {
         "update_project",
         "watch_competitor",
         "watch_site",
+        "broker_summary",
+        "partners",
+        "recruit_candidates",
         "weekly_plan",
+        "own_posts",
+        "inbox",
+        "send_dm",
+        "content_plan",
+        "market_index",
       ].sort(),
     );
     const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();

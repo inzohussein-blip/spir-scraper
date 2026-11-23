@@ -2,6 +2,7 @@
 
 import {
   checkMessage,
+  parseBrokerCsv,
   parseSource,
   parseUsernameCsv,
   type Source,
@@ -742,4 +743,134 @@ export async function approvePlan(id: string) {
   await requireSession();
   await (await getRuntime()).scrapers.approvePlan(id);
   revalidatePath("/insights");
+}
+
+/** Where tracking links send visitors (the broker's affiliate sign-up link) and its sub-id parameter. */
+export async function saveBrokerSettings(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const signupUrl = str(form, "signup_url");
+  if (signupUrl && !/^https:\/\//.test(signupUrl))
+    return { error: "الرابط يجب أن يبدأ بـ https://" };
+  const subParam =
+    (str(form, "sub_param") || "sub").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 30) || "sub";
+  await (await getRuntime()).scrapers.setValue(
+    "broker:settings",
+    { signupUrl: signupUrl || null, subParam },
+    10 * 365 * 86_400_000,
+  );
+  await audit("broker.settings", { subParam });
+  revalidatePath("/partners");
+  return { message: "حُفظ" };
+}
+
+/** Imports a broker report (CSV export from the affiliate system). */
+export async function importBrokerCsv(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const file = form.get("file");
+  if (!(file instanceof File) || file.size === 0) return { error: "اختر ملف CSV" };
+  if (file.size > 5_000_000) return { error: "الملف أكبر من 5MB" };
+  const events = parseBrokerCsv(await file.text());
+  if (events.length === 0)
+    return { error: "لم أجد في الملف أعمدة معروفة (البريد أو الهاتف، والإيداع أو العمولة)" };
+  const r = await (await getRuntime()).scrapers.ingestBrokerEvents(events, "csv");
+  await audit("broker.import", r);
+  revalidatePath("/partners");
+  revalidatePath("/insights");
+  return {
+    message: `قُرئ ${events.length} حدثاً: خُزّن ${r.stored}، وطوبق منها ${r.matched} مع عملائك، و${r.duplicates} مكرر.`,
+  };
+}
+
+export async function createPartner(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const p = await (await getRuntime()).scrapers.createPartner({
+      name: str(form, "name"),
+      instagram: str(form, "instagram") || null,
+      sharePercent: Number(str(form, "share")) || 0,
+      ...(str(form, "code") ? { code: str(form, "code") } : {}),
+    });
+    await audit("partner.create", { code: p.code });
+    revalidatePath("/partners");
+    return { message: `أُضيف ${p.name}. أرسل له رابط لوحته من الجدول.` };
+  } catch (err) {
+    return fail(
+      /unique|duplicate/i.test((err as Error).message) ? new Error("هذا الكود مستخدم") : err,
+    );
+  }
+}
+
+export async function togglePartner(id: string, active: boolean) {
+  await requireSession();
+  await (await getRuntime()).scrapers.updatePartner(id, { active });
+  revalidatePath("/partners");
+}
+
+/** Adds a recruit candidate as a partner (named after their account). */
+export async function recruitPartner(username: string, name: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.createPartner({
+    name: name || `@${username}`,
+    instagram: username,
+  });
+  await audit("partner.create", { from: "recruit", username });
+  revalidatePath("/partners");
+}
+
+/** Reads the owner's posts and comments now; interested commenters become leads. */
+export async function syncOwnAccount(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  if (!projectId) return { error: "اختر مشروعاً" };
+  try {
+    const rt = await getRuntime();
+    const r = await rt.scrapers.syncOwnAccount(projectId);
+    // The daily sync sends interested commenters to the project chosen last.
+    await rt.scrapers.setValue("own:project", projectId, 10 * 365 * 86_400_000);
+    await audit("own.sync", r);
+    revalidatePath("/own");
+    return {
+      message: `قُرئ ${r.posts} منشوراً و${r.newComments} تعليقاً جديداً؛ ${r.hot} مهتمون أُضيفوا للعملاء.`,
+    };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Opens the thread with an AI-drafted reply in the box (nothing is sent). */
+export async function draftInboxReply(threadId: string) {
+  await requireSession();
+  redirect(`/inbox?thread=${encodeURIComponent(threadId)}&draft=1`);
+}
+
+/** Sends the owner's reply to a direct message: only when they press send. */
+export async function sendInboxReply(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const threadId = str(form, "thread");
+  const text = str(form, "text");
+  if (!threadId || !text) return { error: "اكتب الرد" };
+  try {
+    await (await getRuntime()).scrapers.sendReply(threadId, text);
+    revalidatePath("/inbox");
+    return { message: "أُرسل" };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Builds this week's content plan from posts, topics, competitors and segments. */
+export async function makeContentPlan(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  if (!projectId) return { error: "اختر مشروعاً" };
+  try {
+    const plan = await (await getRuntime()).scrapers.contentPlan(projectId);
+    await audit("content.plan", { projectId, byAi: plan.byAi });
+    revalidatePath("/content");
+    return {
+      message: plan.byAi ? "جاهزة (بالذكاء الاصطناعي)" : "جاهزة (قالب: أضف مفتاح AI لخطة أدق)",
+    };
+  } catch (err) {
+    return fail(err);
+  }
 }

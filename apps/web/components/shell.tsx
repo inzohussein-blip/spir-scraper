@@ -20,6 +20,11 @@ const NAV: { href: string; label: string; icon: IconName }[] = [
   { href: "/competitors", label: "المنافسون", icon: "radar" },
   { href: "/places", label: "الشركات", icon: "folder" },
   { href: "/insights", label: "العائد", icon: "chart" },
+  { href: "/partners", label: "الوكلاء", icon: "users" },
+  { href: "/own", label: "حسابي", icon: "chart" },
+  { href: "/inbox", label: "الرسائل", icon: "bell" },
+  { href: "/content", label: "المحتوى", icon: "sparkles" },
+  { href: "/market", label: "السوق", icon: "radar" },
   { href: "/notifications", label: "الإشعارات", icon: "bell" },
   { href: "/activity", label: "النشاط", icon: "activity" },
   { href: "/extension", label: "إضافة المتصفح", icon: "plug" },
@@ -33,6 +38,11 @@ const TITLES: Record<string, string> = {
   "/competitors": "المنافسون",
   "/places": "الشركات",
   "/insights": "العائد",
+  "/partners": "الوكلاء",
+  "/own": "حسابي",
+  "/inbox": "الرسائل",
+  "/content": "المحتوى",
+  "/market": "السوق",
   "/notifications": "الإشعارات",
   "/activity": "النشاط",
   "/settings": "الإعدادات",
@@ -91,7 +101,13 @@ function CommandPalette({
       ...data.jobs.map((j) => ({ href: `/jobs/${j.id}`, label: j.label, group: "آخر المهام" })),
     ];
     const needle = q.trim().toLowerCase();
-    return needle ? all.filter((i) => i.label.toLowerCase().includes(needle)) : all;
+    if (!needle) return all;
+    // Labels that start with the search come first (a project named «وكلاء» before «الوكلاء»).
+    const hits = all.filter((i) => i.label.toLowerCase().includes(needle));
+    return [
+      ...hits.filter((i) => i.label.toLowerCase().startsWith(needle)),
+      ...hits.filter((i) => !i.label.toLowerCase().startsWith(needle)),
+    ];
   }, [data, q]);
 
   useEffect(() => {

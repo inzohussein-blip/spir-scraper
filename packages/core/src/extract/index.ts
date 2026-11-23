@@ -10,6 +10,7 @@ export * from "./accounts.js";
 export * from "./competitor.js";
 export * from "./country.js";
 export * from "./emails.js";
+export * from "./intent.js";
 export * from "./language.js";
 export * from "./linkpages.js";
 export * from "./links.js";
