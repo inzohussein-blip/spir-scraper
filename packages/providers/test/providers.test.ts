@@ -153,6 +153,15 @@ describe("ApifyProvider", () => {
     await expect(budget(0, 5, 6)).resolves.toBe(0);
   });
 
+  it("reports this month's spend against what is allowed (for the spend meter)", async () => {
+    const p = new ApifyProvider({
+      token: "t",
+      monthlyCapUsd: 3,
+      fetch: fakeFetch(() => limits(5, 1.25)).fn,
+    });
+    await expect(p.usage()).resolves.toEqual({ usedUsd: 1.25, allowedUsd: 3 });
+  });
+
   it("refuses to run once the credit is used up", async () => {
     const p = new ApifyProvider({ token: "t", fetch: fakeFetch(() => limits(5, 5)).fn });
     await expect(p.getProfile("a")).rejects.toBeInstanceOf(BudgetExceededError);

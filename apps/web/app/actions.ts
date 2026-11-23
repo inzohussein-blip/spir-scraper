@@ -326,6 +326,7 @@ export async function setLeadStatus(projectId: string, username: string, status:
     status: status as Status,
   });
   revalidatePath("/leads");
+  revalidatePath("/leads/board");
 }
 
 export async function updateProjectSettings(_: ActionState, form: FormData): Promise<ActionState> {
@@ -342,6 +343,7 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
       watchKeywords: keywords.length ? keywords : null,
       aiCriteria: str(form, "criteria") || null,
       sheetId: str(form, "sheet") || null,
+      messageTemplate: str(form, "template").slice(0, 1000) || null,
     });
   } catch (err) {
     return fail(err);
@@ -349,6 +351,16 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
   await audit("project.update", { id });
   revalidatePath("/leads");
   return { message: "حُفظت إعدادات المشروع" };
+}
+
+/** Sets (or clears, with an empty value) the day to be reminded about a lead. */
+export async function setFollowUp(projectId: string, username: string, day: string) {
+  await requireSession();
+  const at = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T06:00:00Z`) : null;
+  await (await getRuntime()).scrapers.setFollowUp({ projectId, username, at });
+  await audit("lead.follow_up", { username, day: day || null });
+  revalidatePath("/leads");
+  revalidatePath("/leads/board");
 }
 
 export async function addMonitor(_: ActionState, form: FormData): Promise<ActionState> {

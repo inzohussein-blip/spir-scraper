@@ -10,6 +10,7 @@ import {
   sign,
   verify,
 } from "../lib/tokens";
+import { fillTemplate, waLink } from "../lib/whatsapp";
 
 const secret = new TextEncoder().encode("x".repeat(40));
 const other = new TextEncoder().encode("y".repeat(40));
@@ -95,5 +96,18 @@ describe("drainBudgetMs", () => {
     expect(drainBudgetMs(300)).toBe(240_000);
     expect(drainBudgetMs(300, 100)).toBe(100_000);
     expect(drainBudgetMs(10)).toBe(5_000);
+  });
+});
+
+describe("WhatsApp helpers", () => {
+  it("fills the template and links confirmed international numbers only", () => {
+    expect(fillTemplate("أهلاً {name} (@{username})", { username: "acme", fullName: "أكمي" })).toBe(
+      "أهلاً أكمي (@acme)",
+    );
+    expect(fillTemplate(null, { username: "acme", fullName: null })).toContain("مرحباً acme");
+    expect(waLink("+966501234567", true, "hi")).toBe("https://wa.me/966501234567?text=hi");
+    expect(waLink("+966501234567", false, "hi")).toBeNull();
+    expect(waLink("0501234567", true, "hi")).toBeNull();
+    expect(waLink(null, true, "hi")).toBeNull();
   });
 });

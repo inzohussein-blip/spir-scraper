@@ -50,6 +50,8 @@ export const projects = pgTable("projects", {
   autoExport: boolean("auto_export").notNull().default(false),
   /** Words in a name or bio that trigger an alert, e.g. وكيل, IB, partner. */
   watchKeywords: text("watch_keywords").array(),
+  /** First-message template for WhatsApp links; {name} and {username} are filled in. */
+  messageTemplate: text("message_template"),
   createdAt: createdAt(),
 });
 
@@ -152,6 +154,8 @@ export const leads = pgTable(
     status: leadStatus("status").notNull().default("new"),
     statusNote: text("status_note"),
     statusAt: timestamp("status_at", { withTimezone: true }),
+    /** When the owner wants to be reminded to follow up (cleared once reminded). */
+    followUpAt: timestamp("follow_up_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: createdAt(),
   },
@@ -167,6 +171,7 @@ export const leads = pgTable(
     index("leads_profile_idx").on(t.profileId),
     index("leads_phone_hash_idx").on(t.phoneHash),
     index("leads_project_status_idx").on(t.projectId, t.status),
+    index("leads_follow_up_idx").on(t.followUpAt),
   ],
 );
 

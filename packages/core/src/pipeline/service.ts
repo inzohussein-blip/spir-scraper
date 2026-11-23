@@ -27,6 +27,7 @@ import {
   lte,
   ne,
   notExists,
+  notInArray,
   or,
   type SQL,
   sql,
@@ -123,7 +124,18 @@ export interface LeadRow {
   otherProjects: number;
   sourceUrl: string;
   fetchedAt: Date;
+  /** When the owner asked to be reminded to follow up. */
+  followUpAt?: Date | null;
 }
+
+/** Lead statuses in Arabic, for reminders. */
+const STATUS_AR: Record<string, string> = {
+  new: "جديد",
+  contacted: "تواصلت",
+  interested: "مهتم",
+  customer: "عميل",
+  rejected: "مرفوض",
+};
 
 export class JobNotFoundError extends Error {
   override name = "JobNotFoundError";
@@ -786,6 +798,7 @@ export function createScrapers(deps: {
       phoneCountry: lead.phoneCountry,
       phoneConfirmed: !!lead.phoneE164,
       contactSource: lead.contactSource,
+      followUpAt: lead.followUpAt,
       aiScore: lead.aiScore,
       aiTags: lead.aiTags,
       aiReason: lead.aiReason,
@@ -998,6 +1011,7 @@ export function createScrapers(deps: {
         retentionDays?: number | undefined;
         autoExport?: boolean | undefined;
         watchKeywords?: string[] | null | undefined;
+        messageTemplate?: string | null | undefined;
       },
     ) {
       const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
@@ -1008,6 +1022,72 @@ export function createScrapers(deps: {
         .where(eq(projects.id, projectId))
         .returning();
       return p ?? null;
+    },
+
+    /** Sets (or clears, with null) the date to remind the owner to follow up with a lead. */
+    async setFollowUp(input: { projectId: string; username: string; at: Date | null }) {
+      const [profile] = await db
+        .select({ id: profiles.igUserId })
+        .from(profiles)
+        .where(eq(profiles.username, input.username.trim().replace(/^@/, "").toLowerCase()));
+      if (!profile) return false;
+      const updated = await db
+        .update(leads)
+        .set({ followUpAt: input.at })
+        .where(and(eq(leads.projectId, input.projectId), eq(leads.profileId, profile.id)))
+        .returning({ id: leads.id });
+      return updated.length > 0;
+    },
+
+    /**
+     * Sends one reminder (bell + Telegram/push) listing the follow-ups that are
+     * due, then clears them so each is reminded once. Customers and rejected
+     * leads are skipped. Returns how many were due.
+     */
+    async sendDueFollowUps(now = new Date()) {
+      const due = await db
+        .select({
+          id: leads.id,
+          username: profiles.username,
+          status: leads.status,
+          project: projects.name,
+          projectId: projects.id,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .innerJoin(projects, eq(projects.id, leads.projectId))
+        .where(
+          and(
+            isNotNull(leads.followUpAt),
+            lte(leads.followUpAt, now),
+            notInArray(leads.status, ["customer", "rejected"]),
+          ),
+        )
+        .orderBy(leads.followUpAt)
+        .limit(200);
+      if (due.length === 0) return 0;
+      const lines = due
+        .slice(0, 15)
+        .map((d) => `@${d.username} · ${d.project} · ${STATUS_AR[d.status] ?? d.status}`);
+      if (due.length > 15) lines.push(`و${due.length - 15} غيرهم`);
+      await notify({
+        type: "system",
+        level: "info",
+        title: `حان موعد المتابعة مع ${due.length} من العملاء`,
+        body: lines.join("\n"),
+        url: `/leads/board?project=${due[0]?.projectId}`,
+        key: `followup:${now.toISOString().slice(0, 10)}`,
+      });
+      await db
+        .update(leads)
+        .set({ followUpAt: null })
+        .where(
+          inArray(
+            leads.id,
+            due.map((d) => d.id),
+          ),
+        );
+      return due.length;
     },
 
     /** Sets where the owner is with a lead (CRM status) and an optional note. */
@@ -1184,6 +1264,19 @@ export function createScrapers(deps: {
         jobs: await count(jobs),
         lastCron: await getValue<string>("cron:last"),
         providers: router.snapshot(),
+        /** Leads created this month that have an AI score (scoring has no own timestamp). */
+        scoredThisMonth:
+          (
+            await db
+              .select({ n: sql<number>`count(*)::int` })
+              .from(leads)
+              .where(
+                and(
+                  isNotNull(leads.aiScore),
+                  gte(leads.createdAt, sql`date_trunc('month', now())`),
+                ),
+              )
+          )[0]?.n ?? 0,
       };
     },
 

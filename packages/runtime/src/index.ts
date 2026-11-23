@@ -60,6 +60,8 @@ export interface Runtime {
   vapidPublicKey: string | null;
   /** Daily check: free-credit level and whether each provider still answers. */
   healthCheck(): Promise<{ provider: string; ok: boolean; detail: string }[]>;
+  /** Apify spend this month (null when Apify is not configured or unreachable). */
+  apifyUsage(): Promise<{ usedUsd: number; allowedUsd: number } | null>;
   close(): Promise<void>;
 }
 
@@ -289,6 +291,11 @@ export async function createRuntime(
 
     telegram,
     vapidPublicKey: push ? (env.VAPID_PUBLIC_KEY ?? null) : null,
+
+    async apifyUsage() {
+      const apify = providers.find((p): p is ApifyProvider => p instanceof ApifyProvider);
+      return apify ? apify.usage().catch(() => null) : null;
+    },
 
     async healthCheck() {
       const results: { provider: string; ok: boolean; detail: string }[] = [];

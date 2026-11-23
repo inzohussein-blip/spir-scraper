@@ -25,11 +25,15 @@ const LABELS: Record<keyof ReturnType<typeof integrationStatus>, [string, string
 
 export default async function Settings() {
   const rt = await getRuntime();
-  const [keys, twoFa, health] = await Promise.all([
+  const [keys, twoFa, health, apify] = await Promise.all([
     rt.scrapers.listApiKeys(),
     twoFactorEnabled(),
     rt.scrapers.systemHealth(),
+    rt.apifyUsage(),
   ]);
+  const apifyPct = apify?.allowedUsd ? Math.round((apify.usedUsd / apify.allowedUsd) * 100) : 0;
+  // Claude Haiku scoring: about 600 input and 80 output tokens per lead.
+  const aiEstimateUsd = health.scoredThisMonth * (600 * 1 + 80 * 5) * 1e-6;
   // Storage limit of the database plan, for the health bar (Supabase free: 500MB, Neon free: per project).
   const dbLimitMb = Number(process.env.DB_SIZE_LIMIT_MB) || 500;
   const dbPct = Math.round((health.dbBytes / (dbLimitMb * 1024 * 1024)) * 100);
@@ -109,6 +113,28 @@ export default async function Settings() {
           </ActionForm>
         </Card>
       </div>
+
+      <Card
+        title="الصرف هذا الشهر"
+        description="رصيد Apify يُقرأ من حسابك مباشرة، وتكلفة التقييم بالذكاء الاصطناعي تقديرية."
+      >
+        <ul className="grid gap-3 text-sm sm:grid-cols-2">
+          <li className="space-y-1.5">
+            <div className="flex items-center justify-between gap-3">
+              <span>Apify</span>
+              <Badge tone={!apify ? "warn" : apifyPct > 85 ? "bad" : apifyPct > 60 ? "warn" : "ok"}>
+                {apify
+                  ? `$${apify.usedUsd.toFixed(2)} من $${apify.allowedUsd.toFixed(2)} · ${apifyPct}%`
+                  : "غير متاح"}
+              </Badge>
+            </div>
+          </li>
+          <li className="flex items-center justify-between gap-3">
+            <span>تقييم الذكاء الاصطناعي ({health.scoredThisMonth} عميلاً)</span>
+            <Badge tone="info">≈ ${aiEstimateUsd.toFixed(2)}</Badge>
+          </li>
+        </ul>
+      </Card>
 
       <Card
         title="صحة النظام"

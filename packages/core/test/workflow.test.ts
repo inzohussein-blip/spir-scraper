@@ -290,3 +290,43 @@ describe("shared stores, weekly summary and health", () => {
     }
   });
 });
+
+describe("follow-up reminders", () => {
+  it("reminds once about due follow-ups, skipping customers and rejected leads", async () => {
+    const worker = new FakeProvider("worker", ["profile"], { profile: fakeProfile });
+    const t = await setup([worker]);
+    try {
+      const p = await t.scrapers.createProject({ name: "وكلاء", owner: "o" });
+      await t.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(["a1", "a2", "a3", "a4"]),
+        limit: 10,
+      });
+      for (let i = 0; i < 10; i++)
+        if ((await t.scrapers.drain({ budgetMs: 5_000 })).activeJobs === 0) break;
+      const past = new Date(Date.now() - 3600_000);
+      const future = new Date(Date.now() + 86_400_000);
+      expect(await t.scrapers.setFollowUp({ projectId: p.id, username: "@A1", at: past })).toBe(
+        true,
+      );
+      await t.scrapers.setFollowUp({ projectId: p.id, username: "a2", at: future });
+      await t.scrapers.setFollowUp({ projectId: p.id, username: "a3", at: past });
+      await t.scrapers.setLeadStatus({ projectId: p.id, username: "a3", status: "customer" });
+      expect(await t.scrapers.setFollowUp({ projectId: p.id, username: "ghost", at: past })).toBe(
+        false,
+      );
+
+      expect(await t.scrapers.sendDueFollowUps()).toBe(1);
+      const bell = await t.scrapers.listNotifications(5);
+      expect(bell[0]).toMatchObject({ title: "حان موعد المتابعة مع 1 من العملاء" });
+      expect(bell[0]?.body).toContain("@a1 · وكلاء · جديد");
+      // Reminded once: the date is cleared, the future one stays.
+      expect(await t.scrapers.sendDueFollowUps()).toBe(0);
+      const leads = await t.scrapers.listLeads({ projectId: p.id });
+      expect(leads.find((l) => l.username === "a1")?.followUpAt).toBeNull();
+      expect(leads.find((l) => l.username === "a2")?.followUpAt).toEqual(future);
+    } finally {
+      await t.close();
+    }
+  });
+});
