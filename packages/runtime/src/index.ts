@@ -81,6 +81,8 @@ export interface RuntimeOverrides {
   providers?: Provider[];
   /** Readers for other platforms; defaults to the ones configured in the environment. */
   connectors?: Connector[];
+  /** Web page reader for watched competitor sites; defaults to the safe reader. */
+  readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
   /** Google Maps search; defaults to the Apify provider when APIFY_TOKEN is set. */
   places?: PlacesSearch;
   scorer?: Scorer | null;
@@ -184,6 +186,7 @@ export async function createRuntime(
     ...(o.resolve ? { resolve: o.resolve } : {}),
     onReadyToExport: (jobId) => autoExport(jobId),
     connectors: o.connectors ?? connectorsFromEnv(env),
+    readPage: o.readPage ?? ((url) => readPage(url)),
     ...(() => {
       const apify = providers.find((p): p is ApifyProvider => p instanceof ApifyProvider);
       return o.places ? { places: o.places } : apify ? { places: apify } : {};

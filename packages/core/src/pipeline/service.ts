@@ -19,6 +19,7 @@ import {
   profiles,
   projects,
   pushSubscriptions,
+  siteWatches,
   suppression,
 } from "@scrapers/db";
 import {
@@ -48,6 +49,8 @@ import {
   fetchLinkPage,
   growthPercent,
   linkedAccounts,
+  normalizePageText,
+  pageDiff,
   parseAccountUrl,
   profileChanges,
   profileQuality,
@@ -216,6 +219,8 @@ export function createScrapers(deps: {
   connectors?: Connector[];
   /** Google Maps search (Apify). */
   places?: PlacesSearch;
+  /** Reads one public web page (for watching competitor sites). */
+  readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
 }) {
   const { db, boss, router, config, scorer } = deps;
   const sinks = deps.sinks ?? [];
@@ -1830,6 +1835,116 @@ export function createScrapers(deps: {
           ),
         );
       return { sent: names.length, jobId: job.id };
+    },
+
+    /**
+     * Reads an account on another platform without saving anything (e.g. a
+     * link sent to the Telegram bot). Paid connectors are skipped unless asked.
+     */
+    async peekAccount(url: string, opts: { allowPaid?: boolean } = {}) {
+      const ref = parseAccountUrl(url);
+      if (!ref) return null;
+      const connector = connectors.get(ref.platform);
+      if (!connector || (connector.paid && !opts.allowPaid)) return { ref, account: null };
+      try {
+        return { ref, account: await connector.getAccount(ref.handle) };
+      } catch (err) {
+        return { ref, account: null, error: (err as Error).message };
+      }
+    },
+
+    async addSiteWatch(input: { url: string; label?: string | null }) {
+      const url = /^https?:\/\//i.test(input.url.trim())
+        ? input.url.trim()
+        : `https://${input.url.trim()}`;
+      new URL(url);
+      const [w] = await db
+        .insert(siteWatches)
+        .values({ url, label: input.label?.trim() || null })
+        .onConflictDoUpdate({
+          target: siteWatches.url,
+          set: { enabled: true, label: input.label?.trim() || null },
+        })
+        .returning();
+      return w;
+    },
+
+    async listSiteWatches() {
+      return db.select().from(siteWatches).orderBy(desc(siteWatches.createdAt));
+    },
+
+    async removeSiteWatch(id: string) {
+      await db.delete(siteWatches).where(eq(siteWatches.id, id));
+    },
+
+    /**
+     * Reads each watched page (at most once every `everyHours`) and, when its
+     * text changed, records the added and removed lines and alerts the owner.
+     * The first reading only sets the baseline.
+     */
+    async checkSiteWatches(now = new Date(), everyHours = 20) {
+      if (!deps.readPage) return { checked: 0, changed: 0 };
+      const due = await db
+        .select()
+        .from(siteWatches)
+        .where(
+          and(
+            eq(siteWatches.enabled, true),
+            or(
+              isNull(siteWatches.lastCheckedAt),
+              lt(siteWatches.lastCheckedAt, new Date(now.getTime() - everyHours * 3_600_000)),
+            ),
+          ),
+        )
+        .limit(30);
+      let changed = 0;
+      const alerts: string[] = [];
+      for (const w of due) {
+        try {
+          const page = await deps.readPage(w.url);
+          const text = normalizePageText(page.text).slice(0, 30_000);
+          const hash = createHash("sha256").update(text).digest("hex");
+          if (w.lastHash && w.lastHash !== hash) {
+            const diff = pageDiff(w.lastText ?? "", text);
+            if (diff.added.length + diff.removed.length > 0) {
+              changed++;
+              await db
+                .update(siteWatches)
+                .set({
+                  lastDiff: { added: diff.added.slice(0, 40), removed: diff.removed.slice(0, 40) },
+                  lastChangedAt: now,
+                })
+                .where(eq(siteWatches.id, w.id));
+              alerts.push(
+                [
+                  `<${w.label ?? page.title ?? w.url}>`,
+                  ...diff.added.slice(0, 5).map((l) => `+ ${l.slice(0, 140)}`),
+                  ...diff.removed.slice(0, 3).map((l) => `− ${l.slice(0, 140)}`),
+                ].join("\n"),
+              );
+            }
+          }
+          await db
+            .update(siteWatches)
+            .set({ lastHash: hash, lastText: text, lastCheckedAt: now, error: null })
+            .where(eq(siteWatches.id, w.id));
+        } catch (err) {
+          await db
+            .update(siteWatches)
+            .set({ lastCheckedAt: now, error: (err as Error).message.slice(0, 300) })
+            .where(eq(siteWatches.id, w.id));
+        }
+      }
+      if (alerts.length > 0)
+        await notify({
+          type: "system",
+          level: "warn",
+          title: `تغيّر ${alerts.length} من مواقع المنافسين`,
+          body: alerts.join("\n\n").slice(0, 1500),
+          url: "/competitors",
+          key: `site-change:${now.toISOString().slice(0, 13)}`,
+        });
+      return { checked: due.length, changed };
     },
 
     /** Platforms this server can read (an official connector is configured). */

@@ -649,6 +649,40 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "watch_site",
+    {
+      title: "Watch a competitor's page",
+      description:
+        "Watch a competitor's web page (prices, commissions, offers). It is read daily; when its text changes the " +
+        "owner is alerted with the lines added and removed. Pass remove_id to stop watching. Lists all watches.",
+      inputSchema: z.object({
+        url: z.string().min(4).max(500).optional(),
+        label: z.string().max(100).optional(),
+        remove_id: z.string().uuid().optional(),
+      }),
+    },
+    guard(async (a) => {
+      if (a.remove_id) await rt.scrapers.removeSiteWatch(a.remove_id);
+      if (a.url) {
+        await rt.scrapers.addSiteWatch({ url: a.url, label: a.label ?? null });
+        await rt.scrapers.checkSiteWatches();
+      }
+      const watches = await rt.scrapers.listSiteWatches();
+      return json({
+        watches: watches.map((w) => ({
+          id: w.id,
+          url: w.url,
+          label: w.label,
+          lastCheckedAt: w.lastCheckedAt,
+          lastChangedAt: w.lastChangedAt,
+          lastDiff: w.lastDiff,
+          error: w.error,
+        })),
+      });
+    }),
+  );
+
+  server.registerTool(
     "read_page",
     {
       title: "Read a web page",

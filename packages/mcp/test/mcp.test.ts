@@ -66,6 +66,7 @@ describe("MCP server over Streamable HTTP", () => {
       "suppress",
       "update_project",
       "watch_competitor",
+      "watch_site",
     ]);
     const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();
     expect(prompts).toEqual(["audience_report", "find_partners"]);

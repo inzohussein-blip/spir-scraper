@@ -40,6 +40,7 @@ export async function GET(req: Request) {
     },
     0,
   );
+  const sites = await step("sites", () => rt.scrapers.checkSiteWatches(), null);
   const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
   let backupSent = false;
   if (weekly && rt.telegram) {
@@ -77,6 +78,7 @@ export async function GET(req: Request) {
     followUps,
     accountsRead,
     placesRead,
+    sites,
     weeklySent: !!weekly,
     backupSent,
   });

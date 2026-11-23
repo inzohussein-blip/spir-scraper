@@ -88,6 +88,7 @@ describe("migrations", () => {
       "profiles",
       "projects",
       "push_subscriptions",
+      "site_watches",
       "suppression",
     ]);
     expect(rows.every((r) => r.relrowsecurity)).toBe(true);

@@ -14,6 +14,7 @@ export * from "./language.js";
 export * from "./linkpages.js";
 export * from "./links.js";
 export * from "./mx.js";
+export * from "./pagediff.js";
 export * from "./phones.js";
 export * from "./quality.js";
 export * from "./resolve.js";

@@ -23,7 +23,11 @@ const migrationsFolder = fileURLToPath(new URL("../../db/drizzle", import.meta.u
 export async function setup(
   providers: Provider[],
   scorer?: Scorer,
-  opts: { connectors?: Connector[]; places?: PlacesSearch } = {},
+  opts: {
+    connectors?: Connector[];
+    places?: PlacesSearch;
+    readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
+  } = {},
 ) {
   const pg = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(pg, { schema });
@@ -47,6 +51,7 @@ export async function setup(
     config: { suppressionPepper: "test-pepper" },
     ...(opts.connectors ? { connectors: opts.connectors } : {}),
     ...(opts.places ? { places: opts.places } : {}),
+    ...(opts.readPage ? { readPage: opts.readPage } : {}),
   });
   await scrapers.init();
   return {

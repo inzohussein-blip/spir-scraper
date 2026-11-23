@@ -452,3 +452,22 @@ export const places = pgTable(
 );
 
 export type Place = typeof places.$inferSelect;
+
+/** Competitor pages (prices, offers, partner terms) checked for changes. */
+export const siteWatches = pgTable("site_watches", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  url: text("url").notNull().unique(),
+  label: text("label"),
+  /** sha256 of the page's normalised text. */
+  lastHash: text("last_hash"),
+  lastText: text("last_text"),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+  lastChangedAt: timestamp("last_changed_at", { withTimezone: true }),
+  /** Lines added and removed at the last change. */
+  lastDiff: jsonb("last_diff").$type<{ added: string[]; removed: string[] }>(),
+  error: text("error"),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: createdAt(),
+});
+
+export type SiteWatch = typeof siteWatches.$inferSelect;

@@ -687,3 +687,52 @@ describe("paid connectors", () => {
     }
   });
 });
+
+describe("competitor websites", () => {
+  it("sets a baseline, then reports added and removed lines once a day", async () => {
+    let text = "Acme FX\nعمولة الوكيل 5$ لكل لوت\nسجّل الآن";
+    const t = await setup(
+      [new FakeProvider("worker", ["profile"], { profile: fakeProfile })],
+      undefined,
+      {
+        readPage: async () => ({ title: "Acme partners", text }),
+      },
+    );
+    try {
+      const w = await t.scrapers.addSiteWatch({
+        url: "acme.example/partners",
+        label: "عمولات Acme",
+      });
+      expect(w?.url).toBe("https://acme.example/partners");
+      const t0 = new Date("2030-01-01T00:00:00Z");
+      expect(await t.scrapers.checkSiteWatches(t0)).toEqual({ checked: 1, changed: 0 });
+      // Too soon to check again.
+      expect(await t.scrapers.checkSiteWatches(new Date(t0.getTime() + 3_600_000))).toEqual({
+        checked: 0,
+        changed: 0,
+      });
+
+      text = "Acme FX\nعمولة الوكيل 8$ لكل لوت\nسجّل الآن\nمسابقة الشهر للوكلاء";
+      const t1 = new Date(t0.getTime() + 24 * 3_600_000);
+      expect(await t.scrapers.checkSiteWatches(t1)).toEqual({ checked: 1, changed: 1 });
+      const [watch] = await t.scrapers.listSiteWatches();
+      expect(watch?.lastDiff).toEqual({
+        added: ["عمولة الوكيل 8$ لكل لوت", "مسابقة الشهر للوكلاء"],
+        removed: ["عمولة الوكيل 5$ لكل لوت"],
+      });
+      const bell = await t.scrapers.listNotifications(3);
+      expect(bell[0]?.title).toBe("تغيّر 1 من مواقع المنافسين");
+      expect(bell[0]?.body).toContain("+ عمولة الوكيل 8$ لكل لوت");
+
+      // Unchanged the next day: no alert.
+      expect(await t.scrapers.checkSiteWatches(new Date(t1.getTime() + 24 * 3_600_000))).toEqual({
+        checked: 1,
+        changed: 0,
+      });
+      await t.scrapers.removeSiteWatch(watch?.id as string);
+      expect(await t.scrapers.listSiteWatches()).toEqual([]);
+    } finally {
+      await t.close();
+    }
+  });
+});

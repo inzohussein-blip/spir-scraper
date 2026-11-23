@@ -608,3 +608,44 @@ export async function placesToLeads(_: ActionState, form: FormData): Promise<Act
     return fail(err);
   }
 }
+
+/** Saves (or refreshes) one Instagram account shared from another app. */
+export async function saveSharedAccount(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const username = str(form, "username").replace(/^@/, "").toLowerCase();
+  if (!/^[a-z0-9._]{1,30}$/.test(username)) return { error: "معرّف غير صالح" };
+  try {
+    await (await getRuntime()).scrapers.startJob({
+      projectId: str(form, "project"),
+      source: uploadSource([username], `مشاركة: @${username}`),
+      limit: 1,
+    });
+    await audit("share.save", { username });
+    await scheduleDrain();
+    return { message: "بدأ الحفظ، يظهر في العملاء خلال لحظات", url: `/leads/${username}` };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Watches a competitor page (prices, offers, partner terms) for changes. */
+export async function addSiteWatch(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const rt = await getRuntime();
+    await rt.scrapers.addSiteWatch({ url: str(form, "url"), label: str(form, "label") || null });
+    // First reading now sets the baseline.
+    await rt.scrapers.checkSiteWatches();
+  } catch (err) {
+    return fail(err);
+  }
+  await audit("site_watch.add", { url: str(form, "url") });
+  revalidatePath("/competitors");
+  return { message: "تُراقب الصفحة الآن، ويصلك تنبيه حين تتغيّر" };
+}
+
+export async function removeSiteWatch(id: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.removeSiteWatch(id);
+  revalidatePath("/competitors");
+}

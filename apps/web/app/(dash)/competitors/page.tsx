@@ -1,4 +1,4 @@
-import { analyzeCompetitor } from "@/app/actions";
+import { addSiteWatch, analyzeCompetitor, removeSiteWatch } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Card, cx, fmtDate, fmtNum, Input, Notice, Select } from "@/components/ui";
 import { getRuntime } from "@/lib/runtime";
@@ -45,10 +45,11 @@ export default async function CompetitorsPage({
 }) {
   const { u } = await searchParams;
   const rt = await getRuntime();
-  const [projects, monitors, list] = await Promise.all([
+  const [projects, monitors, list, watches] = await Promise.all([
     rt.scrapers.listProjects(),
     rt.scrapers.listMonitors(),
     rt.scrapers.getValue<string[]>("competitor:list"),
+    rt.scrapers.listSiteWatches(),
   ]);
   const watched = [
     ...new Set([
@@ -227,6 +228,71 @@ export default async function CompetitorsPage({
           </Card>
         </div>
       )}
+      <Card
+        title="مراقبة مواقع المنافسين"
+        icon="radar"
+        description="صفحة الأسعار أو العمولات أو العروض عند منافس: تُقرأ يومياً، ويصلك تنبيه بما أُضيف وما حُذف حين تتغيّر."
+      >
+        {watches.length > 0 && (
+          <ul className="mb-4 divide-y divide-line text-sm">
+            {watches.map((w) => (
+              <li key={w.id} className="py-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href={w.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium hover:text-accent"
+                  >
+                    {w.label ?? w.url}
+                  </a>
+                  <span className="text-xs text-muted">
+                    {w.lastChangedAt ? `آخر تغيّر ${fmtDate(w.lastChangedAt)}` : "لم يتغيّر بعد"}
+                    {w.lastCheckedAt ? ` · فُحص ${fmtDate(w.lastCheckedAt)}` : ""}
+                  </span>
+                  {w.error && <span className="text-xs text-warn">{w.error}</span>}
+                  <form action={removeSiteWatch.bind(null, w.id)} className="ms-auto">
+                    <button
+                      type="submit"
+                      className="rounded px-2 py-0.5 text-xs text-muted hover:bg-bad-soft hover:text-bad"
+                    >
+                      حذف
+                    </button>
+                  </form>
+                </div>
+                {w.lastDiff && (w.lastDiff.added.length > 0 || w.lastDiff.removed.length > 0) && (
+                  <div className="mt-1.5 space-y-0.5 text-xs">
+                    {w.lastDiff.added.slice(0, 5).map((l) => (
+                      <p key={`+${l}`} className="text-ok">
+                        + {l}
+                      </p>
+                    ))}
+                    {w.lastDiff.removed.slice(0, 3).map((l) => (
+                      <p key={`-${l}`} className="text-bad line-through">
+                        − {l}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <ActionForm
+          action={addSiteWatch}
+          submit="راقب"
+          className="grid gap-3 sm:grid-cols-[1fr_14rem_auto] sm:items-start"
+        >
+          <Input
+            name="url"
+            required
+            className="ltr"
+            placeholder="https://competitor.com/partners"
+            aria-label="رابط صفحة المنافس"
+          />
+          <Input name="label" placeholder="اسم (اختياري)" aria-label="اسم الصفحة" />
+        </ActionForm>
+      </Card>
     </div>
   );
 }

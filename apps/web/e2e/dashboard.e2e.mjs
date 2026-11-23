@@ -152,6 +152,22 @@ try {
   await page.waitForSelector("text=@rival7");
   step("competitor analysis");
 
+  // Google Maps needs Apify; without it the page says so instead of failing.
+  await page.goto(`${B}/places`);
+  await page.waitForSelector("text=APIFY_TOKEN");
+  step("businesses page without Apify");
+
+  // Shared from another app (Android share sheet → /share).
+  await page.goto(
+    `${B}/share?text=${encodeURIComponent("شوف https://www.instagram.com/user40/ 👌")}`,
+  );
+  await page.waitForSelector("text=غير محفوظ بعد");
+  await page.click('button:has-text("احفظ كعميل")');
+  await page.waitForSelector("text=بدأ الحفظ");
+  await page.goto(`${B}/share?url=${encodeURIComponent("https://www.tiktok.com/@gold.coach")}`);
+  await page.waitForSelector("text=اربطه بعميل");
+  step("share target: save an Instagram account, link another platform");
+
   // The browser extension is offered from the dashboard (built into public/downloads by the deploy).
   await page.goto(`${B}/extension`);
   await page.waitForSelector("text=الإصدار");
