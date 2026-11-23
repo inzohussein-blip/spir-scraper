@@ -73,6 +73,10 @@ describe("databaseRegion", () => {
     expect(databaseRegion("postgres://u:p@ep-x.us-east-1.aws.neon.tech/db").vercelRegion).toBe(
       "iad1",
     );
+    // Newer Neon hosts carry a cell label before the region.
+    expect(databaseRegion("postgres://u:p@ep-x-pooler.c-2.us-east-1.aws.neon.tech/db").region).toBe(
+      "us-east-1",
+    );
   });
 
   it("returns nulls for other hosts and bad input", () => {

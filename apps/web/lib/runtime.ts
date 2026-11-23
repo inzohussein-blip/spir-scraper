@@ -10,7 +10,7 @@ export function getRuntime(): Promise<Runtime> {
       // Once per cold start: where the function runs and where the database is.
       const db = databaseRegion(databaseUrl());
       console.info(
-        `[runtime] function region ${process.env.VERCEL_REGION ?? "local"} · database region ${db.region ?? "unknown"}${db.vercelRegion ? ` (nearest function region ${db.vercelRegion})` : ""}`,
+        `[runtime] function region ${process.env.VERCEL_REGION ?? "local"} · database region ${db.region ?? `unknown (${db.host?.split(".").slice(1).join(".") ?? "no url"})`}${db.vercelRegion ? ` (nearest function region ${db.vercelRegion})` : ""}`,
       );
       return rt;
     })
