@@ -25,6 +25,38 @@ export interface ScoringInput {
   isVerified: boolean;
   category: string | null;
   externalUrl: string | null;
+  /** How many of the project's sources (competitors, posts) the account was found in. */
+  sources?: number;
+}
+
+/** Lead filters understood from a question in plain language. */
+export interface LeadQuery {
+  status?: "new" | "contacted" | "interested" | "customer" | "rejected";
+  minScore?: number;
+  /** ISO 3166-1 alpha-2. */
+  country?: string;
+  /** ISO 639-1. */
+  language?: string;
+  business?: boolean;
+  hasEmail?: boolean;
+  hasPhone?: boolean;
+  minFollowers?: number;
+  maxFollowers?: number;
+  /** Found in at least this many sources. */
+  minSources?: number;
+  /** Words to look for in the username, name and bio. */
+  q?: string;
+}
+
+/** What the competitor brief is written from. */
+export interface CompetitorBriefInput {
+  username: string;
+  bio: string | null;
+  category: string | null;
+  followers: number | null;
+  growthPercent: number | null;
+  analysis: unknown;
+  captions: string[];
 }
 
 /**
@@ -39,6 +71,10 @@ export interface Scorer {
   /** Returns null while the batch is still processing. */
   collectBatch(batchId: string): Promise<Map<string, LeadScore> | null>;
   report?(stats: AudienceStats, criteria: string): Promise<string>;
+  /** Turns an Arabic or English question into lead filters. */
+  parseQuery?(question: string): Promise<LeadQuery>;
+  /** A short Arabic brief on a competitor with content ideas. */
+  competitorBrief?(input: CompetitorBriefInput, criteria: string): Promise<string>;
 }
 
 export interface AudienceStats {

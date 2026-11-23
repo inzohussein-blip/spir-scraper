@@ -10,15 +10,18 @@ export function ActionForm({
   children,
   submit,
   className,
+  id,
 }: {
   action: (state: ActionState, form: FormData) => Promise<ActionState>;
   children: ReactNode;
   submit: string;
   className?: string;
+  /** Lets inputs elsewhere on the page join this form with form="id". */
+  id?: string;
 }) {
   const [state, formAction, pending] = useActionState(action, null);
   return (
-    <form action={formAction} className={className ?? "space-y-4"}>
+    <form id={id} action={formAction} className={className ?? "space-y-4"}>
       {children}
       <Button type="submit" disabled={pending}>
         {pending ? "جارٍ التنفيذ…" : submit}

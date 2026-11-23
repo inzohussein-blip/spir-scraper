@@ -4,6 +4,7 @@ import {
   type Provider,
   ProviderError,
   type RawProfile,
+  type RecentPost,
   type Source,
 } from "@scrapers/core";
 import { ensureOk, type FetchLike } from "./http.js";
@@ -48,12 +49,31 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 const pick = (o: Item, ...keys: string[]) =>
   keys.map((k) => o[k]).find((v) => v !== undefined && v !== null);
 
-function recentPosts(v: unknown): { likes: number | null; comments: number | null }[] | null {
+const POST_TYPES: Record<string, string> = {
+  image: "image",
+  graphimage: "image",
+  video: "video",
+  graphvideo: "video",
+  reel: "video",
+  clips: "video",
+  sidecar: "carousel",
+  graphsidecar: "carousel",
+  carousel: "carousel",
+};
+
+function recentPosts(v: unknown): RecentPost[] | null {
   if (!Array.isArray(v)) return null;
-  return (v as Item[]).slice(0, 12).map((p) => ({
-    likes: num(pick(p, "likesCount", "likes_count", "likes")),
-    comments: num(pick(p, "commentsCount", "comments_count", "comments")),
-  }));
+  return (v as Item[]).slice(0, 12).map((p) => {
+    const kind = str(pick(p, "type", "productType", "__typename"))?.toLowerCase() ?? "";
+    return {
+      likes: num(pick(p, "likesCount", "likes_count", "likes")),
+      comments: num(pick(p, "commentsCount", "comments_count", "comments")),
+      caption: str(pick(p, "caption", "text"))?.slice(0, 500) ?? null,
+      timestamp: str(pick(p, "timestamp", "taken_at", "takenAt")),
+      type: POST_TYPES[kind] ?? null,
+      url: str(pick(p, "url")),
+    };
+  });
 }
 
 /** Maps an Apify profile item onto RawProfile, accepting the field names actors use. */

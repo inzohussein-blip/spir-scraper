@@ -70,6 +70,15 @@ const profileHtml = `<!doctype html><html><head>
 </script></body></html>`;
 
 /** The scripted model: reads tool results and answers like an agent would. */
+const postHtml = `<!doctype html><html><head><title>post</title></head><body><main><article>
+<header><a href="/acme/">acme</a></header>
+<ul>
+  <li><a href="/acme/">acme</a> <span>Gold signals every day</span></li>
+  <li><a href="/buyer_1/">buyer_1</a> <span>بكم الاشتراك؟</span> <span>2d</span> <button>Reply</button></li>
+  <li><a href="/fan.2/">fan.2</a> <span>ما شاء الله 🔥</span></li>
+  <li><a href="/buyer_3/">buyer_3</a> <span>Price?? DM me</span></li>
+</ul></article></main></body></html>`;
+
 function modelTurn(messages) {
   const lastTool = [...messages].reverse().find((m) => m.role === "tool")?.content ?? "";
   const assistantTurns = messages.filter((m) => m.role === "assistant").length;
@@ -156,6 +165,7 @@ const server = http.createServer(async (req, res) => {
   };
   if (req.url === "/acme/" || req.url === "/known/")
     return send(200, profileHtml, "text/html; charset=utf-8");
+  if (req.url === "/acme/p/Cx12abc/") return send(200, postHtml, "text/html; charset=utf-8");
   if (req.url === "/downloads/spir-extension.json") return send(200, { version: "99.0.0" });
   if (req.url === "/v1/chat/completions") {
     const parsed = JSON.parse(body);
@@ -319,6 +329,31 @@ try {
   if (saved.length !== 60 || saved.includes("acme"))
     fail(`expected 60 saved followers, got ${saved.length}`);
   step("manual: sends the collected usernames to the platform");
+
+  // Manual: commenters on an open post, the interested ones first.
+  await site.goto(`${origin}/acme/p/Cx12abc/`);
+  await panel.click("#readComments");
+  await panel.waitForSelector("#commentsList li");
+  const commenters = await panel.$$eval("#commentsList li", (lis) =>
+    lis.map((li) => [li.querySelector("b")?.textContent, li.className]),
+  );
+  if (
+    JSON.stringify(commenters) !==
+    JSON.stringify([
+      ["@buyer_3", "hot"],
+      ["@buyer_1", "hot"],
+      ["@fan.2", ""],
+    ])
+  )
+    fail(`unexpected commenters ${JSON.stringify(commenters)}`);
+  const before = saved.length;
+  panel.once("dialog", (d) => d.accept());
+  await panel.click("#saveInterested");
+  await panel.waitForTimeout(500);
+  if (JSON.stringify(saved.slice(before).sort()) !== JSON.stringify(["buyer_1", "buyer_3"]))
+    fail(`expected the two interested commenters, got ${saved.slice(before)}`);
+  step("manual: reads a post's commenters and saves the interested ones");
+  await site.goto(`${origin}/acme/`);
   saved.length = 0;
   await panel.click("#collectClear");
 

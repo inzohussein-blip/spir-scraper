@@ -344,6 +344,7 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
       aiCriteria: str(form, "criteria") || null,
       sheetId: str(form, "sheet") || null,
       messageTemplate: str(form, "template").slice(0, 1000) || null,
+      skipFake: form.get("skip_fake") === "on",
     });
   } catch (err) {
     return fail(err);
@@ -392,4 +393,86 @@ export async function removeMonitor(id: string) {
   await (await getRuntime()).scrapers.deleteMonitor(id);
   await audit("monitor.delete", { id });
   revalidatePath("/leads");
+}
+
+const STATUS_VALUES = ["new", "contacted", "interested", "customer", "rejected"] as const;
+
+/** Changes the ticked leads at once: status, follow-up day, or both. */
+export async function bulkLeads(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  const usernames = form
+    .getAll("u")
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+  if (usernames.length === 0) return { error: "اختر عميلاً واحداً على الأقل" };
+  const status = STATUS_VALUES.find((s) => s === str(form, "bulk_status"));
+  const day = str(form, "bulk_day");
+  const followUpAt = /^\d{4}-\d{2}-\d{2}$/.test(day)
+    ? new Date(`${day}T06:00:00Z`)
+    : form.get("bulk_clear") === "on"
+      ? null
+      : undefined;
+  if (!status && followUpAt === undefined) return { error: "اختر حالة أو تاريخ متابعة" };
+  const n = await (await getRuntime()).scrapers.bulkUpdateLeads({
+    projectId,
+    usernames,
+    ...(status ? { status } : {}),
+    ...(followUpAt !== undefined ? { followUpAt } : {}),
+  });
+  await audit("lead.bulk", { count: n, status: status ?? null, day: day || null });
+  revalidatePath("/leads");
+  revalidatePath("/leads/board");
+  return { message: `تغيّر ${n} عميلاً` };
+}
+
+/** Adds a note to a lead's history. */
+export async function addLeadNote(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  const username = str(form, "username");
+  const ok = await (await getRuntime()).scrapers.addLeadNote({
+    projectId,
+    username,
+    text: str(form, "text"),
+  });
+  if (!ok) return { error: "اكتب الملاحظة أولاً" };
+  await audit("lead.note", { username });
+  revalidatePath(`/leads/${username}`);
+  return { message: "حُفظت الملاحظة" };
+}
+
+/**
+ * Reads a competitor now (one Apify profile call, about $0.003) and keeps the
+ * result for a week so reloading the page costs nothing.
+ */
+export async function analyzeCompetitor(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const username =
+    str(form, "username")
+      .replace(/^@/, "")
+      .replace(/.*instagram\.com\//, "")
+      .split(/[/?]/)[0]
+      ?.toLowerCase() ?? "";
+  if (!/^[a-z0-9._]{1,30}$/.test(username)) return { error: "اكتب معرّف حساب صحيحاً" };
+  const rt = await getRuntime();
+  try {
+    const result = await rt.scrapers.analyzeCompetitor({
+      username,
+      ...(str(form, "project") ? { projectId: str(form, "project") } : {}),
+    });
+    await rt.scrapers.setValue(`competitor:${username}`, result, 30 * 86_400_000);
+    const list = ((await rt.scrapers.getValue<string[]>("competitor:list")) ?? []).filter(
+      (u) => u !== username,
+    );
+    await rt.scrapers.setValue(
+      "competitor:list",
+      [username, ...list].slice(0, 30),
+      365 * 86_400_000,
+    );
+  } catch (err) {
+    return fail(err);
+  }
+  await audit("competitor.analyze", { username });
+  revalidatePath("/competitors");
+  redirect(`/competitors?u=${username}`);
 }

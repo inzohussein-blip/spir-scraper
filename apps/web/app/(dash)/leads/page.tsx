@@ -1,6 +1,8 @@
+import { LANGUAGE_LABELS } from "@scrapers/core";
 import Link from "next/link";
 import {
   addMonitor,
+  bulkLeads,
   removeMonitor,
   suppress,
   toggleMonitor,
@@ -8,6 +10,7 @@ import {
 } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { FollowUpInput } from "@/components/follow-up";
+import { SelectAll } from "@/components/select-all";
 import { StatusSelect } from "@/components/status-select";
 import {
   Badge,
@@ -38,6 +41,49 @@ type Search = {
   status?: string;
   q?: string;
   cursor?: string;
+  country?: string;
+  language?: string;
+  min_sources?: string;
+  ask?: string;
+};
+
+/** Countries offered in the filter; the most common markets first. */
+const COUNTRIES: Record<string, string> = {
+  SA: "السعودية",
+  AE: "الإمارات",
+  KW: "الكويت",
+  QA: "قطر",
+  BH: "البحرين",
+  OM: "عُمان",
+  IQ: "العراق",
+  EG: "مصر",
+  JO: "الأردن",
+  LB: "لبنان",
+  SY: "سوريا",
+  PS: "فلسطين",
+  YE: "اليمن",
+  LY: "ليبيا",
+  TN: "تونس",
+  DZ: "الجزائر",
+  MA: "المغرب",
+  SD: "السودان",
+  TR: "تركيا",
+  IR: "إيران",
+  GB: "بريطانيا",
+  US: "أمريكا",
+};
+const QUERY_LABELS: Record<string, string> = {
+  status: "الحالة",
+  minScore: "أدنى درجة",
+  country: "الدولة",
+  language: "اللغة",
+  business: "تجاري",
+  hasEmail: "له إيميل",
+  hasPhone: "له رقم",
+  minFollowers: "متابعون من",
+  maxFollowers: "متابعون إلى",
+  minSources: "عدد المصادر",
+  q: "كلمات",
 };
 
 const PAGE = 100;
@@ -64,6 +110,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
 
   const status = STATUSES.find((s) => s === q.status);
   const minScore = q.min_score ? Number(q.min_score) : undefined;
+  const country =
+    q.country && /^[A-Za-z]{2}$/.test(q.country) ? q.country.toUpperCase() : undefined;
+  const language = q.language && /^[a-z]{2}$/.test(q.language) ? q.language : undefined;
+  const minSources = q.min_sources ? Number(q.min_sources) : undefined;
+  // A question in plain language: the AI turns it into filters.
+  let asked: { query: Record<string, unknown>; error?: string } | null = null;
+  let askedRows: Awaited<ReturnType<typeof rt.scrapers.askLeads>>["leads"] | null = null;
+  if (q.ask?.trim()) {
+    try {
+      const r = await rt.scrapers.askLeads(projectId, q.ask, PAGE);
+      asked = { query: r.query as Record<string, unknown> };
+      askedRows = r.leads;
+    } catch (err) {
+      asked = {
+        query: {},
+        error: /ANTHROPIC_API_KEY/.test((err as Error).message)
+          ? "الأسئلة بالعربي تحتاج ANTHROPIC_API_KEY في Vercel."
+          : `تعذّر فهم السؤال: ${(err as Error).message}`,
+      };
+    }
+  }
   const [page, counts, monitors] = await Promise.all([
     rt.scrapers.listLeadsPage({
       projectId,
@@ -74,18 +141,21 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       ...(minScore !== undefined && !Number.isNaN(minScore) ? { minScore } : {}),
       ...(status ? { status } : {}),
       ...(q.q ? { q: q.q } : {}),
+      ...(country ? { country } : {}),
+      ...(language ? { language } : {}),
+      ...(minSources && minSources > 1 ? { minSources } : {}),
       ...(q.cursor ? { cursor: q.cursor } : {}),
       limit: PAGE,
     }),
     rt.scrapers.leadStatusCounts(projectId),
     rt.scrapers.listMonitors(projectId),
   ]);
-  const rows = page.leads;
+  const rows = askedRows ?? page.leads;
   const total = Object.values(counts).reduce((a, b) => a + (b ?? 0), 0);
 
   const base = Object.fromEntries(
     Object.entries({ ...q, project: projectId }).filter(
-      (e): e is [string, string] => !!e[1] && e[0] !== "cursor",
+      (e): e is [string, string] => !!e[1] && e[0] !== "cursor" && e[0] !== "ask",
     ),
   );
   const href = (patch: Record<string, string | undefined>) => {
@@ -127,6 +197,31 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           />
           {q.job && <input type="hidden" name="job" value={q.job} />}
           {status && <input type="hidden" name="status" value={status} />}
+          <Select name="country" defaultValue={country ?? ""} aria-label="الدولة">
+            <option value="">كل الدول</option>
+            {Object.entries(COUNTRIES).map(([code, name]) => (
+              <option key={code} value={code}>
+                {name}
+              </option>
+            ))}
+          </Select>
+          <Select name="language" defaultValue={language ?? ""} aria-label="اللغة">
+            <option value="">كل اللغات</option>
+            {Object.entries(LANGUAGE_LABELS).map(([code, name]) => (
+              <option key={code} value={code}>
+                {name}
+              </option>
+            ))}
+          </Select>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              name="min_sources"
+              value="2"
+              defaultChecked={(minSources ?? 0) >= 2}
+            />{" "}
+            يتابع أكثر من منافس
+          </label>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="business" value="1" defaultChecked={!!q.business} /> تجاري
           </label>
@@ -142,6 +237,36 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             تطبيق
           </Button>
         </form>
+        <form method="get" className="mt-4 flex flex-wrap gap-2">
+          <input type="hidden" name="project" value={projectId} />
+          <Input
+            name="ask"
+            defaultValue={q.ask}
+            placeholder="اسأل بالعربي: المهتمون من الكويت فوق 5000 متابع ولهم رقم"
+            className="min-w-0 flex-1"
+            aria-label="اسأل عن عملائك"
+          />
+          <Button type="submit">اسأل</Button>
+        </form>
+        {asked?.error && (
+          <div className="mt-3">
+            <Notice tone="warn">{asked.error}</Notice>
+          </div>
+        )}
+        {asked && !asked.error && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-muted">فهمت السؤال هكذا:</span>
+            {Object.entries(asked.query).map(([k, v]) => (
+              <Badge key={k} tone="accent" dot={false}>
+                {QUERY_LABELS[k] ?? k}: {String(v === true ? "نعم" : v)}
+              </Badge>
+            ))}
+            {Object.keys(asked.query).length === 0 && <span>بدون شروط (كل العملاء)</span>}
+            <Link href={href({})} className="text-accent hover:underline">
+              إلغاء السؤال
+            </Link>
+          </div>
+        )}
         <div className="mt-4 flex flex-wrap gap-2 text-sm">
           <Link
             href={href({ status: undefined })}
@@ -179,6 +304,34 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           </div>
         }
       >
+        {rows.length > 0 && (
+          <ActionForm
+            id="bulk"
+            action={bulkLeads}
+            submit="طبّق على المحدد"
+            className="mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-bg-2 p-2 text-sm"
+          >
+            <input type="hidden" name="project" value={projectId} />
+            <span className="text-muted">للمحدد:</span>
+            <Select name="bulk_status" defaultValue="" aria-label="حالة المحدد" className="w-auto">
+              <option value="">— الحالة —</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {STATUS_LABELS[s]}
+                </option>
+              ))}
+            </Select>
+            <Input
+              type="date"
+              name="bulk_day"
+              aria-label="تاريخ متابعة للمحدد"
+              className="ltr w-auto"
+            />
+            <label className="flex items-center gap-1 text-xs">
+              <input type="checkbox" name="bulk_clear" /> إلغاء التذكير
+            </label>
+          </ActionForm>
+        )}
         {rows.length === 0 ? (
           <p className="text-sm text-muted">لا توجد نتائج.</p>
         ) : (
@@ -186,6 +339,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-line text-[12.5px] text-muted">
+                  <th className="w-6 py-2 pe-2">
+                    <SelectAll form="bulk" />
+                  </th>
                   {[
                     "الحساب",
                     "المتابعون",
@@ -196,7 +352,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     "الحالة",
                     "متابعة",
                   ].map((h) => (
-                    <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
+                    <th key={h} className="px-2 py-2 text-start font-medium">
                       {h}
                     </th>
                   ))}
@@ -206,6 +362,15 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                 {rows.map((r) => (
                   <tr key={r.username} className="border-b border-line align-top last:border-0">
                     <td className="py-2.5 pe-2">
+                      <input
+                        type="checkbox"
+                        name="u"
+                        value={r.username}
+                        form="bulk"
+                        aria-label={`تحديد @${r.username}`}
+                      />
+                    </td>
+                    <td className="px-2 py-2.5">
                       <a
                         href={`https://www.instagram.com/${r.username}/`}
                         target="_blank"
@@ -214,6 +379,12 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                       >
                         @{r.username}
                       </a>
+                      <Link
+                        href={`/leads/${r.username}?project=${projectId}`}
+                        className="ms-2 text-xs text-muted hover:text-accent"
+                      >
+                        التفاصيل
+                      </Link>
                       <div className="text-xs text-muted">
                         {[r.fullName, r.category, r.city, r.isBusiness ? "تجاري" : null]
                           .filter(Boolean)
@@ -225,6 +396,21 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                             {FLAGS[f] ?? f}
                           </Badge>
                         ))}
+                        {(r.sourceCount ?? 1) > 1 && (
+                          <Badge tone="ok" dot={false}>
+                            عند {r.sourceCount} منافسين
+                          </Badge>
+                        )}
+                        {r.country && (
+                          <Badge tone="plain" dot={false}>
+                            {COUNTRIES[r.country] ?? r.country}
+                          </Badge>
+                        )}
+                        {r.language && (
+                          <Badge tone="plain" dot={false}>
+                            {LANGUAGE_LABELS[r.language] ?? r.language}
+                          </Badge>
+                        )}
                         {r.otherProjects > 0 && (
                           <Badge tone="info" dot={false}>
                             في {r.otherProjects} مشروع آخر
@@ -295,7 +481,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         )}
         <div className="mt-4 flex gap-2">
           {q.cursor && <LinkButton href={href({})}>من البداية</LinkButton>}
-          {page.nextCursor && (
+          {!askedRows && page.nextCursor && (
             <LinkButton href={`${href({})}&cursor=${encodeURIComponent(page.nextCursor)}`}>
               التالي
             </LinkButton>
@@ -322,6 +508,18 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                     يحتاج GOOGLE_SERVICE_ACCOUNT_JSON.
                   </span>
                 )}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="skip_fake"
+                defaultChecked={project.skipFake}
+                className="mt-1"
+              />
+              <span>
+                تجاهل الحسابات الوهمية: لا يُحفظ حساب فيه علامتان أو أكثر (متابعة متبادلة، منشورات
+                قليلة، تفاعل مريب) وليس له وسيلة تواصل.
               </span>
             </label>
             <Field

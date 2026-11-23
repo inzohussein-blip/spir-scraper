@@ -10,6 +10,7 @@ import {
 import { runAgent } from "./agent/loop.js";
 import { type AgentMode, systemPrompt, toolsFor } from "./agent/tools.js";
 import { activeTab, createExecutor, pageCall, tabIdOf } from "./browser.js";
+import type { PostComment } from "./page/instagram.js";
 import type { CollectState, InstagramProfile } from "./page/protocol.js";
 import { Platform } from "./platform.js";
 import {
@@ -246,6 +247,54 @@ $<HTMLButtonElement>("#collectSave").addEventListener("click", (e) =>
   }),
 );
 
+// ---------- manual: commenters on the open post ----------
+
+let comments: PostComment[] = [];
+
+function renderComments() {
+  const list = $("#commentsList");
+  list.replaceChildren(
+    ...comments.slice(0, 200).map((c) => {
+      const li = document.createElement("li");
+      if (c.intent.length) li.className = "hot";
+      const name = document.createElement("b");
+      name.textContent = `@${c.username}`;
+      li.append(name, ` ${c.text}`);
+      if (c.intent.length) li.title = `كلمات الاهتمام: ${c.intent.join("، ")}`;
+      return li;
+    }),
+  );
+  const hot = comments.filter((c) => c.intent.length).length;
+  const count = $("#commentsCount");
+  count.hidden = false;
+  count.textContent = `${comments.length.toLocaleString("ar")} معلّقاً، منهم ${hot.toLocaleString("ar")} يظهر عليهم الاهتمام`;
+  $<HTMLButtonElement>("#saveInterested").disabled = hot === 0;
+  $<HTMLButtonElement>("#saveCommenters").disabled = comments.length === 0;
+}
+
+$<HTMLButtonElement>("#readComments").addEventListener("click", (e) =>
+  withButton(e.currentTarget as HTMLButtonElement, async () => {
+    const tab = await allowedTab();
+    const res = await pageCall(tabIdOf(tab), { kind: "post_comments" });
+    if (!res.ok) throw new Error(res.error);
+    comments = (res.data as { comments: PostComment[] }).comments;
+    renderComments();
+  }),
+);
+
+for (const [id, onlyHot] of [
+  ["#saveInterested", true],
+  ["#saveCommenters", false],
+] as const) {
+  $<HTMLButtonElement>(id).addEventListener("click", (e) =>
+    withButton(e.currentTarget as HTMLButtonElement, async () => {
+      const names = comments.filter((c) => !onlyHot || c.intent.length).map((c) => c.username);
+      const r = await platform().save(settings.projectId, names);
+      alert(`أُرسل ${r.count} اسماً للمنصة. تُجلب تفاصيلهم في الخلفية.`);
+    }),
+  );
+}
+
 // ---------- agent runs (ask = read only, auto = acts) ----------
 
 let running: AbortController | null = null;
@@ -355,6 +404,7 @@ function fillSettings() {
   field("paceSeconds").value = String(settings.paceSeconds);
   field("maxSteps").value = String(settings.maxSteps);
   field("dailyInstagramActions").value = String(settings.dailyInstagramActions);
+  field("hourlyInstagramActions").value = String(settings.hourlyInstagramActions);
   field<HTMLInputElement>("showBadge").checked = settings.showBadge;
   field<HTMLTextAreaElement>("criteria").value = settings.criteria;
   field<HTMLTextAreaElement>("offer").value = settings.offer;
@@ -401,6 +451,7 @@ form.addEventListener("submit", (e) => {
     paceSeconds: Math.max(1, Number(field("paceSeconds").value) || 4),
     maxSteps: Math.max(1, Number(field("maxSteps").value) || 25),
     dailyInstagramActions: Math.max(1, Number(field("dailyInstagramActions").value) || 200),
+    hourlyInstagramActions: Math.max(1, Number(field("hourlyInstagramActions").value) || 60),
     showBadge: field<HTMLInputElement>("showBadge").checked,
     criteria: field<HTMLTextAreaElement>("criteria").value.trim(),
     offer: field<HTMLTextAreaElement>("offer").value.trim(),

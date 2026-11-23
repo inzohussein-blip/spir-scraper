@@ -52,6 +52,8 @@ export const projects = pgTable("projects", {
   watchKeywords: text("watch_keywords").array(),
   /** First-message template for WhatsApp links; {name} and {username} are filled in. */
   messageTemplate: text("message_template"),
+  /** Do not keep accounts with two or more fake-account signals and no contact. */
+  skipFake: boolean("skip_fake").notNull().default(false),
   createdAt: createdAt(),
 });
 
@@ -121,6 +123,8 @@ export const profiles = pgTable("profiles", {
   engagementRate: numeric("engagement_rate", { precision: 7, scale: 3 }),
   /** Heuristic warnings such as low_engagement or follow_farming. */
   qualityFlags: text("quality_flags").array(),
+  /** Main script of the name and bio: ar, fa, en, ... (heuristic). */
+  language: text("language"),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
   fetchedBy: providerId("fetched_by").notNull(),
 });
@@ -145,6 +149,8 @@ export const leads = pgTable(
     phoneRaw: text("phone_raw"),
     /** ISO 3166-1 alpha-2 country of the phone number. */
     phoneCountry: char("phone_country", { length: 2 }),
+    /** Most likely country (from the phone, bio, city and emails), for filtering. */
+    country: char("country", { length: 2 }),
     contactSource: contactSource("contact_source"),
     aiScore: smallint("ai_score"),
     aiTags: text("ai_tags").array(),
@@ -156,6 +162,10 @@ export const leads = pgTable(
     statusAt: timestamp("status_at", { withTimezone: true }),
     /** When the owner wants to be reminded to follow up (cleared once reminded). */
     followUpAt: timestamp("follow_up_at", { withTimezone: true }),
+    /** Every source (competitor, post, hashtag) the account was found in for this project. */
+    sources: text("sources").array(),
+    /** Number of distinct sources; following several competitors signals interest. */
+    sourceCount: integer("source_count").notNull().default(1),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: createdAt(),
   },
@@ -172,6 +182,8 @@ export const leads = pgTable(
     index("leads_phone_hash_idx").on(t.phoneHash),
     index("leads_project_status_idx").on(t.projectId, t.status),
     index("leads_follow_up_idx").on(t.followUpAt),
+    index("leads_project_sources_idx").on(t.projectId, t.sourceCount),
+    index("leads_project_country_idx").on(t.projectId, t.country),
   ],
 );
 
@@ -304,3 +316,34 @@ export const pushSubscriptions = pgTable("push_subscriptions", {
 
 export type Monitor = typeof monitors.$inferSelect;
 export type LeadStatus = (typeof leadStatus.enumValues)[number];
+
+/** The owner's notes and the history of each lead (status changes, profile changes). */
+export const leadEvents = pgTable(
+  "lead_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leadId: uuid("lead_id")
+      .notNull()
+      .references(() => leads.id, { onDelete: "cascade" }),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** note | status | change | follow_up */
+    kind: text("kind").notNull(),
+    text: text("text").notNull(),
+  },
+  (t) => [index("lead_events_lead_idx").on(t.leadId, t.at.desc())],
+);
+
+/** Follower counts of watched competitors over time (growth alerts and analysis). */
+export const competitorSnapshots = pgTable(
+  "competitor_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    username: text("username").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    followers: integer("followers"),
+    posts: integer("posts"),
+  },
+  (t) => [index("competitor_snapshots_user_idx").on(t.username, t.at.desc())],
+);
+
+export type LeadEvent = typeof leadEvents.$inferSelect;

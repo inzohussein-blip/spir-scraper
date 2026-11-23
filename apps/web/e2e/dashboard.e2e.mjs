@@ -73,7 +73,26 @@ try {
   step("leads board: move a card between columns");
 
   await page.goto(`${B}/leads`);
+  // Bulk: tick two leads and mark them contacted with one click.
+  await page.check('input[aria-label="تحديد @user1"]');
+  await page.check('input[aria-label="تحديد @user2"]');
+  await page.selectOption('select[aria-label="حالة المحدد"]', "contacted");
+  await page.click('button:has-text("طبّق على المحدد")');
+  await page.waitForSelector("text=تغيّر 2 عميلاً");
+  await page.goto(`${B}/leads?status=contacted`);
+  assert.equal(await page.locator("tbody tr").count(), 2);
+  step("bulk status change");
 
+  // Lead page: history and a note.
+  await page.click('tbody tr:first-child a:has-text("التفاصيل")');
+  await page.waitForURL(/\/leads\/user\d+\?project=/);
+  await page.waitForSelector("text=(جماعي)");
+  await page.fill('textarea[aria-label="ملاحظة"]', "طلب عرض الأسعار");
+  await page.click('button:has-text("أضف ملاحظة")');
+  await page.waitForSelector("li >> text=طلب عرض الأسعار");
+  step("lead page: history and notes");
+
+  await page.goto(`${B}/leads`);
   const download = page.waitForEvent("download");
   await page.click("text=Excel");
   // An XLSX file is a ZIP archive: it starts with "PK".
@@ -88,6 +107,23 @@ try {
   assert.ok(await page.locator("text=صحة النظام").isVisible());
   assert.ok(await page.locator("text=الصرف هذا الشهر").isVisible());
   step("API key, health and spend cards");
+
+  const backup = page.waitForEvent("download");
+  await page.click("text=تحميل نسخة الآن");
+  const gz = await readFile(await (await backup).path());
+  assert.deepEqual([...gz.subarray(0, 2)], [0x1f, 0x8b], "the backup is gzip");
+  const calendarUrl = await page.inputValue('input[aria-label="رابط تقويم المتابعات"]');
+  const ics = await (await fetch(calendarUrl.replace(/^https?:\/\/[^/]+/, B))).text();
+  assert.match(ics, /^BEGIN:VCALENDAR/);
+  assert.equal((await fetch(`${B}/api/calendar/wrong.ics`)).status, 404);
+  step("backup download and follow-up calendar feed");
+
+  await page.goto(`${B}/competitors`);
+  await page.fill('input[aria-label="حساب المنافس"]', "@rival7");
+  await page.click('button:has-text("حلّل")');
+  await page.waitForURL(/\/competitors\?u=rival7/);
+  await page.waitForSelector("text=@rival7");
+  step("competitor analysis");
 
   // The browser extension is offered from the dashboard (built into public/downloads by the deploy).
   await page.goto(`${B}/extension`);

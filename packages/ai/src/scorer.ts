@@ -1,6 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import type { AudienceStats, LeadScore, Scorer, ScoringInput } from "@scrapers/core";
+import type {
+  AudienceStats,
+  CompetitorBriefInput,
+  LeadQuery,
+  LeadScore,
+  Scorer,
+  ScoringInput,
+} from "@scrapers/core";
 import { z } from "zod";
 
 export const LeadScoreSchema = z.object({
@@ -22,6 +29,27 @@ export const LeadScoreSchema = z.object({
   reason: z.string().describe("One short sentence explaining the score"),
 });
 
+export const LeadQuerySchema = z.object({
+  status: z.enum(["new", "contacted", "interested", "customer", "rejected"]).nullable(),
+  minScore: z.number().int().min(0).max(100).nullable(),
+  country: z.string().nullable().describe("ISO 3166-1 alpha-2, e.g. KW for Kuwait"),
+  language: z.string().nullable().describe("ISO 639-1, e.g. ar"),
+  business: z.boolean().nullable(),
+  hasEmail: z.boolean().nullable(),
+  hasPhone: z.boolean().nullable(),
+  minFollowers: z.number().int().min(0).nullable(),
+  maxFollowers: z.number().int().min(0).nullable(),
+  minSources: z.number().int().min(1).nullable(),
+  q: z.string().nullable().describe("Keywords to find in the username, name or bio"),
+});
+
+const QUERY_SYSTEM = `You turn a marketer's question about their saved Instagram leads into filters.
+Fields: status (new=جديد, contacted=تواصلت, interested=مهتم, customer=عميل, rejected=مرفوض), minScore (AI fit 0-100),
+country (ISO alpha-2; Gulf countries are SA, AE, KW, QA, BH, OM), language, business (business account),
+hasEmail, hasPhone, minFollowers, maxFollowers, minSources (found in at least N competitors' audiences),
+q (words to search in the bio). Set only what the question asks for; everything else is null.
+"Good" or "strong" leads mean minScore 70 unless a number is given.`;
+
 const SYSTEM = `You classify public Instagram profiles as potential business leads.
 
 For each profile you receive (username, name, bio, follower count, account type, category, link), return:
@@ -35,6 +63,7 @@ For each profile you receive (username, name, bio, follower count, account type,
   bot_or_fake: spam, bot, empty or impersonation account.
 - language and country: only from what the profile itself shows. Use null for country when it is not stated. Never guess from the name alone.
 - score: 0-100 fit against the operator's criteria below. Use the full range.
+- found_in_sources: in how many competitor audiences or posts the account was found. Several means a stronger interest in the niche; weigh it up.
 - reason: one short sentence, in the profile's language when it is Arabic, otherwise English.
 
 Use only the information given. Do not invent facts about the person.`;
@@ -63,6 +92,7 @@ function profileMessage(item: ScoringInput): string {
     verified: item.isVerified,
     category: item.category,
     link: item.externalUrl,
+    found_in_sources: item.sources ?? 1,
   });
 }
 
@@ -177,6 +207,46 @@ export class AnthropicScorer implements Scorer {
         {
           role: "user",
           content: `Criteria: ${criteria || "general"}\n\nAudience data (JSON):\n${JSON.stringify(stats)}`,
+        },
+      ],
+    });
+    if (res.stop_reason === "refusal") return "";
+    return res.content
+      .flatMap((b) => (b.type === "text" ? [b.text] : []))
+      .join("\n")
+      .trim();
+  }
+
+  async parseQuery(question: string): Promise<LeadQuery> {
+    const res = await this.client.messages.parse({
+      model: this.model,
+      max_tokens: 1024,
+      system: QUERY_SYSTEM,
+      output_config: { effort: "low", format: zodOutputFormat(LeadQuerySchema) },
+      messages: [{ role: "user", content: question.slice(0, 500) }],
+    });
+    if (res.stop_reason === "refusal" || !res.parsed_output) return {};
+    // Drop nulls: only what the question asked for becomes a filter.
+    return Object.fromEntries(
+      Object.entries(res.parsed_output).filter(([, v]) => v !== null && v !== ""),
+    ) as LeadQuery;
+  }
+
+  async competitorBrief(input: CompetitorBriefInput, criteria: string): Promise<string> {
+    const res = await this.client.beta.messages.create({
+      model: this.reportModel,
+      max_tokens: 6000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "medium" },
+      system:
+        "You analyse a competitor's public Instagram account for a marketer, in Arabic. Use only the data given. " +
+        "Structure: what the account is about and who it attracts (two sentences), what content works best and when they post, " +
+        "growth if given, then five concrete content ideas the marketer can make to win that audience. Markdown, under 300 words.",
+      messages: [
+        {
+          role: "user",
+          content: `Marketer's goal: ${criteria || "general"}\n\nCompetitor data (JSON):\n${JSON.stringify(input)}`,
         },
       ],
     });

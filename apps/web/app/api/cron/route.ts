@@ -1,3 +1,4 @@
+import { buildBackup } from "@/lib/backup";
 import { isCronRequest } from "@/lib/drain";
 import { getRuntime } from "@/lib/runtime";
 
@@ -6,27 +7,64 @@ export const maxDuration = 300;
 
 /**
  * Vercel Cron (daily on the Hobby plan): retention, AI batch collection,
- * provider checks, due competitor monitors, follow-up reminders, the weekly summary, and a drain
- * safety net for anything left in the queue.
+ * provider checks, due competitor monitors, competitor follower snapshots,
+ * follow-up reminders, the weekly summary and backup, and a drain safety net.
+ * Each step runs on its own: one failing step is reported and the rest still run.
  */
 export async function GET(req: Request) {
   if (!isCronRequest(req)) return new Response("unauthorized", { status: 401 });
   const rt = await getRuntime();
-  await rt.scrapers.handlers.retention();
-  const health = await rt
-    .healthCheck()
-    .catch((err) => [{ provider: "all", ok: false, detail: String(err) }]);
-  const monitorJobs = await rt.scrapers.runDueMonitors();
-  const followUps = await rt.scrapers.sendDueFollowUps().catch(() => 0);
-  const weekly = await rt.scrapers.weeklySummary().catch(() => null);
-  const drained = await rt.scrapers.drain({ budgetMs: 180_000 });
+  const failed: string[] = [];
+  async function step<T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      failed.push(`${name}: ${(err as Error).message}`);
+      return fallback;
+    }
+  }
+
+  await step("retention", () => rt.scrapers.handlers.retention(), undefined);
+  const health = await step("health", () => rt.healthCheck(), []);
+  const monitorJobs = await step("monitors", () => rt.scrapers.runDueMonitors(), [] as string[]);
+  const competitors = await step("competitors", () => rt.scrapers.snapshotCompetitors(), null);
+  const followUps = await step("follow-ups", () => rt.scrapers.sendDueFollowUps(), 0);
+  const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
+  let backupSent = false;
+  if (weekly && rt.telegram) {
+    // The weekly backup goes to the owner's Telegram chat: free and off-site.
+    backupSent = await step(
+      "backup",
+      async () => {
+        const b = await buildBackup(rt);
+        await rt.telegram?.sendDocument(b.name, b.bytes, `نسخة احتياطية أسبوعية · ${b.summary}`);
+        return true;
+      },
+      false,
+    );
+  }
+  const drained = await step("drain", () => rt.scrapers.drain({ budgetMs: 150_000 }), null);
   await rt.scrapers.setValue("cron:last", new Date().toISOString(), 30 * 86_400_000);
+  if (failed.length > 0)
+    await rt.scrapers
+      .notify({
+        type: "system",
+        level: "bad",
+        title: `فشلت ${failed.length} من مهام الصيانة اليومية`,
+        body: failed.join("\n").slice(0, 1500),
+        url: "/settings",
+        key: `cron-failed:${new Date().toISOString().slice(0, 10)}`,
+      })
+      .catch(() => {});
   return Response.json({
-    ok: true,
-    ...drained,
+    ok: failed.length === 0,
+    failed,
+    ...(drained ?? {}),
     health,
     monitorJobs,
+    competitors,
     followUps,
     weeklySent: !!weekly,
+    backupSent,
   });
 }

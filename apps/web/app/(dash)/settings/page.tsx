@@ -9,6 +9,7 @@ import {
 import { ActionForm } from "@/components/action-form";
 import { Badge, Button, Card, Dot, Field, fmtDate, Input } from "@/components/ui";
 import { twoFactorEnabled } from "@/lib/auth";
+import { calendarToken } from "@/lib/backup";
 import { appOrigin, integrationStatus } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 
@@ -134,6 +135,40 @@ export default async function Settings() {
             <Badge tone="info">≈ ${aiEstimateUsd.toFixed(2)}</Badge>
           </li>
         </ul>
+      </Card>
+
+      <Card
+        title="النسخ الاحتياطي والتقويم"
+        icon="download"
+        description="نسخة من كل عملك (المشاريع والعملاء والملاحظات وقائمة عدم التواصل). تصلك نسخة أسبوعية على تلكرام تلقائياً إن كان مربوطاً."
+      >
+        <div className="space-y-4 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href="/api/backup"
+              className="rounded-lg border border-line px-3 py-1.5 hover:bg-bg-2"
+              download
+            >
+              تحميل نسخة الآن
+            </a>
+            <Badge tone={status.telegram ? "ok" : "warn"}>
+              {status.telegram
+                ? "النسخة الأسبوعية تصل على تلكرام"
+                : "اربط تلكرام لتصلك نسخة أسبوعية"}
+            </Badge>
+          </div>
+          <Field
+            label="تقويم المتابعات"
+            hint="في Google Calendar: الإعدادات ← إضافة تقويم ← من رابط، والصق هذا الرابط. لا تشاركه: من يملكه يرى أسماء من تتابعهم."
+          >
+            <Input
+              readOnly
+              className="ltr font-mono text-xs"
+              value={`${origin}/api/calendar/${calendarToken()}.ics`}
+              aria-label="رابط تقويم المتابعات"
+            />
+          </Field>
+        </div>
       </Card>
 
       <Card

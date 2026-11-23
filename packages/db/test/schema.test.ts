@@ -72,9 +72,11 @@ describe("migrations", () => {
     expect(rows.map((r) => r.relname)).toEqual([
       "api_keys",
       "audit_log",
+      "competitor_snapshots",
       "counters",
       "ephemeral",
       "jobs",
+      "lead_events",
       "leads",
       "monitors",
       "notifications",

@@ -230,6 +230,29 @@ button.whatsapp {
   padding: 6px 12px;
   text-decoration: none;
 }
+.comments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.comments li {
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--bg);
+}
+.comments li.hot {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.comments b {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
 #messageBox {
   display: grid;
   gap: 8px;
