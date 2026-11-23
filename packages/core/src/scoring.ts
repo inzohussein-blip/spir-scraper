@@ -1,3 +1,4 @@
+import type { ContentPlan, ContentPlanInput } from "./market.js";
 /** What the AI layer returns for one profile (docs/PLAN.md §10). */
 export interface LeadScore {
   segment:
@@ -91,6 +92,10 @@ export interface Scorer {
     sample: { username: string; bio: string | null; category: string | null }[],
     criteria: string,
   ): Promise<Persona[]>;
+  /** A short reply to a direct message, in the person's language, for the owner to edit and send. */
+  replyDraft?(history: { from: "them" | "me"; text: string }[], offer: string): Promise<string>;
+  /** A week of content and reel scripts, in Arabic. */
+  contentPlan?(input: ContentPlanInput): Promise<ContentPlan>;
   /** The weekly plan in Arabic, written from the numbers given. */
   weeklyBrief?(data: unknown): Promise<string>;
   /** A short Arabic brief on a competitor with content ideas. */

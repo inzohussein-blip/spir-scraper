@@ -13,6 +13,7 @@ import {
   type Connector,
   type FollowingSource,
   NotFoundError,
+  type OwnAccount,
   type PlacesSearch,
   type Provider,
   type ProviderId,
@@ -29,6 +30,7 @@ export async function setup(
     places?: PlacesSearch;
     readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
     following?: FollowingSource;
+    own?: OwnAccount;
   } = {},
 ) {
   const pg = new PGlite({ extensions: { pg_trgm } });
@@ -55,6 +57,7 @@ export async function setup(
     ...(opts.places ? { places: opts.places } : {}),
     ...(opts.readPage ? { readPage: opts.readPage } : {}),
     ...(opts.following ? { following: opts.following } : {}),
+    ...(opts.own ? { own: opts.own } : {}),
   });
   await scrapers.init();
   return {

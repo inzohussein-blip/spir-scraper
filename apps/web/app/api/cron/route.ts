@@ -42,6 +42,27 @@ export async function GET(req: Request) {
     0,
   );
   const sites = await step("sites", () => rt.scrapers.checkSiteWatches(), null);
+  // The owner's own account: interested commenters go to the chosen (or first) project.
+  const own = rt.scrapers.ownAccountAvailable
+    ? await step(
+        "own",
+        async () => {
+          const chosen = await rt.scrapers.getValue<string>("own:project");
+          const projectId = chosen ?? (await rt.scrapers.listProjects())[0]?.id;
+          return projectId ? rt.scrapers.syncOwnAccount(projectId) : null;
+        },
+        null,
+      )
+    : null;
+  const market = await step(
+    "market",
+    async () => {
+      const text = await rt.scrapers.monthlyMarketReport();
+      if (text) await rt.telegram?.sendText(escapeHtml(text));
+      return !!text;
+    },
+    false,
+  );
   const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
   // The weekly analyst: a plan per project, applied only when the owner approves it.
   const plans = weekly
@@ -103,6 +124,8 @@ export async function GET(req: Request) {
     accountsRead,
     placesRead,
     sites,
+    own,
+    market,
     weeklySent: !!weekly,
     plans,
     backupSent,

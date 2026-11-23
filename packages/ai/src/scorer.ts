@@ -3,6 +3,8 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type {
   AudienceStats,
   CompetitorBriefInput,
+  ContentPlan,
+  ContentPlanInput,
   LeadQuery,
   LeadScore,
   Scorer,
@@ -27,6 +29,32 @@ export const LeadScoreSchema = z.object({
     .describe("ISO 3166-1 alpha-2 code if the profile states it, else null"),
   score: z.number().int().min(0).max(100),
   reason: z.string().describe("One short sentence explaining the score"),
+});
+
+export const ContentPlanSchema = z.object({
+  days: z
+    .array(
+      z.object({
+        day: z.string().describe("Arabic weekday, starting Saturday"),
+        format: z.string().describe("ريل, كاروسيل, ستوري, بث مباشر..."),
+        topic: z.string(),
+        hook: z.string().describe("The first line or spoken opening, in Gulf Arabic"),
+        persona: z.string().nullable().describe("Which audience segment it targets, or null"),
+        goal: z.string().describe("جذب, تفاعل, ثقة or تحويل"),
+      }),
+    )
+    .describe("Exactly seven days"),
+  reels: z
+    .array(
+      z.object({
+        title: z.string(),
+        hook: z.string(),
+        script: z.string().describe("Timed beats, one per line, 30-45 seconds in total"),
+        cta: z.string().describe("A comment or DM call to action"),
+      }),
+    )
+    .describe("Exactly three reel scripts"),
+  notes: z.array(z.string()).describe("Two to four short Arabic notes on why this plan"),
 });
 
 export const LeadQuerySchema = z.object({
@@ -263,6 +291,23 @@ export class AnthropicScorer implements Scorer {
     ) as LeadQuery;
   }
 
+  async contentPlan(input: ContentPlanInput): Promise<ContentPlan> {
+    const res = await this.client.messages.parse({
+      model: this.reportModel,
+      max_tokens: 8000,
+      output_config: { effort: "medium", format: zodOutputFormat(ContentPlanSchema) },
+      system:
+        "You plan a week of Instagram content for a trading and broker-partnership marketer, in Gulf Arabic. " +
+        "Use only the data given: repeat the formats and angles of the posts that brought interest and revenue, lean on " +
+        "the topics that are rising, rotate across the audience segments, and learn from the fastest-growing competitors " +
+        "without copying them. Never promise profits, guaranteed returns or no risk; scripts that mention trading say it " +
+        "carries risk. Calls to action ask people to comment or send a message.",
+      messages: [{ role: "user", content: `Data (JSON):\n${JSON.stringify(input)}` }],
+    });
+    if (res.stop_reason === "refusal" || !res.parsed_output) throw new Error("no plan");
+    return res.parsed_output;
+  }
+
   async competitorBrief(input: CompetitorBriefInput, criteria: string): Promise<string> {
     const res = await this.client.beta.messages.create({
       model: this.reportModel,
@@ -330,6 +375,35 @@ export class AnthropicScorer implements Scorer {
         "if the owner approves); two or three concrete actions for the owner this week (who to contact first, what to post). " +
         "Never promise returns.",
       messages: [{ role: "user", content: `Data (JSON):\n${JSON.stringify(data)}` }],
+    });
+    if (res.stop_reason === "refusal") return "";
+    return res.content
+      .flatMap((b) => (b.type === "text" ? [b.text] : []))
+      .join("\n")
+      .trim();
+  }
+
+  async replyDraft(
+    history: { from: "them" | "me"; text: string }[],
+    offer: string,
+  ): Promise<string> {
+    const res = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 1024,
+      output_config: { effort: "low" },
+      system:
+        "You draft the owner's reply to an Instagram direct message, in the other person's language and dialect. " +
+        "Two to four short sentences, friendly and specific to what they asked. Never promise profits or say there is no " +
+        "risk; if trading comes up, mention that it carries risk. Reply with the message text only.",
+      messages: [
+        {
+          role: "user",
+          content: `What the owner offers: ${offer || "partnership and accounts with a broker"}\n\nConversation (oldest first):\n${history
+            .slice(-12)
+            .map((m) => `${m.from === "me" ? "Owner" : "Them"}: ${m.text}`)
+            .join("\n")}`,
+        },
+      ],
     });
     if (res.stop_reason === "refusal") return "";
     return res.content

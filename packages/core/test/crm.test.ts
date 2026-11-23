@@ -1,4 +1,4 @@
-import { competitorSnapshots, profiles as profilesTable } from "@scrapers/db";
+import { competitorSnapshots, profileSnapshots, profiles as profilesTable } from "@scrapers/db";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { parseSource, uploadSource } from "../src/source.js";
@@ -1068,6 +1068,259 @@ describe("broker reports and partners", () => {
 
       const recruits = await t.scrapers.recruitCandidates(p.id);
       expect(recruits.map((r) => r.username)).toEqual(["coach1"]);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("the owner's own account", () => {
+  it("turns interested commenters into leads per post, and keeps an inbox with safe replies", async () => {
+    const sent: { to: string; text: string }[] = [];
+    const own = {
+      listMedia: async () => [
+        {
+          id: "m1",
+          caption: "توصيات الذهب",
+          permalink: "https://instagram.com/p/AAA/",
+          type: "video",
+          timestamp: "2030-01-01T10:00:00Z",
+          likes: 300,
+          comments: 3,
+        },
+        {
+          id: "m2",
+          caption: "صورة",
+          permalink: "https://instagram.com/p/BBB/",
+          type: "image",
+          timestamp: "2030-01-02T10:00:00Z",
+          likes: 50,
+          comments: 0,
+        },
+      ],
+      listComments: async (mediaId: string) =>
+        mediaId === "m1"
+          ? [
+              {
+                id: "c1",
+                text: "بكم الاشتراك؟",
+                username: "h1",
+                timestamp: "2030-01-01T11:00:00Z",
+              },
+              { id: "c2", text: "ابي التفاصيل", username: "h2", timestamp: "2030-01-01T12:00:00Z" },
+              { id: "c3", text: "🔥🔥", username: "fan", timestamp: "2030-01-01T13:00:00Z" },
+            ]
+          : [],
+      sendMessage: async (to: string, text: string) => {
+        sent.push({ to, text });
+        return { id: `out-${sent.length}` };
+      },
+    };
+    const t = await setup(
+      [new FakeProvider("worker", ["profile"], { profile: fakeProfile })],
+      undefined,
+      { own },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "حسابي", owner: "o" });
+      const r = await t.scrapers.syncOwnAccount(p.id);
+      expect(r).toMatchObject({ posts: 2, newComments: 3, hot: 2 });
+      await settle(t);
+      // Again: nothing new.
+      expect((await t.scrapers.syncOwnAccount(p.id)).newComments).toBe(0);
+      const leads = await t.scrapers.listLeads({ projectId: p.id });
+      expect(leads.map((l) => l.username).sort()).toEqual(["h1", "h2"]);
+      expect(leads[0]?.sources?.[0]).toBe("منشوري: https://instagram.com/p/AAA/");
+      await t.scrapers.setDeal({ projectId: p.id, username: "h1", value: 200 });
+      const perf = await t.scrapers.ownPostPerformance(p.id);
+      expect(perf.find((x) => x.mediaId === "m1")).toMatchObject({
+        intentComments: 2,
+        leads: 2,
+        customers: 1,
+        revenue: 200,
+      });
+      expect((await t.scrapers.hotComments()).map((c) => c.username).sort()).toEqual(["h1", "h2"]);
+
+      // Inbox: a message arrives, the owner replies within 24 hours.
+      const now = new Date();
+      expect(
+        await t.scrapers.storeMessage({
+          id: "in-1",
+          threadId: "igsid-9",
+          username: "sara",
+          direction: "in",
+          text: "كم سعر الاشتراك؟",
+          at: now,
+        }),
+      ).toBe(true);
+      expect(
+        await t.scrapers.storeMessage({
+          id: "in-1",
+          threadId: "igsid-9",
+          direction: "in",
+          text: "dup",
+        }),
+      ).toBe(false);
+      const threads = await t.scrapers.listThreads();
+      expect(threads[0]).toMatchObject({ threadId: "igsid-9", unread: 1 });
+      await expect(t.scrapers.sendReply("igsid-9", "أرباح مضمونة 100%!")).rejects.toThrow(
+        /لم تُرسل/,
+      );
+      await t.scrapers.sendReply(
+        "igsid-9",
+        "أهلاً سارة، التفاصيل كالتالي… التداول ينطوي على مخاطر.",
+      );
+      expect(sent).toEqual([
+        { to: "igsid-9", text: "أهلاً سارة، التفاصيل كالتالي… التداول ينطوي على مخاطر." },
+      ]);
+      const msgs = await t.scrapers.threadMessages("igsid-9");
+      expect(msgs.map((m) => m.direction)).toEqual(["in", "out"]);
+      expect((await t.scrapers.listThreads())[0]?.unread).toBe(0);
+      // Older than 24 hours: Meta does not allow a reply from here.
+      await t.scrapers.storeMessage({
+        id: "in-2",
+        threadId: "old",
+        direction: "in",
+        text: "hi",
+        at: new Date(Date.now() - 30 * 3_600_000),
+      });
+      await expect(t.scrapers.sendReply("old", "hello")).rejects.toThrow(/24 ساعة/);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("market index and content plan", () => {
+  it("reads competitor growth, rising accounts and topics, and plans content safely", async () => {
+    const bios: Record<string, string> = {
+      g1: "متداول ذهب XAU",
+      g2: "Gold trader",
+      c1: "crypto bitcoin",
+      s1: "أسهم تاسي",
+    };
+    const t = await setup([
+      new FakeProvider("worker", ["profile"], {
+        profile: (u: string) => ({ ...fakeProfile(u), bio: bios[u] ?? "none", category: null }),
+      }),
+    ]);
+    try {
+      const p = await t.scrapers.createProject({ name: "سوق", owner: "o" });
+      await t.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(["g1", "g2", "c1", "s1"]),
+        limit: 10,
+      });
+      await settle(t);
+      const now = new Date();
+      const ago = (d: number) => new Date(now.getTime() - d * 86_400_000);
+      await t.db.insert(competitorSnapshots).values([
+        { username: "fast", followers: 10_000, at: ago(20) },
+        { username: "fast", followers: 12_000, at: ago(1) },
+        { username: "slow", followers: 50_000, at: ago(20) },
+        { username: "slow", followers: 50_500, at: ago(1) },
+      ]);
+      await t.db.insert(profileSnapshots).values([
+        { profileId: "id-g1", followers: 2_000, at: ago(25) },
+        // Later than the snapshot the job just recorded.
+        { profileId: "id-g1", followers: 3_000, at: new Date(now.getTime() + 60_000) },
+      ]);
+      const m = await t.scrapers.marketIndex(new Date(now.getTime() + 120_000));
+      expect(m.competitors.map((c) => c.username)).toEqual(["fast", "slow"]);
+      expect(m.competitors[0]).toMatchObject({ change: 2_000, percent: 20 });
+      expect(m.rising[0]).toMatchObject({ username: "g1", percent: 50 });
+      const thisMonth = m.months.at(-1);
+      expect(thisMonth).toMatchObject({ total: 4 });
+      expect(thisMonth?.topics.gold).toBe(50);
+      expect(thisMonth?.topics.crypto).toBe(25);
+      expect(m.topics[0]?.key).toBe("gold");
+
+      const report = await t.scrapers.monthlyMarketReport(now);
+      expect(report).toContain("@fast");
+      expect(report).toContain("الذهب: 50%");
+      expect(await t.scrapers.monthlyMarketReport(now)).toBeNull();
+
+      // Without AI: the template plan, on the rising topics, saved for the page.
+      const plan = await t.scrapers.contentPlan(p.id, now);
+      expect(plan.byAi).toBe(false);
+      expect(plan.days).toHaveLength(7);
+      expect(plan.days[0]?.topic).toBe("الذهب");
+      expect(plan.reels).toHaveLength(3);
+      expect(plan.reels.every((r) => r.issues.length === 0)).toBe(true);
+      expect((await t.scrapers.savedContentPlan(p.id))?.days).toHaveLength(7);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("flags a scripted promise of profits from the AI", async () => {
+    const scorer = new FakeScorer();
+    Object.assign(scorer, {
+      contentPlan: async () => ({
+        days: [],
+        reels: [{ title: "x", hook: "أرباح مضمونة 100%", script: "s", cta: "c" }],
+        notes: [],
+      }),
+    });
+    const t = await setup(
+      [new FakeProvider("worker", ["profile"], { profile: fakeProfile })],
+      scorer,
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const plan = await t.scrapers.contentPlan(p.id);
+      expect(plan.byAi).toBe(true);
+      expect(plan.reels[0]?.issues.length).toBeGreaterThan(0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("stores a webhook comment and sends its author at the next sync", async () => {
+    const own = {
+      listMedia: async () => [
+        {
+          id: "m9",
+          caption: "c",
+          permalink: "https://instagram.com/p/Z/",
+          type: "video",
+          timestamp: null,
+          likes: 1,
+          comments: 0,
+        },
+      ],
+      listComments: async () => [],
+      sendMessage: async () => ({ id: "x" }),
+    };
+    const t = await setup(
+      [new FakeProvider("worker", ["profile"], { profile: fakeProfile })],
+      undefined,
+      { own },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      expect(
+        await t.scrapers.storeComment({
+          id: "w1",
+          mediaId: "m9",
+          username: "Buyer1",
+          text: "كم السعر؟",
+        }),
+      ).toBe(true);
+      expect(
+        await t.scrapers.storeComment({
+          id: "w1",
+          mediaId: "m9",
+          username: "Buyer1",
+          text: "كم السعر؟",
+        }),
+      ).toBe(false);
+      // comments: 0 in the listing, yet the pending webhook comment still becomes a lead.
+      await t.scrapers.syncOwnAccount(p.id);
+      await settle(t);
+      expect((await t.scrapers.listLeads({ projectId: p.id })).map((l) => l.username)).toEqual([
+        "buyer1",
+      ]);
     } finally {
       await t.close();
     }

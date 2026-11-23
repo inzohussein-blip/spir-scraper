@@ -766,6 +766,94 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "own_posts",
+    {
+      title: "The owner's own posts",
+      description:
+        "The owner's Instagram posts (connected through the Graph API) with likes, comments, comments showing buying " +
+        "interest, and the leads, customers and revenue each brought; plus the latest interested comments. " +
+        "sync=true reads new posts and comments first and adds interested commenters to the project as leads.",
+      inputSchema: z.object({ project: z.string(), sync: z.boolean().default(false) }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const synced = a.sync ? await rt.scrapers.syncOwnAccount(projectId) : null;
+      return json({
+        connected: rt.scrapers.ownAccountAvailable,
+        synced,
+        posts: await rt.scrapers.ownPostPerformance(projectId),
+        hot_comments: await rt.scrapers.hotComments(20),
+      });
+    }),
+  );
+
+  server.registerTool(
+    "inbox",
+    {
+      title: "Direct messages",
+      description:
+        "The owner's Instagram direct messages: without thread, the conversations with unread counts; with thread, " +
+        "its messages (marks them read) and, with draft=true, a suggested reply for the owner to review.",
+      inputSchema: z.object({
+        thread: z.string().optional(),
+        draft: z.boolean().default(false),
+        offer: z.string().optional().describe("What the owner offers, to shape the draft"),
+      }),
+    },
+    guard(async (a) => {
+      if (!a.thread) return json({ threads: await rt.scrapers.listThreads(50) });
+      const messages = await rt.scrapers.threadMessages(a.thread);
+      const draft = a.draft ? await rt.scrapers.draftReply(a.thread, a.offer ?? "") : null;
+      return json({ messages, draft });
+    }),
+  );
+
+  server.registerTool(
+    "send_dm",
+    {
+      title: "Send a reply to a direct message",
+      description:
+        "Sends a reply in an existing conversation. Only call this when the owner has explicitly asked to send this " +
+        "exact text. Meta allows it within 24 hours of the person's last message; texts promising profits or no risk are refused.",
+      inputSchema: z.object({ thread: z.string(), text: z.string().min(1).max(1000) }),
+      annotations: { destructiveHint: false, openWorldHint: true },
+    },
+    guard(async (a) => json({ sent: await rt.scrapers.sendReply(a.thread, a.text) })),
+  );
+
+  server.registerTool(
+    "content_plan",
+    {
+      title: "Weekly content plan",
+      description:
+        "A week of content and three reel scripts built from what brings money: the owner's best posts, rising topics, " +
+        "fast-growing competitors and the project's segments. new=false returns the last saved plan.",
+      inputSchema: z.object({ project: z.string(), new: z.boolean().default(true) }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      return json({
+        plan: a.new
+          ? await rt.scrapers.contentPlan(projectId)
+          : await rt.scrapers.savedContentPlan(projectId),
+      });
+    }),
+  );
+
+  server.registerTool(
+    "market_index",
+    {
+      title: "Market index",
+      description:
+        "Competitor follower growth over 30 days, the fastest-rising accounts in the owner's data, and the share of new " +
+        "leads mentioning gold, crypto, stocks, forex, education or signals, month by month.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async () => json(await rt.scrapers.marketIndex())),
+  );
+
+  server.registerTool(
     "train_model",
     {
       title: "Train the project's own model",

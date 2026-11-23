@@ -172,6 +172,61 @@ try {
   await page.waitForSelector("text=APIFY_TOKEN");
   step("businesses page without Apify");
 
+  // Broker reports: the postback address, a CSV report, a partner with a tracking link.
+  await page.goto(`${B}/partners`);
+  const postback = (await page.inputValue('input[aria-label="رابط إشعارات الوسيط"]')).split("?")[0];
+  const pb = await fetch(
+    `${postback.replace(/^https?:\/\/[^/]+/, B)}?event=ftd&email=e2e@example.com&amount=500&sub=none`,
+  );
+  assert.equal(pb.status, 200);
+  assert.equal((await fetch(`${B}/api/broker/postback/wrong?event=ftd&amount=1`)).status, 404);
+  await page.setInputFiles('input[aria-label="تقرير الوسيط"]', {
+    name: "report.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("Email,Commission\nx@example.com,40\ny@example.com,60\n"),
+  });
+  await page.click('button:has-text("استورد التقرير")');
+  await page.waitForSelector("text=قُرئ 2 حدثاً");
+  await page.fill('input[name="signup_url"]', "https://broker.example/register?affid=1");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=حُفظ");
+  await page.fill('input[name="name"]', "وكيل التجربة");
+  await page.fill('input[name="code"]', "e2epartner");
+  await page.click('button:has-text("أضف وكيلاً")');
+  await page.waitForSelector("text=أُضيف وكيل التجربة");
+  const r = await fetch(`${B}/r/e2epartner`, { redirect: "manual" });
+  assert.equal(r.status, 302);
+  assert.match(
+    r.headers.get("location") ?? "",
+    /broker\.example\/register\?affid=1&sub=e2epartner/,
+  );
+  await page.goto(`${B}/partners`);
+  await page.waitForSelector("text=وكيل التجربة");
+  step("broker postback, CSV report, partner and tracking link");
+
+  // Own account and inbox without Graph credentials; the webhook refuses unsigned calls.
+  await page.goto(`${B}/own`);
+  await page.waitForSelector("text=IG_GRAPH_TOKEN");
+  await page.goto(`${B}/inbox`);
+  await page.waitForSelector("text=لا توجد رسائل بعد");
+  assert.equal(
+    (await fetch(`${B}/api/meta/webhook?hub.mode=subscribe&hub.verify_token=x&hub.challenge=1`))
+      .status,
+    403,
+  );
+  assert.equal((await fetch(`${B}/api/meta/webhook`, { method: "POST", body: "{}" })).status, 401);
+  step("own account, inbox and the Meta webhook guard");
+
+  // Content plan (template without an AI key) and the market index.
+  await page.goto(`${B}/content`);
+  await page.click('button:has-text("اصنع الخطة")');
+  await page.waitForSelector("text=السبت");
+  await page.waitForSelector("text=الدعوة:");
+  await page.goto(`${B}/market`);
+  await page.waitForSelector("text=الذهب");
+  await page.waitForSelector("text=نمو المنافسين");
+  step("content plan and market index");
+
   // Shared from another app (Android share sheet → /share).
   await page.goto(
     `${B}/share?text=${encodeURIComponent("شوف https://www.instagram.com/user40/ 👌")}`,

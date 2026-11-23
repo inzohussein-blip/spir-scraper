@@ -30,3 +30,11 @@ export function calendarToken(): string {
     .digest("hex")
     .slice(0, 40);
 }
+
+/** Verify token for the Meta webhook subscription, derived from AUTH_SECRET. */
+export function metaVerifyToken(): string {
+  return createHash("sha256")
+    .update(`meta:${process.env.AUTH_SECRET ?? ""}`)
+    .digest("hex")
+    .slice(0, 32);
+}

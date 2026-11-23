@@ -105,7 +105,7 @@ export function parseBrokerEvent(
   return {
     event,
     externalId: pick(row, "externalId"),
-    email: email && email.includes("@") ? email : null,
+    email: email?.includes("@") ? email : null,
     phone: pick(row, "phone"),
     amount: amount !== null && Number.isFinite(amount) ? amount : null,
     currency: pick(row, "currency")?.toUpperCase() ?? null,

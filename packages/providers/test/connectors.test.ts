@@ -1,6 +1,11 @@
 import { AccountNotFoundError } from "@scrapers/core";
 import { describe, expect, it } from "vitest";
-import { connectorsFromEnv, TelegramConnector, YouTubeConnector } from "../src/index.js";
+import {
+  connectorsFromEnv,
+  GraphOwnAccount,
+  TelegramConnector,
+  YouTubeConnector,
+} from "../src/index.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -82,5 +87,62 @@ describe("Telegram connector", () => {
       ["tiktok", true],
       ["website", false],
     ]);
+  });
+});
+
+describe("own account through the Graph API", () => {
+  it("lists posts and comments and sends a reply", async () => {
+    const calls: { url: string; body: string | undefined }[] = [];
+    const own = new GraphOwnAccount("17841", "TOKEN", {
+      fetch: async (url, init) => {
+        calls.push({ url, body: init?.body as string | undefined });
+        if (url.includes("/messages")) return json({ message_id: "mid.1" });
+        if (url.includes("/comments"))
+          return json({
+            data: [{ id: "c1", text: "بكم؟", username: "Ali", timestamp: "2030-01-01T00:00:00Z" }],
+          });
+        return json({
+          data: [
+            {
+              id: "m1",
+              caption: "x",
+              permalink: "p",
+              media_type: "VIDEO",
+              like_count: 5,
+              comments_count: 1,
+            },
+          ],
+        });
+      },
+    });
+    expect(await own.listMedia(10)).toEqual([
+      {
+        id: "m1",
+        caption: "x",
+        permalink: "p",
+        type: "video",
+        timestamp: null,
+        likes: 5,
+        comments: 1,
+      },
+    ]);
+    expect((await own.listComments("m1", 10))[0]).toEqual({
+      id: "c1",
+      text: "بكم؟",
+      username: "ali",
+      timestamp: "2030-01-01T00:00:00Z",
+    });
+    expect(await own.sendMessage("igsid", "hello")).toEqual({ id: "mid.1" });
+    expect(calls[0]?.url).toContain("/17841/media?");
+    expect(calls[0]?.url).toContain("access_token=TOKEN");
+    expect(JSON.parse(calls[2]?.body ?? "{}")).toEqual({
+      recipient: { id: "igsid" },
+      message: { text: "hello" },
+    });
+    await expect(
+      new GraphOwnAccount("1", "T", {
+        fetch: async () => json({ error: { message: "bad token" } }, 400),
+      }).listMedia(1),
+    ).rejects.toThrow(/bad token/);
   });
 });
