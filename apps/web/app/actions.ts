@@ -2,6 +2,7 @@
 
 import {
   checkMessage,
+  parseBrokerCsv,
   parseSource,
   parseUsernameCsv,
   type Source,
@@ -742,4 +743,76 @@ export async function approvePlan(id: string) {
   await requireSession();
   await (await getRuntime()).scrapers.approvePlan(id);
   revalidatePath("/insights");
+}
+
+/** Where tracking links send visitors (the broker's affiliate sign-up link) and its sub-id parameter. */
+export async function saveBrokerSettings(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const signupUrl = str(form, "signup_url");
+  if (signupUrl && !/^https:\/\//.test(signupUrl))
+    return { error: "الرابط يجب أن يبدأ بـ https://" };
+  const subParam =
+    (str(form, "sub_param") || "sub").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 30) || "sub";
+  await (await getRuntime()).scrapers.setValue(
+    "broker:settings",
+    { signupUrl: signupUrl || null, subParam },
+    10 * 365 * 86_400_000,
+  );
+  await audit("broker.settings", { subParam });
+  revalidatePath("/partners");
+  return { message: "حُفظ" };
+}
+
+/** Imports a broker report (CSV export from the affiliate system). */
+export async function importBrokerCsv(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const file = form.get("file");
+  if (!(file instanceof File) || file.size === 0) return { error: "اختر ملف CSV" };
+  if (file.size > 5_000_000) return { error: "الملف أكبر من 5MB" };
+  const events = parseBrokerCsv(await file.text());
+  if (events.length === 0)
+    return { error: "لم أجد في الملف أعمدة معروفة (البريد أو الهاتف، والإيداع أو العمولة)" };
+  const r = await (await getRuntime()).scrapers.ingestBrokerEvents(events, "csv");
+  await audit("broker.import", r);
+  revalidatePath("/partners");
+  revalidatePath("/insights");
+  return {
+    message: `قُرئ ${events.length} حدثاً: خُزّن ${r.stored}، وطوبق منها ${r.matched} مع عملائك، و${r.duplicates} مكرر.`,
+  };
+}
+
+export async function createPartner(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const p = await (await getRuntime()).scrapers.createPartner({
+      name: str(form, "name"),
+      instagram: str(form, "instagram") || null,
+      sharePercent: Number(str(form, "share")) || 0,
+      ...(str(form, "code") ? { code: str(form, "code") } : {}),
+    });
+    await audit("partner.create", { code: p.code });
+    revalidatePath("/partners");
+    return { message: `أُضيف ${p.name}. أرسل له رابط لوحته من الجدول.` };
+  } catch (err) {
+    return fail(
+      /unique|duplicate/i.test((err as Error).message) ? new Error("هذا الكود مستخدم") : err,
+    );
+  }
+}
+
+export async function togglePartner(id: string, active: boolean) {
+  await requireSession();
+  await (await getRuntime()).scrapers.updatePartner(id, { active });
+  revalidatePath("/partners");
+}
+
+/** Adds a recruit candidate as a partner (named after their account). */
+export async function recruitPartner(username: string, name: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.createPartner({
+    name: name || `@${username}`,
+    instagram: username,
+  });
+  await audit("partner.create", { from: "recruit", username });
+  revalidatePath("/partners");
 }

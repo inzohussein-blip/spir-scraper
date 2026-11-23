@@ -945,3 +945,131 @@ describe("weekly analyst", () => {
     }
   });
 });
+
+describe("broker reports and partners", () => {
+  it("matches broker events to leads and partners, updates deals, and ranks recruits", async () => {
+    const t = await setup([
+      new FakeProvider("worker", ["profile"], {
+        profile: (u) =>
+          u === "coach1"
+            ? { ...fakeProfile("coach1"), followers: 45_000, isBusiness: true }
+            : fakeProfile(u),
+      }),
+    ]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await t.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(["b1", "b4", "coach1"]),
+        limit: 5,
+      });
+      await settle(t);
+      const leads = await t.scrapers.listLeads({ projectId: p.id });
+      const withEmail = leads.find((l) => l.email);
+      const withPhone = leads.find((l) => l.phoneConfirmed);
+      expect(withEmail && withPhone).toBeTruthy();
+
+      const partner = await t.scrapers.createPartner({
+        name: "مدرب الذهب",
+        code: "Gold7",
+        sharePercent: 30,
+      });
+      expect(partner.code).toBe("gold7");
+      await t.scrapers.recordClick(partner.id);
+      await t.scrapers.recordClick(partner.id);
+
+      const events = [
+        {
+          event: "registration" as const,
+          externalId: "c1",
+          email: withEmail?.email ?? null,
+          phone: null,
+          amount: null,
+          currency: null,
+          sub: "gold7",
+          at: new Date("2030-01-01"),
+        },
+        {
+          event: "ftd" as const,
+          externalId: "c1",
+          email: withEmail?.email ?? null,
+          phone: null,
+          amount: 1000,
+          currency: "USD",
+          sub: "gold7",
+          at: new Date("2030-01-02"),
+        },
+        {
+          event: "commission" as const,
+          externalId: "c1",
+          email: withEmail?.email ?? null,
+          phone: null,
+          amount: 150,
+          currency: "USD",
+          sub: "gold7",
+          at: new Date("2030-01-10"),
+        },
+        {
+          event: "ftd" as const,
+          externalId: "c2",
+          email: null,
+          phone: withPhone?.phone ?? null,
+          amount: 500,
+          currency: "USD",
+          sub: null,
+          at: new Date("2030-01-03"),
+        },
+        {
+          event: "ftd" as const,
+          externalId: "c9",
+          email: "stranger@x.com",
+          phone: null,
+          amount: 200,
+          currency: "USD",
+          sub: null,
+          at: new Date("2030-01-04"),
+        },
+      ];
+      expect(await t.scrapers.ingestBrokerEvents(events, "postback")).toEqual({
+        stored: 5,
+        matched: 4,
+        duplicates: 0,
+      });
+      // The same report again changes nothing.
+      expect(await t.scrapers.ingestBrokerEvents(events, "csv")).toEqual({
+        stored: 0,
+        matched: 0,
+        duplicates: 5,
+      });
+
+      const after = await t.scrapers.listLeads({ projectId: p.id });
+      // Commission wins over deposits as the deal value; deposits alone count when no commission came.
+      expect(after.find((l) => l.username === withEmail?.username)).toMatchObject({
+        status: "customer",
+        dealValue: 150,
+      });
+      expect(after.find((l) => l.username === withPhone?.username)).toMatchObject({
+        status: "customer",
+        dealValue: 500,
+      });
+
+      const sum = await t.scrapers.brokerSummary();
+      expect(sum.byEvent.ftd).toEqual({ count: 3, matched: 2, amount: 1700 });
+      const [stats] = await t.scrapers.partnerStats();
+      expect(stats).toMatchObject({
+        clicks: 2,
+        registrations: 1,
+        ftds: 1,
+        deposits: 1000,
+        commission: 150,
+        partnerShare: 45,
+      });
+      expect((await t.scrapers.partnerByToken(partner.portalToken))?.id).toBe(partner.id);
+
+      const recruits = await t.scrapers.recruitCandidates(p.id);
+      expect(recruits.map((r) => r.username)).toEqual(["coach1"]);
+    } finally {
+      await t.close();
+    }
+  });
+});

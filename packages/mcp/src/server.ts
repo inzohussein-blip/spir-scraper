@@ -693,6 +693,79 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "broker_summary",
+    {
+      title: "What the broker reported",
+      description:
+        "Totals of the broker's events (registrations, first deposits, deposits, commissions) and how many matched a " +
+        "lead. Matched deposits and commissions set the lead's deal value automatically.",
+      inputSchema: z.object({ days: z.number().int().min(1).max(3650).optional() }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.brokerSummary(
+          a.days ? { since: new Date(Date.now() - a.days * 86_400_000) } : {},
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "partners",
+    {
+      title: "Partner network",
+      description:
+        "List partners with clicks, registrations, first deposits, deposits, commission and their share; or add one " +
+        "(name, optional instagram, share_percent, code). Their tracking link is APP_URL/r/<code>.",
+      inputSchema: z.object({
+        add: z
+          .object({
+            name: z.string().min(1).max(100),
+            instagram: z.string().optional(),
+            share_percent: z.number().min(0).max(100).default(0),
+            code: z
+              .string()
+              .regex(/^[A-Za-z0-9_-]{3,24}$/)
+              .optional(),
+          })
+          .optional(),
+      }),
+    },
+    guard(async (a) => {
+      if (a.add)
+        await rt.scrapers.createPartner({
+          name: a.add.name,
+          instagram: a.add.instagram ?? null,
+          sharePercent: a.add.share_percent,
+          ...(a.add.code ? { code: a.add.code } : {}),
+        });
+      const list = await rt.scrapers.partnerStats();
+      return json({ partners: list.map(({ portalToken: _t, ...p }) => p) });
+    }),
+  );
+
+  server.registerTool(
+    "recruit_candidates",
+    {
+      title: "Who to invite as a partner",
+      description:
+        "Leads with an engaged audience (5k+ followers), ranked by growth, the project's model and AI score, who are " +
+        "not partners yet. The owner contacts them.",
+      inputSchema: z.object({
+        project: z.string(),
+        limit: z.number().int().min(1).max(50).default(15),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json({
+        candidates: await rt.scrapers.recruitCandidates(await projectIdFor(rt, a.project), a.limit),
+      }),
+    ),
+  );
+
+  server.registerTool(
     "train_model",
     {
       title: "Train the project's own model",

@@ -15,6 +15,14 @@ export async function buildBackup(rt: Runtime) {
   };
 }
 
+/** Secret part of the broker's postback address, derived from AUTH_SECRET. */
+export function brokerToken(): string {
+  return createHash("sha256")
+    .update(`broker:${process.env.AUTH_SECRET ?? ""}`)
+    .digest("hex")
+    .slice(0, 40);
+}
+
 /** Private calendar address, derived from AUTH_SECRET (rotating it changes the address). */
 export function calendarToken(): string {
   return createHash("sha256")

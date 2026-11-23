@@ -72,6 +72,9 @@ describe("MCP server over Streamable HTTP", () => {
         "update_project",
         "watch_competitor",
         "watch_site",
+        "broker_summary",
+        "partners",
+        "recruit_candidates",
         "weekly_plan",
       ].sort(),
     );
