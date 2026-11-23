@@ -11,8 +11,18 @@ export default async function NewJob({
   searchParams: Promise<{ project?: string }>;
 }) {
   const { project } = await searchParams;
-  const projects = await (await getRuntime()).scrapers.listProjects();
+  const rt = await getRuntime();
+  const projects = await rt.scrapers.listProjects();
   const status = integrationStatus();
+  // What this month's remaining Apify credit can still collect and read.
+  const usage = status.apify ? await rt.apifyUsage().catch(() => null) : null;
+  const remaining = usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : null;
+  const perAccount =
+    rt.scrapers.estimateCost(
+      { type: "followers", username: "x", url: "https://www.instagram.com/x/" },
+      1000,
+    ) / 1000;
+  const capacity = remaining !== null && perAccount > 0 ? Math.floor(remaining / perAccount) : null;
 
   if (projects.length === 0) {
     return (
@@ -28,6 +38,16 @@ export default async function NewJob({
 
   return (
     <Card title="مهمة جديدة">
+      {remaining !== null && (
+        <Notice tone={capacity !== null && capacity < 200 ? "warn" : "info"}>
+          رصيد Apify المتبقي هذا الشهر ${remaining.toFixed(2)}
+          {capacity !== null
+            ? `: يكفي تقريباً ${capacity.toLocaleString("en")} حساب (جمع وقراءة)`
+            : ""}
+          . الحسابات المقروءة خلال 30 يوماً لا تُدفع مرة أخرى، والقوائم الملصقة وملفات CSV مجانية مع
+          العامل المنزلي.
+        </Notice>
+      )}
       <ActionForm action={startJob} submit="ابدأ">
         <Field label="المشروع">
           <Select name="project" defaultValue={project ?? projects[0]?.id} required>
@@ -42,7 +62,7 @@ export default async function NewJob({
         <fieldset className="space-y-4 rounded-lg border border-line p-4">
           <legend className="px-1 text-sm font-medium">المصدر: اختر طريقة واحدة</legend>
           <Field
-            label="رابط حساب منافس أو منشور أو هاشتاق"
+            label="رابط حساب منافس أو منشور أو هاشتاق أو مكان، أو كلمات للبحث"
             hint={
               status.apify
                 ? "يُكتشف المتفاعلون عبر Apify."
@@ -62,6 +82,9 @@ export default async function NewJob({
               <option value="followers">حساب: قائمة متابعيه</option>
               <option value="post">منشور</option>
               <option value="hashtag">هاشتاق</option>
+              <option value="search">بحث بكلمات (مثل: مدرب تداول)</option>
+              <option value="location">موقع (رابط صفحة مكان في إنستقرام)</option>
+              <option value="similar">حسابات مشابهة لحساب</option>
             </Select>
           </Field>
           <div className="text-center text-xs text-muted">أو</div>
@@ -74,7 +97,7 @@ export default async function NewJob({
         </fieldset>
 
         <Field label="الحد الأقصى للحسابات">
-          <Input name="limit" type="number" min={1} max={1000} defaultValue={100} />
+          <Input name="limit" type="number" min={1} max={10000} defaultValue={100} />
         </Field>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" name="accept_cost" />

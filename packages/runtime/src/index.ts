@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { AnthropicScorer } from "@scrapers/ai";
 import {
   type Connector,
@@ -35,6 +36,20 @@ import {
 import { PgBoss } from "pg-boss";
 import { WebPushSink } from "./push.js";
 import { type FetchLike, TelegramNotifier } from "./telegram.js";
+
+/** Secret part of the address Apify reports finished background runs to (from AUTH_SECRET). */
+export function apifyWebhookToken(secret = process.env.AUTH_SECRET ?? ""): string {
+  return createHash("sha256").update(`apify:${secret}`).digest("hex").slice(0, 40);
+}
+
+/** The public https address for Apify's run reports, or null (then runs are found by polling). */
+export function apifyNotifyUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  const origin =
+    env.APP_URL ??
+    (env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL}` : null);
+  if (!origin || !env.AUTH_SECRET || !/^https:\/\//.test(origin)) return null;
+  return `${origin.replace(/\/$/, "")}/api/apify/webhook/${apifyWebhookToken(env.AUTH_SECRET)}`;
+}
 
 /** Which database URL the app will use, for status checks (any accepted variable name). */
 export { databaseRegion, databaseUrl, directDatabaseUrl } from "@scrapers/db";
@@ -212,7 +227,9 @@ export async function createRuntime(
     })(),
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,
-      maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 1000),
+      maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 10_000),
+      backgroundAbove: Number(env.BACKGROUND_RUN_ABOVE ?? 300),
+      discoveryNotifyUrl: apifyNotifyUrl(env),
       defaultRetentionDays: Number(env.DEFAULT_RETENTION_DAYS ?? 90),
       profileCacheDays: Number(env.PROFILE_CACHE_DAYS ?? 30),
       weeklyDay: Number(env.WEEKLY_SUMMARY_DAY ?? 5),

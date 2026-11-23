@@ -114,3 +114,28 @@ describe("suppression", () => {
     expect(() => suppressionHash("username", "a", "")).toThrow();
   });
 });
+
+describe("search, location and similar sources", () => {
+  it("parses words, location links and similar accounts", () => {
+    expect(parseSource("مدرب  تداول", "search")).toEqual({
+      type: "search",
+      query: "مدرب تداول",
+      url: `https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent("مدرب تداول")}`,
+    });
+    const back = parseSource(
+      `https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent("gold coach")}`,
+    );
+    expect(back).toMatchObject({ type: "search", query: "gold coach" });
+    expect(parseSource("https://www.instagram.com/explore/locations/213385402/riyadh/")).toEqual({
+      type: "location",
+      locationId: "213385402",
+      url: "https://www.instagram.com/explore/locations/213385402/",
+    });
+    expect(parseSource("@Gold.Coach", "similar")).toEqual({
+      type: "similar",
+      username: "gold.coach",
+      url: "https://www.instagram.com/gold.coach/",
+    });
+    expect(() => parseSource("   ", "search")).toThrow();
+  });
+});

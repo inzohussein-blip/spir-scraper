@@ -24,6 +24,9 @@ export const sourceType = pgEnum("source_type", [
   "post",
   "hashtag",
   "upload",
+  "search",
+  "location",
+  "similar",
 ]);
 export const jobStatus = pgEnum("job_status", ["queued", "running", "done", "failed", "cancelled"]);
 export const contactSource = pgEnum("contact_source", ["business_button", "bio", "link"]);

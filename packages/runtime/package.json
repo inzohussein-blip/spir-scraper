@@ -24,7 +24,7 @@
     "@scrapers/db": "workspace:*",
     "@scrapers/exporters": "workspace:*",
     "@scrapers/providers": "workspace:*",
-    "pg-boss": "12.38.2",
+    "pg-boss": "12.39.0",
     "@electric-sql/pglite": "0.5.17",
     "drizzle-orm": "0.45.4",
     "web-push": "4.0.0"

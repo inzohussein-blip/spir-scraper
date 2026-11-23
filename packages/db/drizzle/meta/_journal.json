@@ -113,6 +113,13 @@
       "when": 1795464034404,
       "tag": "0015_oval_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795466705611,
+      "tag": "0016_dizzy_power_man",
+      "breakpoints": true
     }
   ]
 }
