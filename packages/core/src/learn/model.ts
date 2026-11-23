@@ -76,7 +76,7 @@ function standardise(X: number[][]) {
 }
 
 /** Gradient descent on the regularised log-loss; positives are re-weighted when rare. */
-function fit(X: number[][], y: number[], l2 = 0.05, iters = 600, rate = 0.3) {
+function fitLogistic(X: number[][], y: number[], l2 = 0.05, iters = 600, rate = 0.3) {
   const d = X[0]?.length ?? 0;
   const w = new Array<number>(d).fill(0);
   let b = 0;
@@ -138,14 +138,14 @@ export function trainModel(
   for (let f = 0; f < k; f++) {
     const test = order.filter((_, i) => i % k === f);
     const train = order.filter((_, i) => i % k !== f);
-    const m = fit(
+    const m = fitLogistic(
       train.map((i) => X[i] as number[]),
       train.map((i) => y[i] as number),
     );
     for (const i of test)
       held[i] = sigmoid((X[i] as number[]).reduce((s, v, j) => s + v * (m.w[j] as number), m.b));
   }
-  const full = fit(X, y);
+  const full = fitLogistic(X, y);
   return {
     version: 1,
     weights: full.w.map((v) => Math.round(v * 10000) / 10000),
