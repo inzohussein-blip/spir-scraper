@@ -7,7 +7,8 @@ export type PageRequest =
   | { kind: "instagram_profile" }
   | { kind: "collect_start" }
   | { kind: "collect_get" }
-  | { kind: "collect_clear" };
+  | { kind: "collect_clear" }
+  | { kind: "post_comments" };
 
 export type PageResponse =
   | { ok: true; text?: string; data?: unknown }

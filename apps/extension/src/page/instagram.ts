@@ -132,3 +132,113 @@ export function contactsFromText(text: string): { emails: string[]; phones: stri
   }
   return { emails: [...emails], phones: [...phones] };
 }
+
+/**
+ * Words in a comment that show buying intent ("how much", "I want", "DM me").
+ * Matched on letters only, so "بكم؟" and "Price??" count.
+ */
+export const INTENT_WORDS = [
+  "بكم",
+  "كم السعر",
+  "السعر",
+  "الاسعار",
+  "الأسعار",
+  "كيف اشترك",
+  "كيف أشترك",
+  "كيف ابدا",
+  "كيف أبدأ",
+  "ابي",
+  "أبي",
+  "ابغى",
+  "أبغى",
+  "ودي",
+  "مهتم",
+  "مهتمة",
+  "تواصل",
+  "خاص",
+  "الخاص",
+  "رقمك",
+  "واتساب",
+  "وتساب",
+  "الرابط",
+  "التفاصيل",
+  "تفاصيل",
+  "عايز",
+  "عاوز",
+  "اريد",
+  "أريد",
+  "price",
+  "how much",
+  "interested",
+  "dm",
+  "inbox",
+  "details",
+  "info",
+  "link",
+  "join",
+  "whatsapp",
+  "contact",
+];
+
+const norm = (s: string) =>
+  ` ${s
+    .toLowerCase()
+    .replace(/[إأآ]/g, "ا")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()} `;
+
+/** The intent words a comment contains (normalised alef forms, whole words). */
+export function commentIntent(text: string): string[] {
+  const t = norm(text);
+  const hits = new Set<string>();
+  for (const w of INTENT_WORDS) {
+    const k = norm(w);
+    if (t.includes(k)) hits.add(w.replace(/[إأآ]/g, "ا"));
+  }
+  return [...hits];
+}
+
+export interface PostComment {
+  username: string;
+  text: string;
+  intent: string[];
+}
+
+/**
+ * Comments from the visible comment blocks of a post: each block's first
+ * profile link is the author, the rest of its text is the comment. The post's
+ * owner and repeated authors are left out. Comments with intent come first.
+ */
+export function parseComments(
+  blocks: readonly { hrefs: readonly string[]; text: string }[],
+  owner?: string | null,
+): PostComment[] {
+  const out = new Map<string, PostComment>();
+  for (const b of blocks) {
+    const [author] = usernamesFromHrefs(b.hrefs.slice(0, 2), owner);
+    if (!author) continue;
+    const text = b.text
+      .replace(new RegExp(`^\\s*${author.replace(/[.]/g, "\\.")}\\s*(?:✓|Verified)?`, "i"), "")
+      .replace(
+        /\s*(\d+\s*(?:[smhdw]|ث|د|س|ي|أ)\b|Reply|رد|Like|إعجاب|See translation|عرض الترجمة)\s*/gi,
+        " ",
+      )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300);
+    if (!text) continue;
+    const prev = out.get(author);
+    const intent = commentIntent(text);
+    if (prev) {
+      prev.intent = [...new Set([...prev.intent, ...intent])];
+      continue;
+    }
+    out.set(author, { username: author, text, intent });
+  }
+  return [...out.values()].sort((a, b) => b.intent.length - a.intent.length);
+}
+
+/** The shortcode of a post or reel URL, or null. */
+export function postFromPath(path: string): string | null {
+  return /^\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})\/?/.exec(path)?.[1] ?? null;
+}

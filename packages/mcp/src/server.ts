@@ -148,7 +148,8 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
     {
       title: "List leads",
       description:
-        "Page through collected leads, best AI score first. Each lead has username, followers, category, city, " +
+        "Page through collected leads, best AI score first. Each lead has username, followers, category, city, country, language, " +
+        "sources (the competitors or posts it was found in; several means stronger interest), " +
         "email/phone when public, contact_source, AI score/tags, CRM status, engagement rate and quality flags. " +
         "Pass next_cursor back as cursor for the next page. Use this to classify leads yourself when the server has no AI key.",
       inputSchema: z.object({
@@ -160,6 +161,16 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         min_score: z.number().int().min(0).max(100).optional(),
         status: z.enum(STATUSES).optional(),
         search: z.string().max(100).optional().describe("Text in username, name or bio"),
+        country: z.string().length(2).optional().describe("ISO 3166-1 alpha-2, e.g. KW"),
+        language: z.string().length(2).optional().describe("ISO 639-1 of the bio, e.g. ar"),
+        min_sources: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Found in at least this many competitors' audiences or posts"),
+        min_followers: z.number().int().min(0).optional(),
+        max_followers: z.number().int().min(0).optional(),
         limit: z.number().int().min(1).max(200).default(50),
         cursor: z.string().optional(),
       }),
@@ -176,6 +187,11 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         ...(a.min_score !== undefined ? { minScore: a.min_score } : {}),
         ...(a.status ? { status: a.status } : {}),
         ...(a.search ? { q: a.search } : {}),
+        ...(a.country ? { country: a.country } : {}),
+        ...(a.language ? { language: a.language } : {}),
+        ...(a.min_sources ? { minSources: a.min_sources } : {}),
+        ...(a.min_followers !== undefined ? { minFollowers: a.min_followers } : {}),
+        ...(a.max_followers !== undefined ? { maxFollowers: a.max_followers } : {}),
         ...(a.cursor ? { cursor: a.cursor } : {}),
         limit: a.limit,
       });
@@ -326,6 +342,11 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         ai_criteria: z.string().max(2000).nullable().optional(),
         watch_keywords: z.array(z.string().max(50)).max(50).nullable().optional(),
         sheet_id: z.string().nullable().optional(),
+        skip_fake: z
+          .boolean()
+          .optional()
+          .describe("Do not keep accounts with two or more fake signals and no contact"),
+        message_template: z.string().max(1000).nullable().optional(),
       }),
     },
     guard(async (a) => {
@@ -335,6 +356,8 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         aiCriteria: a.ai_criteria,
         watchKeywords: a.watch_keywords,
         sheetId: a.sheet_id,
+        skipFake: a.skip_fake,
+        messageTemplate: a.message_template,
       });
       return p ? json(p) : fail("Project not found");
     }),
@@ -363,6 +386,94 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         limit: a.limit,
       });
       return json({ monitor_id: m.id, source: m.sourceUrl, every_days: m.everyDays });
+    }),
+  );
+
+  server.registerTool(
+    "lead_detail",
+    {
+      title: "A lead with its history",
+      description:
+        "One lead with its bio, contacts, score, the sources it was found in, and its history: the owner's notes, " +
+        "status changes, follow-up dates and profile changes (new email, new number, became a business).",
+      inputSchema: z.object({ project: z.string(), username: z.string() }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) => {
+      const d = await rt.scrapers.leadDetail(await projectIdFor(rt, a.project), a.username);
+      return d ? json(d) : fail(`@${a.username} is not a lead in this project`);
+    }),
+  );
+
+  server.registerTool(
+    "add_lead_note",
+    {
+      title: "Add a note to a lead",
+      description:
+        "Add a note to a lead's history, e.g. what was said on a call and the next step.",
+      inputSchema: z.object({
+        project: z.string(),
+        username: z.string(),
+        text: z.string().min(1).max(2000),
+      }),
+    },
+    guard(async (a) => {
+      const ok = await rt.scrapers.addLeadNote({
+        projectId: await projectIdFor(rt, a.project),
+        username: a.username,
+        text: a.text,
+      });
+      return ok ? json({ added: true }) : fail(`@${a.username} is not a lead in this project`);
+    }),
+  );
+
+  server.registerTool(
+    "bulk_update_leads",
+    {
+      title: "Change many leads",
+      description:
+        "Set the status and/or a follow-up date (ISO date, null clears it) for up to 500 leads at once.",
+      inputSchema: z.object({
+        project: z.string(),
+        usernames: z.array(z.string()).min(1).max(500),
+        status: z.enum(STATUSES).optional(),
+        follow_up_at: z.iso.datetime({ offset: true }).or(z.iso.date()).nullable().optional(),
+      }),
+    },
+    guard(async (a) => {
+      const n = await rt.scrapers.bulkUpdateLeads({
+        projectId: await projectIdFor(rt, a.project),
+        usernames: a.usernames,
+        ...(a.status ? { status: a.status } : {}),
+        ...(a.follow_up_at !== undefined
+          ? { followUpAt: a.follow_up_at === null ? null : new Date(a.follow_up_at) }
+          : {}),
+      });
+      return json({ updated: n });
+    }),
+  );
+
+  server.registerTool(
+    "analyze_competitor",
+    {
+      title: "Analyse a competitor",
+      description:
+        "Read a competitor's public profile and recent posts (one provider call): engagement, which content type works " +
+        "best, best posting days and hours, top hashtags and posts, follower growth since the last look, and (with a server " +
+        "AI key) a short Arabic brief with content ideas. Without the brief, write your own from the numbers.",
+      inputSchema: z.object({
+        username: z.string(),
+        project: z.string().optional().describe("Its AI criteria set the goal of the brief"),
+      }),
+    },
+    guard(async (a) => {
+      const projectId = a.project ? await projectIdFor(rt, a.project) : undefined;
+      return json(
+        await rt.scrapers.analyzeCompetitor({
+          username: a.username,
+          ...(projectId ? { projectId } : {}),
+        }),
+      );
     }),
   );
 

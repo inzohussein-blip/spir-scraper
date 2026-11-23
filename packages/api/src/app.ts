@@ -70,6 +70,11 @@ const LeadSchema = z
     otherProjects: z.number(),
     sourceUrl: z.string(),
     fetchedAt: z.string(),
+    sources: z.array(z.string()).nullable().optional(),
+    sourceCount: z.number().optional(),
+    country: z.string().nullable().optional(),
+    language: z.string().nullable().optional(),
+    followUpAt: z.string().nullable().optional(),
   })
   .openapi("Lead");
 
@@ -409,6 +414,9 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
           min_score: z.coerce.number().int().min(0).max(100).optional(),
           status: StatusEnum.optional(),
           q: z.string().max(100).optional(),
+          country: z.string().length(2).optional(),
+          language: z.string().length(2).optional(),
+          min_sources: z.coerce.number().int().min(1).optional(),
           limit: z.coerce.number().int().min(1).max(500).default(50),
           cursor: z.string().max(500).optional(),
         }),
@@ -429,6 +437,9 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
         ...(q.min_score !== undefined ? { minScore: q.min_score } : {}),
         ...(q.status ? { status: q.status } : {}),
         ...(q.q ? { q: q.q } : {}),
+        ...(q.country ? { country: q.country } : {}),
+        ...(q.language ? { language: q.language } : {}),
+        ...(q.min_sources ? { minSources: q.min_sources } : {}),
         ...(q.cursor ? { cursor: q.cursor } : {}),
         limit: q.limit,
       });

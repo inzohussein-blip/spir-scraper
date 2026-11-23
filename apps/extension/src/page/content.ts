@@ -1,7 +1,9 @@
 import {
   contactsFromText,
+  parseComments,
   parseOgDescription,
   parseOgTitle,
+  postFromPath,
   usernameFromPath,
   usernamesFromHrefs,
 } from "./instagram.js";
@@ -240,6 +242,45 @@ function clearCollect(): CollectState {
   return collect;
 }
 
+/**
+ * Visible comments on an open post or reel. Each comment block is the nearest
+ * list item (or small container) around an author link.
+ */
+function postComments() {
+  if (!postFromPath(location.pathname)) throw new Error("افتح منشوراً أو ريلز أولاً");
+  const scope =
+    document.querySelector('[role="dialog"] article, [role="dialog"]') ??
+    document.querySelector("main") ??
+    document;
+  const ownerLink = scope.querySelector("header a[href]")?.getAttribute("href") ?? "";
+  const owner = usernamesFromHrefs([ownerLink])[0] ?? null;
+  const blocks: { hrefs: string[]; text: string }[] = [];
+  const used = new Set<Element>();
+  for (const a of scope.querySelectorAll("a[href]")) {
+    if (a.closest("header")) continue;
+    const href = a.getAttribute("href") ?? "";
+    if (usernamesFromHrefs([href]).length === 0) continue;
+    // The smallest ancestor holding more than the name: the comment block.
+    let el: Element | null = a;
+    for (let i = 0; i < 6 && el; i++) {
+      el = el.parentElement;
+      if (!el) break;
+      if (el.tagName === "LI") break;
+      // biome-ignore lint/performance/useDomNodeTextContent: rendered text keeps line breaks
+      const t = (el as HTMLElement).innerText ?? "";
+      if (t.length > (a.textContent ?? "").length + 3) break;
+    }
+    if (!el || used.has(el)) continue;
+    used.add(el);
+    blocks.push({
+      hrefs: [...el.querySelectorAll("a[href]")].map((x) => x.getAttribute("href") ?? ""),
+      // biome-ignore lint/performance/useDomNodeTextContent: rendered text keeps line breaks
+      text: (el as HTMLElement).innerText ?? "",
+    });
+  }
+  return { post: location.href, owner, comments: parseComments(blocks, owner) };
+}
+
 function handle(req: PageRequest): PageResponse {
   switch (req.kind) {
     case "snapshot":
@@ -259,6 +300,8 @@ function handle(req: PageRequest): PageResponse {
       return { ok: true, data: collect };
     case "collect_clear":
       return { ok: true, data: clearCollect() };
+    case "post_comments":
+      return { ok: true, data: postComments() };
   }
 }
 

@@ -21,6 +21,13 @@ export async function GET(req: Request) {
       ...(q.get("has_phone") ? { hasPhone: true } : {}),
       ...(q.get("min_score") ? { minScore: Number(q.get("min_score")) } : {}),
       ...(q.get("q") ? { q: q.get("q") as string } : {}),
+      ...(/^[A-Za-z]{2}$/.test(q.get("country") ?? "")
+        ? { country: q.get("country") as string }
+        : {}),
+      ...(/^[a-z]{2}$/.test(q.get("language") ?? "")
+        ? { language: q.get("language") as string }
+        : {}),
+      ...(Number(q.get("min_sources")) > 1 ? { minSources: Number(q.get("min_sources")) } : {}),
       ...(["new", "contacted", "interested", "customer", "rejected"].includes(q.get("status") ?? "")
         ? { status: q.get("status") as "new" }
         : {}),

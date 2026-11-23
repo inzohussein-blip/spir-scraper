@@ -15,6 +15,8 @@ export interface Settings extends ModelSettings {
   maxSteps: number;
   /** Page actions per day on Instagram in auto mode (a guard against account limits). */
   dailyInstagramActions: number;
+  /** Page actions per hour on Instagram, so the daily allowance is spread out. */
+  hourlyInstagramActions: number;
   /** Show the lead badge on Instagram profiles. */
   showBadge: boolean;
   /** What the owner offers, for message drafts. */
@@ -37,6 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paceSeconds: 4,
   maxSteps: 25,
   dailyInstagramActions: 200,
+  hourlyInstagramActions: 60,
   showBadge: true,
   offer: "",
   criteria: "",
@@ -83,13 +86,25 @@ export function originPatterns(allowed: readonly string[]): string[] {
   return allowed.flatMap((a) => [`https://${a}/*`, `https://*.${a}/*`]);
 }
 
-/** Counts today's Instagram actions; returns false once the daily limit is reached. */
-export async function takeInstagramAction(limit: number, today = new Date()): Promise<boolean> {
-  const day = today.toISOString().slice(0, 10);
+/**
+ * Counts Instagram actions per day and per hour. Returns null when the action
+ * may go ahead, or which limit was reached.
+ */
+export async function takeInstagramAction(
+  dailyLimit: number,
+  hourlyLimit = Number.POSITIVE_INFINITY,
+  now = new Date(),
+): Promise<null | "day" | "hour"> {
+  const day = now.toISOString().slice(0, 10);
+  const hour = now.toISOString().slice(0, 13);
   const key = "igActions";
-  const cur = (await chrome.storage.local.get(key))[key] as { day: string; n: number } | undefined;
+  const cur = (await chrome.storage.local.get(key))[key] as
+    | { day: string; n: number; hour?: string; h?: number }
+    | undefined;
   const n = cur?.day === day ? cur.n : 0;
-  if (n >= limit) return false;
-  await chrome.storage.local.set({ [key]: { day, n: n + 1 } });
-  return true;
+  const h = cur?.hour === hour ? (cur.h ?? 0) : 0;
+  if (n >= dailyLimit) return "day";
+  if (h >= hourlyLimit) return "hour";
+  await chrome.storage.local.set({ [key]: { day, n: n + 1, hour, h: h + 1 } });
+  return null;
 }

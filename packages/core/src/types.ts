@@ -22,7 +22,19 @@ export interface RawProfile {
   /** City from the business address, when shown. */
   city?: string | null;
   /** Likes and comments of recent posts, for engagement and quality checks. */
-  recentPosts?: { likes: number | null; comments: number | null }[] | null;
+  recentPosts?: RecentPost[] | null;
+}
+
+/** A recent post as providers return it; only likes and comments are always present. */
+export interface RecentPost {
+  likes: number | null;
+  comments: number | null;
+  caption?: string | null;
+  /** ISO time the post was published. */
+  timestamp?: string | null;
+  /** image | video | carousel */
+  type?: string | null;
+  url?: string | null;
 }
 
 export type ProviderId = "graph" | "apify" | "worker";

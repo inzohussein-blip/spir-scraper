@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  commentIntent,
   contactsFromText,
   isInstagramHost,
+  parseComments,
   parseCount,
   parseOgDescription,
   parseOgTitle,
+  postFromPath,
   usernameFromPath,
   usernamesFromHrefs,
 } from "../src/page/instagram.js";
@@ -68,5 +71,39 @@ describe("Instagram page helpers", () => {
   it("recognises Instagram hosts", () => {
     expect(isInstagramHost("www.instagram.com")).toBe(true);
     expect(isInstagramHost("instagram.com.evil.io")).toBe(false);
+  });
+});
+
+describe("comments on a post", () => {
+  it("finds buying intent in Arabic and English", () => {
+    expect(commentIntent("بكم الاشتراك؟")).toEqual(["بكم"]);
+    expect(commentIntent("أبغى التفاصيل لو سمحت")).toEqual(["ابغى", "التفاصيل"]);
+    expect(commentIntent("Price?? DM me")).toEqual(["price", "dm"]);
+    expect(commentIntent("ما شاء الله 🔥")).toEqual([]);
+    // Whole words only: "admin" is not "dm".
+    expect(commentIntent("admin here")).toEqual([]);
+  });
+
+  it("reads authors and texts, skips the owner, and puts intent first", () => {
+    const blocks = [
+      { hrefs: ["/rival/"], text: "rival Big news today" },
+      { hrefs: ["/ali.fx/", "/ali.fx/"], text: "ali.fx رائع 2d Reply" },
+      { hrefs: ["/sara_22/"], text: "sara_22 كم السعر؟ ابي اشترك 5h رد" },
+      { hrefs: ["/explore/"], text: "nothing" },
+      { hrefs: ["/ali.fx/"], text: "ali.fx واتساب؟" },
+    ];
+    const c = parseComments(blocks, "rival");
+    expect(c.map((x) => x.username)).toEqual(["sara_22", "ali.fx"]);
+    expect(c[0]).toMatchObject({
+      text: "كم السعر؟ ابي اشترك",
+      intent: ["كم السعر", "السعر", "ابي"],
+    });
+    expect(c[1]).toMatchObject({ text: "رائع", intent: ["واتساب"] });
+  });
+
+  it("knows post and reel addresses", () => {
+    expect(postFromPath("/p/Cx12abc/")).toBe("Cx12abc");
+    expect(postFromPath("/rival/reel/Dy99_zz-1/")).toBe("Dy99_zz-1");
+    expect(postFromPath("/rival/")).toBeNull();
   });
 });

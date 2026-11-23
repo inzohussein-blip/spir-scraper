@@ -3,10 +3,12 @@ import {
   type AnyDb,
   apiKeys,
   auditLog,
+  competitorSnapshots,
   counters,
   ephemeral,
   jobs,
   type LeadStatus,
+  leadEvents,
   leads,
   monitors,
   notifications,
@@ -34,14 +36,18 @@ import {
 } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import {
+  analyzePosts,
   createMxChecker,
+  detectLanguage,
   fetchLinkPage,
+  growthPercent,
+  profileChanges,
   profileQuality,
   type ResolveDeps,
   resolveContact,
 } from "../extract/index.js";
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
-import type { AudienceStats, LeadScore, Scorer, ScoringInput } from "../scoring.js";
+import type { AudienceStats, LeadQuery, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
 import { NotFoundError, type RawProfile, type Source } from "../types.js";
 import { NoProviderError, type ProviderRouter } from "./router.js";
@@ -86,6 +92,14 @@ export interface LeadFilters {
   status?: LeadStatus;
   /** Text search in username, name and bio. */
   q?: string;
+  /** ISO 3166-1 alpha-2. */
+  country?: string;
+  /** ISO 639-1 (ar, en, ...). */
+  language?: string;
+  /** Found in at least this many sources (competitors, posts). */
+  minSources?: number;
+  minFollowers?: number;
+  maxFollowers?: number;
   limit?: number;
   offset?: number;
   /** Opaque cursor from a previous page (keyset pagination). */
@@ -126,6 +140,11 @@ export interface LeadRow {
   fetchedAt: Date;
   /** When the owner asked to be reminded to follow up. */
   followUpAt?: Date | null;
+  /** Sources the account was found in, and how many. */
+  sources?: string[] | null;
+  sourceCount?: number;
+  country?: string | null;
+  language?: string | null;
 }
 
 /** Lead statuses in Arabic, for reminders. */
@@ -364,7 +383,8 @@ export function createScrapers(deps: {
     p: RawProfile,
     fetchedBy: "graph" | "apify" | "worker",
     quality: { engagementRate: number | null; flags: string[] },
-  ) {
+  ): Promise<string[]> {
+    const [before] = await db.select().from(profiles).where(eq(profiles.igUserId, p.igUserId));
     // A username can move to a new account; drop the stale row first.
     await db
       .delete(profiles)
@@ -390,6 +410,7 @@ export function createScrapers(deps: {
       city: p.city ?? null,
       engagementRate: quality.engagementRate === null ? null : String(quality.engagementRate),
       qualityFlags: quality.flags.length ? quality.flags : null,
+      language: detectLanguage(`${p.fullName ?? ""} ${p.bio ?? ""}`),
       fetchedAt: new Date(),
       fetchedBy,
     };
@@ -397,6 +418,7 @@ export function createScrapers(deps: {
       .insert(profiles)
       .values(values)
       .onConflictDoUpdate({ target: profiles.igUserId, set: values });
+    return before ? profileChanges(before, values) : [];
   }
 
   async function handleDiscover(payload: DiscoverPayload) {
@@ -517,6 +539,7 @@ export function createScrapers(deps: {
 
     const delta = { enriched: 0, leads: 0, skipped: 0, failed: 0, cached: 0 };
     const watchHits: string[] = [];
+    const changed: string[] = [];
     let deferred: string[] = [];
 
     for (let i = 0; i < names.length; i++) {
@@ -578,8 +601,12 @@ export function createScrapers(deps: {
         delta.skipped++;
         continue;
       }
-      if (!hit) await saveProfile(profile, provider, quality);
+      const changes = hit ? [] : await saveProfile(profile, provider, quality);
       const phone = contact.phoneE164 ?? contact.phoneRaw;
+      if (project.skipFake && quality.flags.length >= 2 && !contact.email && !phone) {
+        delta.skipped++;
+        continue;
+      }
       const leadValues = {
         jobId: job.id,
         email: contact.email,
@@ -588,13 +615,38 @@ export function createScrapers(deps: {
         phoneCountry: contact.phoneCountry,
         contactSource: contact.contactSource,
         phoneHash: phone ? suppressionHash("phone", phone, pepper) : null,
+        country: contact.phoneCountry ?? contact.countries[0] ?? null,
         expiresAt,
       };
+      // Every source the account turns up in is kept: several competitors means more interest.
+      const merged = sql`case when ${job.sourceUrl} = any(coalesce(${leads.sources}, '{}'::text[])) then ${leads.sources} else array_append(coalesce(${leads.sources}, '{}'::text[]), ${job.sourceUrl}) end`;
       // On conflict the lead's status and note are kept: only the data is refreshed.
-      await db
+      const [saved] = await db
         .insert(leads)
-        .values({ projectId: job.projectId, profileId: profile.igUserId, ...leadValues })
-        .onConflictDoUpdate({ target: [leads.projectId, leads.profileId], set: leadValues });
+        .values({
+          projectId: job.projectId,
+          profileId: profile.igUserId,
+          ...leadValues,
+          sources: [job.sourceUrl],
+          sourceCount: 1,
+        })
+        .onConflictDoUpdate({
+          target: [leads.projectId, leads.profileId],
+          set: {
+            ...leadValues,
+            country: sql`coalesce(${leadValues.country}, ${leads.country})`,
+            sources: merged,
+            sourceCount: sql`cardinality(${merged})`,
+          },
+        })
+        .returning({ id: leads.id, createdAt: leads.createdAt });
+      if (saved && changes.length > 0 && saved.createdAt.getTime() < Date.now() - 60_000) {
+        // A lead the project already had changed since the last fetch.
+        await db
+          .insert(leadEvents)
+          .values({ leadId: saved.id, kind: "change", text: changes.join("، ") });
+        changed.push(`@${profile.username}: ${changes.join("، ")}`);
+      }
       delta.enriched++;
       if (contact.email || phone) delta.leads++;
       if (matchKeywords(profile, project.watchKeywords).length) watchHits.push(profile.username);
@@ -616,6 +668,16 @@ export function createScrapers(deps: {
         body: `كل المصادر في فترة توقف. تكمل المهمة تلقائياً بعد حوالي ${Math.ceil(waitSeconds / 60)} دقيقة.`,
         url: `/jobs/${job.id}`,
         key: `deferred:${job.id}`,
+      });
+    }
+    if (changed.length > 0) {
+      await notify({
+        type: "system",
+        level: "info",
+        title: `تغيّرت حسابات ${changed.length} من عملائك في ${project.name}`,
+        body: changed.slice(0, 15).join("\n"),
+        url: `/leads?project=${project.id}`,
+        key: `changes:${job.id}:${changed.length}`,
       });
     }
     if (watchHits.length > 0) {
@@ -643,6 +705,9 @@ export function createScrapers(deps: {
           aiScore: Math.round(Math.min(100, Math.max(0, sc.score))),
           aiTags: tags,
           aiReason: sc.reason.slice(0, 300),
+          ...(sc.country && /^[A-Za-z]{2}$/.test(sc.country)
+            ? { country: sql`coalesce(${leads.country}, ${sc.country.toUpperCase()})` }
+            : {}),
         })
         .where(eq(leads.id, leadId));
     }
@@ -698,6 +763,34 @@ export function createScrapers(deps: {
     await collectPendingScores();
   }
 
+  /**
+   * Adds the owner's own decisions to the criteria (accounts they marked as
+   * customers or interested, and ones they rejected), so scoring follows them.
+   */
+  async function withExamples(projectId: string, criteria: string): Promise<string> {
+    const pick = (statuses: LeadStatus[]) =>
+      db
+        .select({ username: profiles.username, bio: profiles.bio, category: profiles.category })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(eq(leads.projectId, projectId), inArray(leads.status, statuses)))
+        .orderBy(desc(leads.statusAt))
+        .limit(6);
+    const [good, bad] = await Promise.all([pick(["customer", "interested"]), pick(["rejected"])]);
+    if (good.length + bad.length < 3) return criteria;
+    const line = (r: { username: string; bio: string | null; category: string | null }) =>
+      `- @${r.username}${r.category ? ` (${r.category})` : ""}: ${(r.bio ?? "").replace(/\s+/g, " ").slice(0, 140)}`;
+    return [
+      criteria,
+      good.length
+        ? `\nAccounts the operator accepted (score similar ones higher):\n${good.map(line).join("\n")}`
+        : "",
+      bad.length
+        ? `\nAccounts the operator rejected (score similar ones lower):\n${bad.map(line).join("\n")}`
+        : "",
+    ].join("\n");
+  }
+
   async function scoreJob(jobId: string, criteria: string, opts: { rescore?: boolean }) {
     if (!scorer)
       throw new ScoringUnavailableError(
@@ -718,8 +811,11 @@ export function createScrapers(deps: {
       isVerified: profile.isVerified,
       category: profile.category,
       externalUrl: profile.externalUrl,
+      sources: lead.sourceCount,
     }));
     if (items.length === 0) return { mode: "none" as const, count: 0 };
+    const [first] = rows;
+    if (first) criteria = await withExamples(first.lead.projectId, criteria);
     if (items.length > scorer.batchThreshold) {
       const batchId = await scorer.submitBatch(items, criteria);
       await db
@@ -761,6 +857,11 @@ export function createScrapers(deps: {
     if (f.hasPhone) conds.push(or(isNotNull(leads.phoneE164), isNotNull(leads.phoneRaw)));
     if (f.minScore !== undefined) conds.push(gte(leads.aiScore, f.minScore));
     if (f.status) conds.push(eq(leads.status, f.status));
+    if (f.country) conds.push(eq(leads.country, f.country.toUpperCase()));
+    if (f.language) conds.push(eq(profiles.language, f.language.toLowerCase()));
+    if (f.minSources) conds.push(gte(leads.sourceCount, f.minSources));
+    if (f.minFollowers !== undefined) conds.push(gte(profiles.followers, f.minFollowers));
+    if (f.maxFollowers !== undefined) conds.push(lte(profiles.followers, f.maxFollowers));
     if (f.q?.trim()) {
       const like = `%${f.q.trim().replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
       conds.push(
@@ -799,6 +900,10 @@ export function createScrapers(deps: {
       phoneConfirmed: !!lead.phoneE164,
       contactSource: lead.contactSource,
       followUpAt: lead.followUpAt,
+      sources: lead.sources,
+      sourceCount: lead.sourceCount,
+      country: lead.country,
+      language: profile.language,
       aiScore: lead.aiScore,
       aiTags: lead.aiTags,
       aiReason: lead.aiReason,
@@ -1012,6 +1117,7 @@ export function createScrapers(deps: {
         autoExport?: boolean | undefined;
         watchKeywords?: string[] | null | undefined;
         messageTemplate?: string | null | undefined;
+        skipFake?: boolean | undefined;
       },
     ) {
       const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
@@ -1036,6 +1142,14 @@ export function createScrapers(deps: {
         .set({ followUpAt: input.at })
         .where(and(eq(leads.projectId, input.projectId), eq(leads.profileId, profile.id)))
         .returning({ id: leads.id });
+      if (updated[0])
+        await db.insert(leadEvents).values({
+          leadId: updated[0].id,
+          kind: "follow_up",
+          text: input.at
+            ? `تذكير متابعة يوم ${input.at.toISOString().slice(0, 10)}`
+            : "أُلغي تذكير المتابعة",
+        });
       return updated.length > 0;
     },
 
@@ -1111,7 +1225,277 @@ export function createScrapers(deps: {
         })
         .where(and(eq(leads.projectId, input.projectId), eq(leads.profileId, profile.id)))
         .returning({ id: leads.id });
+      if (updated[0])
+        await db.insert(leadEvents).values({
+          leadId: updated[0].id,
+          kind: "status",
+          text: `الحالة: ${STATUS_AR[input.status] ?? input.status}${input.note ? ` · ${input.note.slice(0, 200)}` : ""}`,
+        });
       return updated.length > 0;
+    },
+
+    /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */
+    async bulkUpdateLeads(input: {
+      projectId: string;
+      usernames: string[];
+      status?: LeadStatus;
+      followUpAt?: Date | null;
+    }) {
+      const names = [
+        ...new Set(input.usernames.map((u) => u.replace(/^@/, "").toLowerCase())),
+      ].slice(0, 500);
+      if (names.length === 0 || (input.status === undefined && input.followUpAt === undefined))
+        return 0;
+      const ids = db
+        .select({ id: profiles.igUserId })
+        .from(profiles)
+        .where(inArray(profiles.username, names));
+      const updated = await db
+        .update(leads)
+        .set({
+          ...(input.status ? { status: input.status, statusAt: new Date() } : {}),
+          ...(input.followUpAt !== undefined ? { followUpAt: input.followUpAt } : {}),
+        })
+        .where(and(eq(leads.projectId, input.projectId), inArray(leads.profileId, ids)))
+        .returning({ id: leads.id });
+      const text = [
+        input.status ? `الحالة: ${STATUS_AR[input.status] ?? input.status}` : "",
+        input.followUpAt !== undefined
+          ? input.followUpAt
+            ? `تذكير متابعة يوم ${input.followUpAt.toISOString().slice(0, 10)}`
+            : "أُلغي تذكير المتابعة"
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      if (updated.length > 0)
+        await db
+          .insert(leadEvents)
+          .values(updated.map((u) => ({ leadId: u.id, kind: "status", text: `${text} (جماعي)` })));
+      return updated.length;
+    },
+
+    /** Adds the owner's note to a lead's history. */
+    async addLeadNote(input: { projectId: string; username: string; text: string }) {
+      const text = input.text.trim().slice(0, 2000);
+      if (!text) return false;
+      const [row] = await db
+        .select({ id: leads.id })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(
+          and(
+            eq(leads.projectId, input.projectId),
+            eq(profiles.username, input.username.replace(/^@/, "").toLowerCase()),
+          ),
+        );
+      if (!row) return false;
+      await db.insert(leadEvents).values({ leadId: row.id, kind: "note", text });
+      return true;
+    },
+
+    /** A lead with its notes and history, newest first. */
+    async leadDetail(projectId: string, username: string) {
+      const u = username.replace(/^@/, "").toLowerCase();
+      const [row] = await leadsPage({ projectId, q: u, limit: 20 }).then((r) =>
+        r.leads.filter((l) => l.username === u),
+      );
+      if (!row) return null;
+      const events = await db
+        .select({ at: leadEvents.at, kind: leadEvents.kind, text: leadEvents.text })
+        .from(leadEvents)
+        .innerJoin(leads, eq(leads.id, leadEvents.leadId))
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(eq(leads.projectId, projectId), eq(profiles.username, u)))
+        .orderBy(desc(leadEvents.at))
+        .limit(100);
+      const [p] = await db
+        .select({ bio: profiles.bio })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      return { lead: row, bio: p?.bio ?? null, events };
+    },
+
+    /** Understands a question in plain language and returns the matching leads. */
+    async askLeads(projectId: string, question: string, limit = 50) {
+      if (!scorer?.parseQuery)
+        throw new ScoringUnavailableError("Questions in plain language need ANTHROPIC_API_KEY");
+      const query: LeadQuery = await scorer.parseQuery(question);
+      const page = await leadsPage({ ...query, projectId, limit });
+      return { query, leads: page.leads };
+    },
+
+    /** Leads with a follow-up date, for the calendar feed. */
+    async upcomingFollowUps(limit = 500) {
+      return db
+        .select({
+          username: profiles.username,
+          fullName: profiles.fullName,
+          at: leads.followUpAt,
+          status: leads.status,
+          project: projects.name,
+          projectId: projects.id,
+          note: leads.statusNote,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .innerJoin(projects, eq(projects.id, leads.projectId))
+        .where(isNotNull(leads.followUpAt))
+        .orderBy(leads.followUpAt)
+        .limit(limit);
+    },
+
+    /**
+     * Reads a competitor's public profile and recent posts: what works, when
+     * they post, growth since the last look, and (with AI) content ideas.
+     */
+    async analyzeCompetitor(input: { username: string; projectId?: string }) {
+      const username = input.username.replace(/^@/, "").trim().toLowerCase();
+      await loadRouterState();
+      const { profile } = await router.getProfile(username);
+      await saveRouterState();
+      const [last] = await db
+        .select()
+        .from(competitorSnapshots)
+        .where(eq(competitorSnapshots.username, username))
+        .orderBy(desc(competitorSnapshots.at))
+        .limit(1);
+      await db
+        .insert(competitorSnapshots)
+        .values({ username, followers: profile.followers ?? null, posts: profile.posts ?? null });
+      const analysis = analyzePosts(profile.recentPosts, profile.followers, config.timeZone);
+      const growth = last
+        ? {
+            since: last.at,
+            followers: (profile.followers ?? 0) - (last.followers ?? 0),
+            percent: growthPercent(last.followers, profile.followers ?? null),
+          }
+        : null;
+      let brief: string | null = null;
+      if (scorer?.competitorBrief) {
+        const project = input.projectId ? await this.getProject(input.projectId) : null;
+        try {
+          brief =
+            (await scorer.competitorBrief(
+              {
+                username,
+                bio: profile.bio ?? null,
+                category: profile.category ?? null,
+                followers: profile.followers ?? null,
+                growthPercent: growth?.percent ?? null,
+                analysis,
+                captions: (profile.recentPosts ?? [])
+                  .map((p) => p.caption ?? "")
+                  .filter(Boolean)
+                  .slice(0, 8),
+              },
+              project?.aiCriteria ?? "",
+            )) || null;
+        } catch {
+          brief = null;
+        }
+      }
+      return {
+        username,
+        fullName: profile.fullName ?? null,
+        bio: profile.bio ?? null,
+        category: profile.category ?? null,
+        followers: profile.followers ?? null,
+        following: profile.following ?? null,
+        posts: profile.posts ?? null,
+        analysis,
+        growth,
+        brief,
+      };
+    },
+
+    /**
+     * Records the follower count of every competitor a monitor watches (once a
+     * day) and alerts on unusual growth, which usually means an ad campaign.
+     */
+    async snapshotCompetitors(now = new Date(), thresholdPercent = 3) {
+      const watched = await db
+        .select({ url: monitors.sourceUrl, type: monitors.sourceType })
+        .from(monitors)
+        .where(eq(monitors.enabled, true));
+      const names = [
+        ...new Set(
+          watched
+            .filter((w) => w.type === "followers" || w.type === "profile")
+            .map((w) => /instagram\.com\/([A-Za-z0-9._]{1,30})/.exec(w.url)?.[1]?.toLowerCase())
+            .filter((u): u is string => !!u),
+        ),
+      ].slice(0, 20);
+      const alerts: string[] = [];
+      await loadRouterState();
+      for (const username of names) {
+        const [last] = await db
+          .select()
+          .from(competitorSnapshots)
+          .where(eq(competitorSnapshots.username, username))
+          .orderBy(desc(competitorSnapshots.at))
+          .limit(1);
+        if (last && now.getTime() - last.at.getTime() < 20 * 3_600_000) continue;
+        let followers: number | null = null;
+        let posts: number | null = null;
+        try {
+          const { profile } = await router.getProfile(username);
+          followers = profile.followers ?? null;
+          posts = profile.posts ?? null;
+        } catch {
+          continue;
+        }
+        await db.insert(competitorSnapshots).values({ username, followers, posts, at: now });
+        const pct = last ? growthPercent(last.followers, followers) : null;
+        if (pct !== null && Math.abs(pct) >= thresholdPercent) {
+          const diff = (followers ?? 0) - (last?.followers ?? 0);
+          alerts.push(`@${username}: ${diff > 0 ? "+" : ""}${diff.toLocaleString("en")} (${pct}%)`);
+        }
+      }
+      await saveRouterState();
+      if (alerts.length > 0)
+        await notify({
+          type: "system",
+          level: "warn",
+          title: "نمو غير عادي عند منافس",
+          body: `${alerts.join("\n")}\nغالباً حملة إعلانية أو منشور انتشر. حلّل حسابه من صفحة المنافسين.`,
+          url: "/competitors",
+          key: `growth:${now.toISOString().slice(0, 10)}`,
+        });
+      return { checked: names.length, alerts };
+    },
+
+    /** Follower history of a competitor, oldest first. */
+    async competitorHistory(username: string, limit = 60) {
+      const rows = await db
+        .select({ at: competitorSnapshots.at, followers: competitorSnapshots.followers })
+        .from(competitorSnapshots)
+        .where(eq(competitorSnapshots.username, username.replace(/^@/, "").toLowerCase()))
+        .orderBy(desc(competitorSnapshots.at))
+        .limit(limit);
+      return rows.reverse();
+    },
+
+    /** Everything needed to restore the owner's work, as plain rows (no secrets). */
+    async exportBackup() {
+      const [p, l, pr, ev, m, s] = await Promise.all([
+        db.select().from(projects),
+        db.select().from(leads),
+        db.select().from(profiles),
+        db.select().from(leadEvents),
+        db.select().from(monitors),
+        db.select().from(suppression),
+      ]);
+      return {
+        version: 1,
+        createdAt: new Date().toISOString(),
+        projects: p,
+        leads: l,
+        profiles: pr,
+        leadEvents: ev,
+        monitors: m,
+        suppression: s,
+      };
     },
 
     async leadStatusCounts(projectId: string) {
@@ -1232,8 +1616,32 @@ export function createScrapers(deps: {
         .where(and(gte(leads.createdAt, since), isNotNull(leads.aiScore)))
         .orderBy(desc(leads.aiScore))
         .limit(10);
+      // Competitor growth this week, from the daily snapshots.
+      const growth = await db
+        .select({
+          username: competitorSnapshots.username,
+          first: sql<number>`(array_agg(${competitorSnapshots.followers} order by ${competitorSnapshots.at} asc))[1]`,
+          last: sql<number>`(array_agg(${competitorSnapshots.followers} order by ${competitorSnapshots.at} desc))[1]`,
+        })
+        .from(competitorSnapshots)
+        .where(and(gte(competitorSnapshots.at, since), isNotNull(competitorSnapshots.followers)))
+        .groupBy(competitorSnapshots.username)
+        .having(sql`count(*) >= 2`);
+      const growthLines = growth
+        .map((g) => {
+          const pct = growthPercent(Number(g.first), Number(g.last));
+          const diff = Number(g.last) - Number(g.first);
+          return `@${g.username} ${diff >= 0 ? "+" : ""}${diff.toLocaleString("en")}${pct !== null ? ` (${pct}%)` : ""}`;
+        })
+        .slice(0, 5);
+      const repeat = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(leads)
+        .where(and(gte(leads.createdAt, since), gte(leads.sourceCount, 2)));
       const body = [
         `عملاء جدد: ${t?.leads ?? 0} (بوسيلة تواصل: ${t?.contact ?? 0})`,
+        repeat[0]?.n ? `يتابعون أكثر من منافس: ${repeat[0].n}` : "",
+        growthLines.length ? `نمو المنافسين: ${growthLines.join("، ")}` : "",
         `مهام اكتملت: ${j?.done ?? 0} · فشلت: ${j?.failed ?? 0}`,
         top.length ? `الأفضل: ${top.map((x) => `@${x.username} (${x.score})`).join("، ")}` : "",
       ]

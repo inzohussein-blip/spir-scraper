@@ -73,9 +73,17 @@ export function createExecutor(settings: Settings) {
 
   async function countInstagramAction(tab: chrome.tabs.Tab) {
     if (!tab.url || !isInstagramHost(new URL(tab.url).hostname)) return;
-    if (!(await takeInstagramAction(settings.dailyInstagramActions)))
+    const limit = await takeInstagramAction(
+      settings.dailyInstagramActions,
+      settings.hourlyInstagramActions,
+    );
+    if (limit === "day")
       throw new Error(
         `بلغت حد اليوم (${settings.dailyInstagramActions} خطوة على إنستقرام). يحمي هذا الحد حسابك؛ غيّره من الإعدادات إن أردت.`,
+      );
+    if (limit === "hour")
+      throw new Error(
+        `بلغت حد الساعة (${settings.hourlyInstagramActions} خطوة على إنستقرام). أكمل بعد بداية الساعة القادمة؛ هذا يوزّع العمل على اليوم.`,
       );
   }
 
