@@ -45,6 +45,8 @@ type Search = {
   language?: string;
   min_sources?: string;
   ask?: string;
+  persona?: string;
+  signal?: string;
 };
 
 /** Countries offered in the filter; the most common markets first. */
@@ -84,6 +86,9 @@ const QUERY_LABELS: Record<string, string> = {
   maxFollowers: "متابعون إلى",
   minSources: "عدد المصادر",
   q: "كلمات",
+  terms: "بالمعنى",
+  persona: "الشريحة",
+  signal: "إشارة",
 };
 
 const PAGE = 100;
@@ -144,6 +149,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       ...(country ? { country } : {}),
       ...(language ? { language } : {}),
       ...(minSources && minSources > 1 ? { minSources } : {}),
+      ...(q.persona ? { persona: q.persona } : {}),
+      ...(q.signal === "rising" || q.signal === "became_business" ? { signal: q.signal } : {}),
       ...(q.cursor ? { cursor: q.cursor } : {}),
       limit: PAGE,
     }),
@@ -213,6 +220,25 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               </option>
             ))}
           </Select>
+          {project.personas?.length ? (
+            <Select name="persona" defaultValue={q.persona ?? ""} aria-label="الشريحة">
+              <option value="">كل الشرائح</option>
+              {project.personas.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          ) : null}
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="signal"
+              value="rising"
+              defaultChecked={q.signal === "rising"}
+            />{" "}
+            ينمو بسرعة
+          </label>
           <label className="flex items-center gap-2 text-sm sm:col-span-2">
             <input
               type="checkbox"
@@ -396,6 +422,16 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                             {FLAGS[f] ?? f}
                           </Badge>
                         ))}
+                        {r.persona && (
+                          <Badge tone="accent" dot={false}>
+                            {r.persona}
+                          </Badge>
+                        )}
+                        {r.signals?.includes("rising") && (
+                          <Badge tone="ok" dot={false}>
+                            ينمو بسرعة
+                          </Badge>
+                        )}
                         {r.dealValue != null && (
                           <Badge tone="ok" dot={false}>
                             صفقة ${r.dealValue.toLocaleString("en")}

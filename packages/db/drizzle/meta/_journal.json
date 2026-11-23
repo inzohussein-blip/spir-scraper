@@ -71,6 +71,13 @@
       "when": 1795439717876,
       "tag": "0009_perfect_screwball",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795440318781,
+      "tag": "0010_premium_serpent_society",
+      "breakpoints": true
     }
   ]
 }

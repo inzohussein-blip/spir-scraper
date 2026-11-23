@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import * as schema from "@scrapers/db";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
@@ -18,7 +19,7 @@ import {
 const migrationsFolder = fileURLToPath(new URL("../../db/drizzle", import.meta.url));
 
 export async function setup(providers: Provider[], scorer?: Scorer) {
-  const pg = new PGlite();
+  const pg = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(pg, { schema });
   await migrate(db, { migrationsFolder });
   const boss = new PgBoss({

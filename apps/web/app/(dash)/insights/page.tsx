@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { buildPersonas } from "@/app/actions";
+import { ActionForm } from "@/components/action-form";
 import { Badge, Card, cx, fmtNum, Notice } from "@/components/ui";
 import { getRuntime } from "@/lib/runtime";
 
@@ -57,6 +59,7 @@ export default async function InsightsPage({
     ...(period?.days ? { since: new Date(Date.now() - period.days * 86_400_000) } : {}),
   });
   const { totals } = perf;
+  const personas = await rt.scrapers.personaPerformance(projectId);
   const missing = totals.customers - totals.customersWithValue;
   const link = (patch: Record<string, string>) =>
     `/insights?${new URLSearchParams({ project: projectId, period: q.period ?? "all", ...patch })}`;
@@ -198,6 +201,55 @@ export default async function InsightsPage({
             </table>
           </div>
         )}
+      </Card>
+      <Card
+        title="الشرائح"
+        icon="sparkles"
+        description="يقرأ الذكاء الاصطناعي عيّنة من البايوهات ويقسم جمهورك إلى شرائح، ثم يوزّع كل العملاء عليها. هنا ترى أي شريحة تجلب المال."
+      >
+        {personas.length > 0 && (
+          <div className="mb-4 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line text-[12.5px] text-muted">
+                  {["الشريحة", "الحسابات", "تواصلت", "عملاء", "الإغلاق", "الإيراد"].map((h) => (
+                    <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {personas.map((s) => (
+                  <tr key={s.persona} className="border-b border-line last:border-0">
+                    <td className="py-2.5 pe-2">
+                      <Link
+                        href={`/leads?project=${projectId}&persona=${encodeURIComponent(s.persona)}`}
+                        className="font-medium hover:text-accent"
+                      >
+                        {s.persona}
+                      </Link>
+                      <div className="text-xs text-muted">
+                        {project.personas?.find((p) => p.name === s.persona)?.description}
+                      </div>
+                    </td>
+                    <td className="px-2 tabular-nums">{fmtNum(s.leads)}</td>
+                    <td className="px-2 tabular-nums">{fmtNum(s.reached)}</td>
+                    <td className="px-2 tabular-nums">{fmtNum(s.customers)}</td>
+                    <td className="px-2">{s.closeRate !== null ? `${s.closeRate}%` : "—"}</td>
+                    <td className="px-2 tabular-nums">{s.revenue ? money(s.revenue) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <ActionForm
+          action={buildPersonas}
+          submit={personas.length ? "أعد اكتشاف الشرائح" : "اكتشف الشرائح"}
+        >
+          <input type="hidden" name="project" value={projectId} />
+        </ActionForm>
       </Card>
     </div>
   );

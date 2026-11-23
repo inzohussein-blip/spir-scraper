@@ -309,3 +309,106 @@ describe("revenue by source", () => {
     }
   });
 });
+
+describe("meaning, segments and timing", () => {
+  const bios: Record<string, string> = {
+    g1: "مدرب تداول الذهب XAUUSD توصيات يومية",
+    g2: "توصيات الذهب gold signals daily",
+    g3: "مدرب تداول ذهب وفوركس",
+    n1: "طالب جامعي ابي اتعلم التداول مبتدئ",
+    n2: "مبتدئ في عالم التداول وحاب اتعلم",
+    r1: "مطعم مشويات في الرياض",
+  };
+  let followers = 4000;
+  const provider = new FakeProvider("worker", ["profile"], {
+    profile: (u) => ({
+      igUserId: `id-${u}`,
+      username: u,
+      isBusiness: true,
+      isVerified: false,
+      followers: u === "g1" ? followers : 500,
+      bio: bios[u] ?? "",
+    }),
+  });
+
+  it("finds look-alikes, segments by meaning, and spots rising accounts", async () => {
+    const scorer = Object.assign(new FakeScorer(), {
+      personas: async () => [
+        {
+          name: "مدربو الذهب",
+          description: "يدرّبون على الذهب",
+          keywords: ["ذهب", "الذهب", "gold"],
+        },
+        { name: "مبتدئون", description: "يريدون التعلم", keywords: ["مبتدئ", "اتعلم"] },
+        { name: "لا أحد", description: "", keywords: ["zzzz"] },
+      ],
+      parseQuery: async () => ({ terms: ["gold", "الذهب", "ذهب"] }),
+    });
+    const t = await setup([provider], scorer);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await t.scrapers.startJob({
+        projectId: p.id,
+        source: uploadSource(Object.keys(bios)),
+        limit: 10,
+      });
+      await settle(t);
+
+      const like = await t.scrapers.similarLeads(p.id, "g1");
+      expect(like[0]?.username).toMatch(/^g[23]$/);
+      expect(like.map((l) => l.username)).not.toContain("r1");
+      expect(like.map((l) => l.username)).not.toContain("g1");
+      expect(await t.scrapers.similarLeads(p.id, "ghost")).toEqual([]);
+
+      const built = await t.scrapers.buildPersonas(p.id);
+      expect(built.assigned).toBe(5);
+      const gold = await t.scrapers.listLeads({ projectId: p.id, persona: "مدربو الذهب" });
+      expect(gold.map((l) => l.username).sort()).toEqual(["g1", "g2", "g3"]);
+      await t.scrapers.setDeal({ projectId: p.id, username: "g2", value: 600 });
+      const perf = await t.scrapers.personaPerformance(p.id);
+      expect(perf[0]).toMatchObject({
+        persona: "مدربو الذهب",
+        leads: 3,
+        customers: 1,
+        revenue: 600,
+      });
+
+      // Questions by meaning use the synonyms the AI returns.
+      const asked = await t.scrapers.askLeads(p.id, "مدربين الذهب");
+      expect(asked.leads.map((l) => l.username).sort()).toEqual(["g1", "g2", "g3"]);
+
+      // New accounts in a project with personas get one right away.
+      bios.g4 = "gold coach";
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(["g4"]), limit: 1 });
+      await settle(t);
+      expect((await t.scrapers.listLeads({ projectId: p.id, q: "g4" }))[0]?.persona).toBe(
+        "مدربو الذهب",
+      );
+
+      // g1 grows 30% over a month: rising, reported once.
+      await t.db.execute("update profile_snapshots set at = now() - interval '30 days'" as never);
+      await t.db.execute("update profiles set fetched_at = now() - interval '400 days'" as never);
+      await t.db.execute("update leads set created_at = now() - interval '40 days'" as never);
+      followers = 5200;
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(["g1"]), limit: 1 });
+      await settle(t);
+      const rising = await t.scrapers.listLeads({ projectId: p.id, signal: "rising" });
+      expect(rising.map((l) => l.username)).toEqual(["g1"]);
+      expect((await t.scrapers.leadDetail(p.id, "g1"))?.events[0]?.text).toContain(
+        "ينمو بسرعة (+30%",
+      );
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("needs an AI key for segments", async () => {
+    const t = await setup([provider]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await expect(t.scrapers.buildPersonas(p.id)).rejects.toThrow(/ANTHROPIC_API_KEY/);
+    } finally {
+      await t.close();
+    }
+  });
+});

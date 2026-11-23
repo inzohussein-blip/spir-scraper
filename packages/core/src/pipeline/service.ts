@@ -12,6 +12,7 @@ import {
   leads,
   monitors,
   notifications,
+  profileSnapshots,
   profiles,
   projects,
   pushSubscriptions,
@@ -37,6 +38,7 @@ import {
 import type { PgBoss } from "pg-boss";
 import {
   analyzePosts,
+  assignPersona,
   createMxChecker,
   detectLanguage,
   fetchLinkPage,
@@ -45,6 +47,8 @@ import {
   profileQuality,
   type ResolveDeps,
   resolveContact,
+  risingSignal,
+  searchTextOf,
 } from "../extract/index.js";
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadQuery, LeadScore, Scorer, ScoringInput } from "../scoring.js";
@@ -100,6 +104,12 @@ export interface LeadFilters {
   minSources?: number;
   minFollowers?: number;
   maxFollowers?: number;
+  /** Audience segment (see buildPersonas). */
+  persona?: string;
+  /** A timing signal such as rising or became_business. */
+  signal?: string;
+  /** Words or phrases with the same meaning; a lead matches any of them. */
+  terms?: string[];
   limit?: number;
   offset?: number;
   /** Opaque cursor from a previous page (keyset pagination). */
@@ -147,6 +157,8 @@ export interface LeadRow {
   language?: string | null;
   /** Value of the closed deal, when recorded. */
   dealValue?: number | null;
+  persona?: string | null;
+  signals?: string[] | null;
 }
 
 /** Lead statuses in Arabic, for reminders. */
@@ -422,14 +434,42 @@ export function createScrapers(deps: {
       engagementRate: quality.engagementRate === null ? null : String(quality.engagementRate),
       qualityFlags: quality.flags.length ? quality.flags : null,
       language: detectLanguage(`${p.fullName ?? ""} ${p.bio ?? ""}`),
+      searchText: searchTextOf(p),
       fetchedAt: new Date(),
       fetchedBy,
     };
+    // Every fetch is kept as a snapshot, so growth over time can be read.
+    await db.insert(profileSnapshots).values({
+      profileId: p.igUserId,
+      followers: values.followers,
+      following: values.following,
+      posts: values.posts,
+      isBusiness: values.isBusiness,
+    });
+    const history = await db
+      .select({ at: profileSnapshots.at, followers: profileSnapshots.followers })
+      .from(profileSnapshots)
+      .where(
+        and(
+          eq(profileSnapshots.profileId, p.igUserId),
+          gte(profileSnapshots.at, new Date(Date.now() - 120 * 86_400_000)),
+        ),
+      )
+      .orderBy(profileSnapshots.at);
+    const rise = risingSignal(history);
+    const signals = [
+      ...(rise.rising ? ["rising"] : []),
+      ...(before && !before.isBusiness && p.isBusiness ? ["became_business"] : []),
+    ];
+    const row = { ...values, signals: signals.length ? signals : null };
     await db
       .insert(profiles)
-      .values(values)
-      .onConflictDoUpdate({ target: profiles.igUserId, set: values });
-    return before ? profileChanges(before, values) : [];
+      .values(row)
+      .onConflictDoUpdate({ target: profiles.igUserId, set: row });
+    const changes = before ? profileChanges(before, values) : [];
+    if (rise.rising && !before?.signals?.includes("rising"))
+      changes.push(`ينمو بسرعة (+${rise.percent}% خلال ${rise.days} يوماً)`);
+    return changes;
   }
 
   async function handleDiscover(payload: DiscoverPayload) {
@@ -622,6 +662,9 @@ export function createScrapers(deps: {
         continue;
       }
       const leadValues = {
+        ...(project.personas?.length
+          ? { persona: assignPersona(searchTextOf(profile), project.personas) }
+          : {}),
         jobId: job.id,
         email: contact.email,
         phoneE164: contact.phoneE164,
@@ -775,7 +818,50 @@ export function createScrapers(deps: {
       );
     await db.delete(ephemeral).where(lt(ephemeral.expiresAt, now));
     await db.delete(counters).where(lt(counters.expiresAt, now));
+    // A year of history is enough to read growth.
+    await db
+      .delete(profileSnapshots)
+      .where(lt(profileSnapshots.at, new Date(now.getTime() - 365 * 86_400_000)));
     await collectPendingScores();
+  }
+
+  /** Puts every lead of the project in the persona whose words it uses most. */
+  async function assignPersonas(
+    projectId: string,
+    personas: { name: string; keywords: string[] }[],
+  ): Promise<number> {
+    const rows = await db
+      .select({
+        id: leads.id,
+        text: profiles.searchText,
+        username: profiles.username,
+        bio: profiles.bio,
+      })
+      .from(leads)
+      .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+      .where(eq(leads.projectId, projectId))
+      .limit(50_000);
+    const groups = new Map<string | null, string[]>();
+    for (const r of rows) {
+      const name = assignPersona(
+        r.text ?? searchTextOf({ username: r.username, bio: r.bio }),
+        personas,
+      );
+      const ids = groups.get(name) ?? [];
+      ids.push(r.id);
+      groups.set(name, ids);
+    }
+    let assigned = 0;
+    for (const [name, ids] of groups) {
+      for (let i = 0; i < ids.length; i += 1000) {
+        await db
+          .update(leads)
+          .set({ persona: name })
+          .where(inArray(leads.id, ids.slice(i, i + 1000)));
+      }
+      if (name) assigned += ids.length;
+    }
+    return assigned;
   }
 
   /**
@@ -877,6 +963,20 @@ export function createScrapers(deps: {
     if (f.minSources) conds.push(gte(leads.sourceCount, f.minSources));
     if (f.minFollowers !== undefined) conds.push(gte(profiles.followers, f.minFollowers));
     if (f.maxFollowers !== undefined) conds.push(lte(profiles.followers, f.maxFollowers));
+    if (f.persona) conds.push(eq(leads.persona, f.persona));
+    if (f.signal) conds.push(sql`${profiles.signals} @> array[${f.signal}]::text[]`);
+    const terms = (f.terms ?? []).map((t) => t.trim().toLowerCase()).filter((t) => t.length > 1);
+    if (terms.length)
+      conds.push(
+        or(
+          ...terms
+            .slice(0, 20)
+            .map(
+              (t) =>
+                sql`(${profiles.searchText} ilike ${`%${t.replace(/[%_\\]/g, (m) => `\\${m}`)}%`} or word_similarity(${t}, ${profiles.searchText}) > 0.6)`,
+            ),
+        ),
+      );
     if (f.q?.trim()) {
       const like = `%${f.q.trim().replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
       conds.push(
@@ -918,6 +1018,8 @@ export function createScrapers(deps: {
       sources: lead.sources,
       sourceCount: lead.sourceCount,
       dealValue: lead.dealValue === null ? null : Number(lead.dealValue),
+      persona: lead.persona,
+      signals: profile.signals,
       country: lead.country,
       language: profile.language,
       aiScore: lead.aiScore,
@@ -1395,6 +1497,95 @@ export function createScrapers(deps: {
           customersWithValue: deals?.withValue ?? 0,
         },
       };
+    },
+
+    /**
+     * Accounts in the project that read most like this one (name, category and
+     * bio, by trigram similarity): "find more like my best customer".
+     */
+    async similarLeads(projectId: string, username: string, limit = 10) {
+      const u = username.replace(/^@/, "").toLowerCase();
+      const [seed] = await db
+        .select({ id: profiles.igUserId, text: profiles.searchText, bio: profiles.bio })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      if (!seed) return [];
+      const text = seed.text ?? searchTextOf({ username: u, bio: seed.bio });
+      const score = sql<number>`similarity(${profiles.searchText}, ${text})`;
+      const rows = await db
+        .select({
+          username: profiles.username,
+          fullName: profiles.fullName,
+          followers: profiles.followers,
+          status: leads.status,
+          aiScore: leads.aiScore,
+          persona: leads.persona,
+          similarity: score,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(
+          and(
+            eq(leads.projectId, projectId),
+            ne(leads.profileId, seed.id),
+            // Measured: same-topic bios score 0.2-0.3, unrelated ones about 0.1.
+            sql`${score} > 0.15`,
+          ),
+        )
+        .orderBy(desc(score))
+        .limit(Math.min(limit, 50));
+      return rows.map((r) => ({ ...r, similarity: Math.round(Number(r.similarity) * 100) / 100 }));
+    },
+
+    /**
+     * Finds the project's audience segments with AI (from a sample of bios),
+     * saves them, and assigns every lead to the segment whose words it uses.
+     */
+    async buildPersonas(projectId: string) {
+      if (!scorer?.personas)
+        throw new ScoringUnavailableError("Audience segments need ANTHROPIC_API_KEY");
+      const project = await this.getProject(projectId);
+      if (!project) throw new Error("Project not found");
+      const sample = await db
+        .select({ username: profiles.username, bio: profiles.bio, category: profiles.category })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(eq(leads.projectId, projectId), isNotNull(profiles.bio)))
+        .orderBy(sql`random()`)
+        .limit(150);
+      if (sample.length < 5) throw new Error("نحتاج 5 حسابات على الأقل لها بايو");
+      const personas = (await scorer.personas(sample, project.aiCriteria ?? "")).slice(0, 8);
+      await db.update(projects).set({ personas }).where(eq(projects.id, projectId));
+      const assigned = await assignPersonas(projectId, personas);
+      return { personas, assigned };
+    },
+
+    /** Leads, customers and revenue per audience segment. */
+    async personaPerformance(projectId: string) {
+      const rows = await db
+        .select({
+          persona: leads.persona,
+          leads: sql<number>`count(*)::int`,
+          reached: sql<number>`count(*) filter (where ${leads.status} <> 'new')::int`,
+          customers: sql<number>`count(*) filter (where ${leads.status} = 'customer')::int`,
+          revenue: sql<string>`coalesce(sum(${leads.dealValue}), 0)`,
+        })
+        .from(leads)
+        .where(and(eq(leads.projectId, projectId), isNotNull(leads.persona)))
+        .groupBy(leads.persona);
+      return rows
+        .map((r) => ({
+          persona: r.persona as string,
+          leads: Number(r.leads),
+          reached: Number(r.reached),
+          customers: Number(r.customers),
+          revenue: Number(r.revenue),
+          closeRate:
+            Number(r.reached) > 0
+              ? Math.round((Number(r.customers) / Number(r.reached)) * 1000) / 10
+              : null,
+        }))
+        .sort((a, b) => b.revenue - a.revenue || b.customers - a.customers || b.leads - a.leads);
     },
 
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */

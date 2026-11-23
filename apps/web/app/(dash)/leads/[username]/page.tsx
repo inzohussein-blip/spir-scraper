@@ -34,6 +34,7 @@ export default async function LeadPage({
   const detail = await rt.scrapers.leadDetail(projectId, decodeURIComponent(username));
   if (!detail) return <Notice tone="warn">هذا الحساب غير موجود في المشروع {project.name}.</Notice>;
   const { lead: r, bio, events } = detail;
+  const similar = await rt.scrapers.similarLeads(projectId, r.username, 8);
   const wa = waLink(r.phone, r.phoneConfirmed, fillTemplate(project.messageTemplate, r));
 
   return (
@@ -98,6 +99,18 @@ export default async function LeadPage({
             </div>
           </dl>
           {r.aiReason && <p className="mt-3 text-xs text-muted">سبب الدرجة: {r.aiReason}</p>}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {r.persona && (
+              <Badge tone="accent" dot={false}>
+                {r.persona}
+              </Badge>
+            )}
+            {r.signals?.includes("rising") && (
+              <Badge tone="ok" dot={false}>
+                ينمو بسرعة
+              </Badge>
+            )}
+          </div>
         </Card>
 
         <Card title="السجل والملاحظات" icon="activity">
@@ -173,6 +186,28 @@ export default async function LeadPage({
           {r.otherProjects > 0 && (
             <p className="mt-2 text-xs text-muted">موجود أيضاً في {r.otherProjects} مشروع آخر.</p>
           )}
+        </Card>
+        <Card title="حسابات تشبهه" icon="users">
+          {similar.length === 0 ? (
+            <p className="text-sm text-muted">لا يوجد حساب مشابه في هذا المشروع بعد.</p>
+          ) : (
+            <ul className="space-y-1.5 text-sm">
+              {similar.map((s) => (
+                <li key={s.username} className="flex items-center justify-between gap-2">
+                  <Link
+                    href={`/leads/${s.username}?project=${projectId}`}
+                    className="ltr truncate text-accent hover:underline"
+                  >
+                    @{s.username}
+                  </Link>
+                  <span className="text-xs text-muted">{Math.round(s.similarity * 100)}%</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-xs text-muted">
+            بالتشابه في الاسم والفئة والبايو. مفيد مع أفضل عملائك.
+          </p>
         </Card>
         <Link
           href={`/leads?project=${projectId}`}

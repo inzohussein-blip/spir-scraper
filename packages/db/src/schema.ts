@@ -52,6 +52,8 @@ export const projects = pgTable("projects", {
   watchKeywords: text("watch_keywords").array(),
   /** First-message template for WhatsApp links; {name} and {username} are filled in. */
   messageTemplate: text("message_template"),
+  /** Audience segments found by AI: name, description and the words that mark them. */
+  personas: jsonb("personas").$type<{ name: string; description: string; keywords: string[] }[]>(),
   /** Do not keep accounts with two or more fake-account signals and no contact. */
   skipFake: boolean("skip_fake").notNull().default(false),
   createdAt: createdAt(),
@@ -125,6 +127,10 @@ export const profiles = pgTable("profiles", {
   qualityFlags: text("quality_flags").array(),
   /** Main script of the name and bio: ar, fa, en, ... (heuristic). */
   language: text("language"),
+  /** Lower-cased username, name, category and bio, for trigram similarity search. */
+  searchText: text("search_text"),
+  /** Timing signals from the account's history, e.g. rising, became_business. */
+  signals: text("signals").array(),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
   fetchedBy: providerId("fetched_by").notNull(),
 });
@@ -164,6 +170,8 @@ export const leads = pgTable(
     followUpAt: timestamp("follow_up_at", { withTimezone: true }),
     /** What the deal was worth to the owner (deposit, commission...), set when it closes. */
     dealValue: numeric("deal_value", { precision: 12, scale: 2 }),
+    /** The project's audience segment this account belongs to (see projects.personas). */
+    persona: text("persona"),
     dealAt: timestamp("deal_at", { withTimezone: true }),
     /** Every source (competitor, post, hashtag) the account was found in for this project. */
     sources: text("sources").array(),
@@ -350,3 +358,18 @@ export const competitorSnapshots = pgTable(
 );
 
 export type LeadEvent = typeof leadEvents.$inferSelect;
+
+/** Each fetch of a profile, so growth and changes over time can be read. */
+export const profileSnapshots = pgTable(
+  "profile_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    profileId: text("profile_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    followers: integer("followers"),
+    following: integer("following"),
+    posts: integer("posts"),
+    isBusiness: boolean("is_business"),
+  },
+  (t) => [index("profile_snapshots_profile_idx").on(t.profileId, t.at.desc())],
+);

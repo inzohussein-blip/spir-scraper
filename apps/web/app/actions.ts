@@ -494,3 +494,22 @@ export async function saveDeal(_: ActionState, form: FormData): Promise<ActionSt
   revalidatePath("/insights");
   return { message: value === null ? "أُلغيت الصفقة" : "سُجّلت الصفقة وأصبح عميلاً" };
 }
+
+/** Finds the project's audience segments with AI and assigns every lead to one. */
+export async function buildPersonas(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  try {
+    const r = await (await getRuntime()).scrapers.buildPersonas(projectId);
+    await audit("project.personas", { count: r.personas.length, assigned: r.assigned });
+    revalidatePath("/insights");
+    revalidatePath("/leads");
+    return { message: `وُجدت ${r.personas.length} شرائح، ووُزّع عليها ${r.assigned} عميلاً` };
+  } catch (err) {
+    return fail(
+      /ANTHROPIC_API_KEY/.test((err as Error).message)
+        ? new Error("الشرائح تحتاج ANTHROPIC_API_KEY في Vercel")
+        : err,
+    );
+  }
+}

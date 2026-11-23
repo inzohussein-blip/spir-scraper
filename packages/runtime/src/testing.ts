@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import type { Provider, RawProfile, Scorer } from "@scrapers/core";
 import * as schema from "@scrapers/db";
 import type { GoogleRequest } from "@scrapers/exporters";
@@ -53,7 +54,7 @@ export async function createTestRuntime(
     telegramFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   } = {},
 ): Promise<TestRuntime> {
-  const pg = new PGlite();
+  const pg = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(pg, { schema });
   await migrate(db, { migrationsFolder: migrationsFolder() });
   const boss = new PgBoss({

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { analyzePosts, detectLanguage, growthPercent, profileChanges } from "../src/index.js";
+import {
+  analyzePosts,
+  assignPersona,
+  detectLanguage,
+  growthPercent,
+  profileChanges,
+  risingSignal,
+  searchTextOf,
+} from "../src/index.js";
 
 describe("detectLanguage", () => {
   it("tells Arabic, Persian, English, Turkish and Russian apart", () => {
@@ -88,5 +96,52 @@ describe("growthPercent", () => {
     expect(growthPercent(1000, 1050)).toBe(5);
     expect(growthPercent(null, 10)).toBeNull();
     expect(growthPercent(1000, null)).toBeNull();
+  });
+});
+
+describe("rising accounts and personas", () => {
+  const day = (n: number) => new Date(Date.UTC(2026, 0, 1 + n));
+  it("flags accounts growing fast while still reachable", () => {
+    expect(
+      risingSignal([
+        { at: day(0), followers: 4000 },
+        { at: day(30), followers: 5200 },
+      ]),
+    ).toEqual({ rising: true, percent: 30, days: 30 });
+    // Too soon, too slow, or too big.
+    expect(
+      risingSignal([
+        { at: day(0), followers: 4000 },
+        { at: day(5), followers: 6000 },
+      ]).rising,
+    ).toBe(false);
+    expect(
+      risingSignal([
+        { at: day(0), followers: 4000 },
+        { at: day(30), followers: 4400 },
+      ]).rising,
+    ).toBe(false);
+    expect(
+      risingSignal([
+        { at: day(0), followers: 900_000 },
+        { at: day(30), followers: 1_200_000 },
+      ]).rising,
+    ).toBe(false);
+    expect(risingSignal([{ at: day(0), followers: 10 }]).percent).toBeNull();
+  });
+
+  it("assigns the persona with the most matching words", () => {
+    const personas = [
+      { name: "مدربو الذهب", keywords: ["ذهب", "gold", "xauusd"] },
+      { name: "مبتدئون", keywords: ["مبتدئ", "تعلم"] },
+    ];
+    expect(
+      assignPersona(searchTextOf({ username: "x", bio: "توصيات GOLD و XAUUSD يومياً" }), personas),
+    ).toBe("مدربو الذهب");
+    expect(assignPersona("ابي اتعلم التداول كمبتدئ", personas)).toBe("مبتدئون");
+    expect(assignPersona("مطعم", personas)).toBeNull();
+    expect(searchTextOf({ username: "Ab", fullName: "أحمد", bio: "Hi\n there" })).toBe(
+      "ab احمد hi there",
+    );
   });
 });

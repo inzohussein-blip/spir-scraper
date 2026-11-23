@@ -124,3 +124,61 @@ export function growthPercent(before: number | null, after: number | null): numb
   if (!before || after === null) return null;
   return Math.round(((after - before) / before) * 1000) / 10;
 }
+
+/**
+ * Timing signals from an account's follower history (oldest first):
+ * "rising" when it grew 20% or more over at least two weeks while still
+ * small enough to reach (1k-200k followers): a creator to approach before
+ * competitors notice.
+ */
+export function risingSignal(history: readonly { at: Date; followers: number | null }[]): {
+  rising: boolean;
+  percent: number | null;
+  days: number | null;
+} {
+  const points = history.filter((h) => h.followers !== null && (h.followers as number) > 0);
+  const first = points[0];
+  const last = points.at(-1);
+  if (!first || !last || first === last) return { rising: false, percent: null, days: null };
+  const days = Math.round((last.at.getTime() - first.at.getTime()) / 86_400_000);
+  const percent = growthPercent(first.followers, last.followers);
+  const size = last.followers as number;
+  return {
+    rising: days >= 14 && percent !== null && percent >= 20 && size >= 1000 && size <= 200_000,
+    percent,
+    days,
+  };
+}
+
+/** Lower-cased text a profile is matched on (similarity search, personas). */
+export function searchTextOf(p: {
+  username: string;
+  fullName?: string | null;
+  category?: string | null;
+  bio?: string | null;
+}): string {
+  return [p.username, p.fullName, p.category, p.bio]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[إأآ]/g, "ا")
+    .replace(/\s+/g, " ")
+    .slice(0, 1200);
+}
+
+/** The persona whose keywords appear most in the text (at least one), or null. */
+export function assignPersona(
+  text: string,
+  personas: readonly { name: string; keywords: readonly string[] }[],
+): string | null {
+  const t = text.toLowerCase().replace(/[إأآ]/g, "ا");
+  let best: { name: string; hits: number } | null = null;
+  for (const p of personas) {
+    const hits = p.keywords.filter((k) => {
+      const w = k.trim().toLowerCase().replace(/[إأآ]/g, "ا");
+      return w.length > 1 && t.includes(w);
+    }).length;
+    if (hits > 0 && (!best || hits > best.hits)) best = { name: p.name, hits };
+  }
+  return best?.name ?? null;
+}

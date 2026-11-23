@@ -171,6 +171,18 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
           .describe("Found in at least this many competitors' audiences or posts"),
         min_followers: z.number().int().min(0).optional(),
         max_followers: z.number().int().min(0).optional(),
+        persona: z.string().optional().describe("Audience segment name (see build_personas)"),
+        signal: z
+          .enum(["rising", "became_business"])
+          .optional()
+          .describe("rising: grew 20%+ over 2+ weeks while 1k-200k followers"),
+        terms: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe(
+            "Words with one meaning, in Arabic and English; a lead matches any (search by meaning)",
+          ),
         limit: z.number().int().min(1).max(200).default(50),
         cursor: z.string().optional(),
       }),
@@ -192,6 +204,9 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         ...(a.min_sources ? { minSources: a.min_sources } : {}),
         ...(a.min_followers !== undefined ? { minFollowers: a.min_followers } : {}),
         ...(a.max_followers !== undefined ? { maxFollowers: a.max_followers } : {}),
+        ...(a.persona ? { persona: a.persona } : {}),
+        ...(a.signal ? { signal: a.signal } : {}),
+        ...(a.terms?.length ? { terms: a.terms } : {}),
         ...(a.cursor ? { cursor: a.cursor } : {}),
         limit: a.limit,
       });
@@ -497,6 +512,50 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         value: a.value,
       });
       return ok ? json({ recorded: true }) : fail(`@${a.username} is not a lead in this project`);
+    }),
+  );
+
+  server.registerTool(
+    "similar_leads",
+    {
+      title: "Find look-alikes",
+      description:
+        "Accounts in the project whose name, category and bio read most like the given one (trigram similarity). " +
+        "Use it on the owner's best customers to find more like them.",
+      inputSchema: z.object({
+        project: z.string(),
+        username: z.string(),
+        limit: z.number().int().min(1).max(50).default(10),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json({
+        similar: await rt.scrapers.similarLeads(
+          await projectIdFor(rt, a.project),
+          a.username,
+          a.limit,
+        ),
+      }),
+    ),
+  );
+
+  server.registerTool(
+    "build_personas",
+    {
+      title: "Find audience segments",
+      description:
+        "With the server's AI key: read a sample of the project's bios, find 3-8 audience segments with the words " +
+        "that mark them, save them, and assign every lead. Then list_leads(persona=...) and persona revenue in " +
+        "source_performance's sibling report on the dashboard.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) => {
+      if (!rt.scrapers.scoringAvailable)
+        return fail(
+          "This server has no ANTHROPIC_API_KEY. Read list_leads and segment them yourself.",
+        );
+      return json(await rt.scrapers.buildPersonas(await projectIdFor(rt, a.project)));
     }),
   );
 

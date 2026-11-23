@@ -41,6 +41,7 @@ describe("MCP server over Streamable HTTP", () => {
     expect(tools).toEqual([
       "add_lead_note",
       "analyze_competitor",
+      "build_personas",
       "bulk_update_leads",
       "cancel_job",
       "export_leads",
@@ -52,6 +53,7 @@ describe("MCP server over Streamable HTTP", () => {
       "score_leads",
       "set_deal",
       "set_lead_status",
+      "similar_leads",
       "source_performance",
       "start_job",
       "suppress",
