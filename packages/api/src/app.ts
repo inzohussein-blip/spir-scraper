@@ -463,6 +463,28 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
 
   app.openapi(
     createRoute({
+      method: "get",
+      path: "/v1/read",
+      summary: "Read a web page",
+      description:
+        "Readable text, links, emails, phones and social accounts of any public page, for any AI tool. " +
+        "robots.txt is honored and internal addresses are refused.",
+      security: [{ bearer: [] }],
+      request: { query: z.object({ url: z.string().min(4).max(2000) }) },
+      responses: { 200: jsonOf(z.record(z.string(), z.unknown())), ...errors },
+    }),
+    async (c) => {
+      try {
+        const page = await (await getRuntime()).readPage(c.req.valid("query").url);
+        return c.json(plain(page) as Record<string, unknown>, 200);
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
       method: "post",
       path: "/v1/suppression",
       security: [{ bearer: [] }],

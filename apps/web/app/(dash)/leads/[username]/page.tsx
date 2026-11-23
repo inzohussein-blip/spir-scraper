@@ -146,6 +146,27 @@ export default async function LeadPage({
                   {typeof a.stats?.videos === "number" && (
                     <span className="text-xs text-muted">{fmtNum(a.stats.videos)} فيديو</span>
                   )}
+                  {a.platform === "website" && a.stats && (
+                    <span className="flex flex-wrap gap-1">
+                      {a.stats.partnerProgram === true && (
+                        <Badge tone="ok" dot={false}>
+                          برنامج شراكة
+                        </Badge>
+                      )}
+                      {Array.isArray(a.stats.regulators) &&
+                        (a.stats.regulators as string[]).map((r) => (
+                          <Badge key={r} tone="info" dot={false}>
+                            {r}
+                          </Badge>
+                        ))}
+                      {Array.isArray(a.stats.emails) &&
+                        (a.stats.emails as string[]).slice(0, 2).map((e) => (
+                          <span key={e} className="ltr text-xs text-muted">
+                            {e}
+                          </span>
+                        ))}
+                    </span>
+                  )}
                   {a.error && <span className="text-xs text-warn">{a.error}</span>}
                   <span className="ms-auto flex gap-1">
                     {connected.has(a.platform) && (

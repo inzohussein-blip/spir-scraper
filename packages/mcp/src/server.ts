@@ -575,6 +575,20 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "read_page",
+    {
+      title: "Read a web page",
+      description:
+        "Read any public web page: title, description, language, readable text (up to 15k characters), links, " +
+        "emails, phone numbers and the social accounts it links to. robots.txt is honored and internal addresses " +
+        "are refused. Use it to look at a lead's website, a competitor's offer or any link the owner sends.",
+      inputSchema: z.object({ url: z.string().min(4).max(2000) }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    guard(async (a) => json(await rt.readPage(a.url))),
+  );
+
+  server.registerTool(
     "add_account",
     {
       title: "Add a lead's account on another platform",

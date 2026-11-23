@@ -43,7 +43,9 @@ export interface RemoteAccount {
   bio: string | null;
   /** Followers, subscribers or members. */
   followers: number | null;
-  stats?: Record<string, number | string | null>;
+  stats?: Record<string, unknown>;
+  /** Addresses of the person's other accounts found while reading (e.g. links on their website). */
+  links?: string[];
 }
 
 /**

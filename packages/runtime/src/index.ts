@@ -21,7 +21,13 @@ import {
   toCsv,
   toXlsx,
 } from "@scrapers/exporters";
-import { ApifyProvider, connectorsFromEnv, providersFromEnv } from "@scrapers/providers";
+import {
+  ApifyProvider,
+  connectorsFromEnv,
+  type PageReading,
+  providersFromEnv,
+  readPage,
+} from "@scrapers/providers";
 import { PgBoss } from "pg-boss";
 import { WebPushSink } from "./push.js";
 import { type FetchLike, TelegramNotifier } from "./telegram.js";
@@ -63,6 +69,8 @@ export interface Runtime {
   healthCheck(): Promise<{ provider: string; ok: boolean; detail: string }[]>;
   /** Apify spend this month (null when Apify is not configured or unreachable). */
   apifyUsage(): Promise<{ usedUsd: number; allowedUsd: number } | null>;
+  /** Reads one public web page (robots.txt honored, internal addresses refused). */
+  readPage(url: string): Promise<PageReading>;
   close(): Promise<void>;
 }
 
@@ -303,6 +311,8 @@ export async function createRuntime(
 
     telegram,
     vapidPublicKey: push ? (env.VAPID_PUBLIC_KEY ?? null) : null,
+
+    readPage: (url) => readPage(url),
 
     async apifyUsage() {
       const apify = providers.find((p): p is ApifyProvider => p instanceof ApifyProvider);

@@ -852,7 +852,11 @@ export function createScrapers(deps: {
    * Attaches accounts to a person. An account already attached to someone
    * else stays where it is (two people never share an account).
    */
-  async function linkAccounts(personId: string, refs: AccountRef[], source: "bio_link" | "manual") {
+  async function linkAccounts(
+    personId: string,
+    refs: AccountRef[],
+    source: "bio_link" | "manual" | "website",
+  ) {
     const own = refs.filter((r) => !(r.platform === "instagram"));
     if (own.length === 0) return [];
     return db
@@ -872,6 +876,13 @@ export function createScrapers(deps: {
     if (!connector) return acc;
     try {
       const r = await connector.getAccount(acc.handle);
+      // Accounts the person links from there (e.g. their website's social icons) are theirs too.
+      if (r.links?.length)
+        await linkAccounts(
+          acc.personId,
+          r.links.map((l) => parseAccountUrl(l)).filter((x): x is AccountRef => !!x),
+          "website",
+        );
       const [updated] = await db
         .update(accounts)
         .set({

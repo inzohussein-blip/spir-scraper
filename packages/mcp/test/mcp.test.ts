@@ -52,6 +52,7 @@ describe("MCP server over Streamable HTTP", () => {
       "link_accounts",
       "list_leads",
       "list_monitors",
+      "read_page",
       "score_leads",
       "set_deal",
       "set_lead_status",

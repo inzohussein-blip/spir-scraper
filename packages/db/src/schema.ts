@@ -396,14 +396,14 @@ export const accounts = pgTable(
     platform: text("platform").notNull(),
     handle: text("handle").notNull(),
     url: text("url").notNull(),
-    /** bio_link (in their own bio or link) | manual (added by the owner) */
+    /** bio_link (their own bio or link) | website (linked from their site) | manual (added by the owner) */
     source: text("source").notNull(),
     displayName: text("display_name"),
     bio: text("bio"),
     /** Followers, subscribers or members, whatever the platform counts. */
     followers: integer("followers"),
     /** Platform-specific numbers, e.g. videos and views for YouTube. */
-    stats: jsonb("stats").$type<Record<string, number | string | null>>(),
+    stats: jsonb("stats").$type<Record<string, unknown>>(),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }),
     error: text("error"),
     createdAt: createdAt(),

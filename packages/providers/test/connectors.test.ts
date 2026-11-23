@@ -72,9 +72,10 @@ describe("Telegram connector", () => {
   });
 
   it("is configured from the environment", () => {
-    expect(connectorsFromEnv({}).map((c) => c.platform)).toEqual([]);
+    expect(connectorsFromEnv({}).map((c) => c.platform)).toEqual(["website"]);
+    expect(connectorsFromEnv({ WEBSITE_READER: "off" }).map((c) => c.platform)).toEqual([]);
     expect(
       connectorsFromEnv({ YOUTUBE_API_KEY: "a", TELEGRAM_BOT_TOKEN: "b" }).map((c) => c.platform),
-    ).toEqual(["youtube", "telegram"]);
+    ).toEqual(["youtube", "telegram", "website"]);
   });
 });
