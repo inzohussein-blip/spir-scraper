@@ -181,10 +181,29 @@ $<HTMLButtonElement>("#draftMessage").addEventListener("click", (e) =>
         )
       ).trim();
       updateWhatsapp();
+      await showCompliance(text.value);
     },
     profileOut,
   ),
 );
+
+/** Financial-promotion red flags in the draft, from the platform (when connected). */
+async function showCompliance(message: string) {
+  const out = $("#compliance");
+  out.hidden = true;
+  const p = platform();
+  if (!p.configured || !message.trim()) return;
+  try {
+    const r = await p.checkMessage(message);
+    if (r.issues.length === 0) return;
+    out.textContent = `${r.ok ? "ملاحظات قبل الإرسال" : "⛔ لا ترسلها هكذا"}:\n${r.issues
+      .map((i) => `• «${i.match}»: ${i.message}`)
+      .join("\n")}`;
+    out.hidden = false;
+  } catch {
+    // The check is advice; a failed request should not block drafting.
+  }
+}
 
 function updateWhatsapp() {
   const button = $<HTMLButtonElement>("#whatsapp");

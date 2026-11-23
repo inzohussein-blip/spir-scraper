@@ -1,5 +1,5 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
-import { parseSource, type Source, SourceError, uploadSource } from "@scrapers/core";
+import { checkMessage, parseSource, type Source, SourceError, uploadSource } from "@scrapers/core";
 import type { Runtime } from "@scrapers/runtime";
 import { z } from "zod";
 
@@ -680,6 +680,20 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         })),
       });
     }),
+  );
+
+  server.registerTool(
+    "check_message",
+    {
+      title: "Check a message for financial-promotion red flags",
+      description:
+        "Before the owner sends a message about trading: flags promised or guaranteed returns, 'risk-free', 100% " +
+        "success claims, time pressure, license claims and a missing risk warning (Arabic and English). " +
+        "ok=false means do not send it as written. A check, not legal advice. Run it on every message you draft.",
+      inputSchema: z.object({ text: z.string().min(1).max(4000) }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) => json(checkMessage(a.text))),
   );
 
   server.registerTool(

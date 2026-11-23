@@ -59,6 +59,16 @@ import {
   risingSignal,
   searchTextOf,
 } from "../extract/index.js";
+import {
+  auc,
+  explainModel,
+  type LeadFeatures,
+  MIN_LABELLED,
+  MIN_POSITIVES,
+  predictWin,
+  type TrainedModel,
+  trainModel,
+} from "../learn/model.js";
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadQuery, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
@@ -128,6 +138,8 @@ export interface LeadFilters {
   terms?: string[];
   /** Has an account on this other platform (youtube, telegram, tiktok, website...). */
   platform?: string;
+  /** Model's chance of becoming a customer at least this high (0-100). */
+  minWinProb?: number;
   limit?: number;
   offset?: number;
   /** Opaque cursor from a previous page (keyset pagination). */
@@ -175,6 +187,8 @@ export interface LeadRow {
   language?: string | null;
   /** Value of the closed deal, when recorded. */
   dealValue?: number | null;
+  /** Chance (0-100) it becomes a customer, by the project's own model. */
+  winProb?: number | null;
   persona?: string | null;
   signals?: string[] | null;
 }
@@ -693,7 +707,24 @@ export function createScrapers(deps: {
         delta.skipped++;
         continue;
       }
+      const projectModel = (project.model as TrainedModel | null) ?? null;
       const leadValues = {
+        ...(projectModel
+          ? {
+              winProb: predictWin(projectModel, {
+                followers: profile.followers ?? null,
+                engagementRate: quality.engagementRate,
+                sourceCount: 1,
+                isBusiness: profile.isBusiness,
+                hasEmail: !!contact.email,
+                hasPhone: !!phone,
+                aiScore: null,
+                arabic: detectLanguage(`${profile.fullName ?? ""} ${profile.bio ?? ""}`) === "ar",
+                rising: false,
+                qualityFlags: quality.flags.length,
+              }),
+            }
+          : {}),
         ...(project.personas?.length
           ? { persona: assignPersona(searchTextOf(profile), project.personas) }
           : {}),
@@ -919,6 +950,50 @@ export function createScrapers(deps: {
     }
   }
 
+  /** What the model reads for every lead of a project, with its outcome when known. */
+  async function projectFeatures(projectId: string) {
+    const rows = await db
+      .select({
+        id: leads.id,
+        status: leads.status,
+        aiScore: leads.aiScore,
+        sourceCount: leads.sourceCount,
+        email: leads.email,
+        phone: sql<string | null>`coalesce(${leads.phoneE164}, ${leads.phoneRaw})`,
+        followers: profiles.followers,
+        engagementRate: profiles.engagementRate,
+        isBusiness: profiles.isBusiness,
+        language: profiles.language,
+        signals: profiles.signals,
+        qualityFlags: profiles.qualityFlags,
+      })
+      .from(leads)
+      .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+      .where(eq(leads.projectId, projectId))
+      .limit(50_000);
+    return rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      aiScore: r.aiScore,
+      features: {
+        followers: r.followers,
+        engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
+        sourceCount: r.sourceCount,
+        isBusiness: r.isBusiness,
+        hasEmail: !!r.email,
+        hasPhone: !!r.phone,
+        aiScore: r.aiScore,
+        arabic: r.language === "ar",
+        rising: !!r.signals?.includes("rising"),
+        qualityFlags: r.qualityFlags?.length ?? 0,
+      } satisfies LeadFeatures,
+    }));
+  }
+
+  /** Customers and interested leads are wins; rejected ones are losses; the rest are unknown. */
+  const outcomeOf = (status: string): 0 | 1 | null =>
+    status === "customer" || status === "interested" ? 1 : status === "rejected" ? 0 : null;
+
   /** Puts every lead of the project in the persona whose words it uses most. */
   async function assignPersonas(
     projectId: string,
@@ -1058,6 +1133,7 @@ export function createScrapers(deps: {
     if (f.minFollowers !== undefined) conds.push(gte(profiles.followers, f.minFollowers));
     if (f.maxFollowers !== undefined) conds.push(lte(profiles.followers, f.maxFollowers));
     if (f.persona) conds.push(eq(leads.persona, f.persona));
+    if (f.minWinProb !== undefined) conds.push(gte(leads.winProb, f.minWinProb));
     if (f.platform)
       conds.push(
         sql`exists (select 1 from ${accounts} a where a.person_id = ${profiles.personId} and a.platform = ${f.platform})`,
@@ -1116,6 +1192,7 @@ export function createScrapers(deps: {
       sources: lead.sources,
       sourceCount: lead.sourceCount,
       dealValue: lead.dealValue === null ? null : Number(lead.dealValue),
+      winProb: lead.winProb,
       persona: lead.persona,
       signals: profile.signals,
       country: lead.country,
@@ -2076,6 +2153,80 @@ export function createScrapers(deps: {
         string,
         number
       >;
+    },
+
+    /**
+     * Trains the project's own model on the owner's decisions and scores every
+     * lead with it. Too few decisions: nothing changes and the report says how
+     * many more are needed.
+     */
+    async trainProjectModel(projectId: string) {
+      const rows = await projectFeatures(projectId);
+      const labelled = rows
+        .map((r) => ({ ...r, label: outcomeOf(r.status) }))
+        .filter((r): r is typeof r & { label: 0 | 1 } => r.label !== null);
+      const model = trainModel(labelled.map((r) => ({ features: r.features, label: r.label })));
+      const positives = labelled.filter((r) => r.label === 1).length;
+      const negatives = labelled.length - positives;
+      if (!model)
+        return {
+          trained: false as const,
+          positives,
+          negatives,
+          needed: {
+            positives: Math.max(0, MIN_POSITIVES - positives),
+            negatives: Math.max(0, MIN_POSITIVES - negatives),
+            total: Math.max(0, MIN_LABELLED - labelled.length),
+          },
+        };
+      await db
+        .update(projects)
+        .set({ model: model as unknown as Record<string, unknown> })
+        .where(eq(projects.id, projectId));
+      // One update per probability value keeps this to at most 101 statements.
+      const byProb = new Map<number, string[]>();
+      for (const r of rows) {
+        const p = predictWin(model, r.features);
+        byProb.set(p, [...(byProb.get(p) ?? []), r.id]);
+      }
+      for (const [p, ids] of byProb)
+        for (let i = 0; i < ids.length; i += 1000)
+          await db
+            .update(leads)
+            .set({ winProb: p })
+            .where(inArray(leads.id, ids.slice(i, i + 1000)));
+      return { trained: true as const, positives, negatives, auc: model.auc, scored: rows.length };
+    },
+
+    /**
+     * How good the scoring is, judged by the owner's real decisions: the AUC of
+     * the AI score and of the project's own model (0.5 = guessing, 1 = perfect).
+     */
+    async evaluateScoring(projectId: string) {
+      const rows = await projectFeatures(projectId);
+      const labelled = rows
+        .map((r) => ({ ...r, label: outcomeOf(r.status) }))
+        .filter((r) => r.label !== null);
+      const withAi = labelled.filter((r) => r.aiScore !== null);
+      const project = await this.getProject(projectId);
+      const model = (project?.model as TrainedModel | null | undefined) ?? null;
+      return {
+        labelled: labelled.length,
+        positives: labelled.filter((r) => r.label === 1).length,
+        aiScoreAuc: auc(
+          withAi.map((r) => r.aiScore as number),
+          withAi.map((r) => r.label as number),
+        ),
+        aiScored: withAi.length,
+        model: model
+          ? {
+              auc: model.auc,
+              trainedAt: model.trainedAt,
+              trainedOn: model.trainedOn,
+              explain: explainModel(model, 5),
+            }
+          : null,
+      };
     },
 
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */

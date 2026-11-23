@@ -1,6 +1,7 @@
 "use server";
 
 import {
+  checkMessage,
   parseSource,
   parseUsernameCsv,
   type Source,
@@ -337,6 +338,15 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
     .map((k) => k.trim())
     .filter(Boolean)
     .slice(0, 50);
+  const template = str(form, "template").slice(0, 1000);
+  const check = template ? checkMessage(template) : { ok: true, issues: [] };
+  if (!check.ok)
+    return {
+      error: `قالب الرسالة لم يُحفظ: ${check.issues
+        .filter((i) => i.severity === "block")
+        .map((i) => `«${i.match}» — ${i.message}`)
+        .join(" ")}`,
+    };
   try {
     await (await getRuntime()).scrapers.updateProject(id, {
       autoExport: form.get("auto_export") === "on",
@@ -351,7 +361,12 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
   }
   await audit("project.update", { id });
   revalidatePath("/leads");
-  return { message: "حُفظت إعدادات المشروع" };
+  const warnings = check.issues.map((i) => i.message);
+  return {
+    message: warnings.length
+      ? `حُفظت إعدادات المشروع. ملاحظات على القالب: ${warnings.join(" ")}`
+      : "حُفظت إعدادات المشروع",
+  };
 }
 
 /** Sets (or clears, with an empty value) the day to be reminded about a lead. */

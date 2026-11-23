@@ -54,6 +54,8 @@ export const projects = pgTable("projects", {
   messageTemplate: text("message_template"),
   /** Audience segments found by AI: name, description and the words that mark them. */
   personas: jsonb("personas").$type<{ name: string; description: string; keywords: string[] }[]>(),
+  /** The prediction model trained on this project's outcomes (see core learn/model). */
+  model: jsonb("model").$type<Record<string, unknown>>(),
   /** Do not keep accounts with two or more fake-account signals and no contact. */
   skipFake: boolean("skip_fake").notNull().default(false),
   createdAt: createdAt(),
@@ -178,6 +180,8 @@ export const leads = pgTable(
     followUpAt: timestamp("follow_up_at", { withTimezone: true }),
     /** What the deal was worth to the owner (deposit, commission...), set when it closes. */
     dealValue: numeric("deal_value", { precision: 12, scale: 2 }),
+    /** Chance (0-100) it becomes a customer, by the model trained on the owner's outcomes. */
+    winProb: smallint("win_prob"),
     /** The project's audience segment this account belongs to (see projects.personas). */
     persona: text("persona"),
     dealAt: timestamp("deal_at", { withTimezone: true }),

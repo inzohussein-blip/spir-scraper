@@ -1,5 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
+  checkMessage,
   JobNotFoundError,
   parseSource,
   type Source,
@@ -491,6 +492,25 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
         400,
       );
     },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/compliance/check",
+      summary: "Check a message for financial-promotion red flags",
+      security: [{ bearer: [] }],
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: z.object({ text: z.string().min(1).max(4000) }) },
+          },
+        },
+      },
+      responses: { 200: jsonOf(z.record(z.string(), z.unknown())), ...errors },
+    }),
+    async (c) =>
+      c.json(checkMessage(c.req.valid("json").text) as unknown as Record<string, unknown>, 200),
   );
 
   app.openapi(

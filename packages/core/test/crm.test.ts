@@ -736,3 +736,70 @@ describe("competitor websites", () => {
     }
   });
 });
+
+describe("the project's own model", () => {
+  it("waits for enough decisions, then learns them and scores every lead", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const names = Array.from({ length: 40 }, (_, i) => `m${i + 1}`);
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(names), limit: 40 });
+      await settle(t);
+      const all = await t.scrapers.listLeads({ projectId: p.id, limit: 100 });
+      const withPhone = all.filter((l) => l.phone).map((l) => l.username);
+      const without = all.filter((l) => !l.phone).map((l) => l.username);
+
+      // Two decisions are not enough to learn from.
+      await t.scrapers.setLeadStatus({
+        projectId: p.id,
+        username: withPhone[0] as string,
+        status: "customer",
+      });
+      await t.scrapers.setLeadStatus({
+        projectId: p.id,
+        username: without[0] as string,
+        status: "rejected",
+      });
+      const early = await t.scrapers.trainProjectModel(p.id);
+      expect(early).toMatchObject({ trained: false, positives: 1, negatives: 1 });
+
+      // The owner's customers all have a phone; the rejected ones do not.
+      await t.scrapers.bulkUpdateLeads({
+        projectId: p.id,
+        usernames: withPhone.slice(0, 9),
+        status: "customer",
+      });
+      await t.scrapers.bulkUpdateLeads({
+        projectId: p.id,
+        usernames: without.slice(0, 15),
+        status: "rejected",
+      });
+      const r = await t.scrapers.trainProjectModel(p.id);
+      expect(r).toMatchObject({ trained: true, scored: 40 });
+      if (!r.trained) return;
+      expect(r.auc).toBeGreaterThan(0.8);
+
+      const leads = await t.scrapers.listLeads({ projectId: p.id, limit: 100 });
+      const unseenPhone = leads.find((l) => l.phone && l.status === "new");
+      const unseenNone = leads.find((l) => !l.phone && l.status === "new");
+      expect(unseenPhone?.winProb ?? 0).toBeGreaterThan(unseenNone?.winProb ?? 100);
+      expect(
+        (await t.scrapers.listLeads({ projectId: p.id, minWinProb: 50 })).every((l) => l.phone),
+      ).toBe(true);
+
+      const ev = await t.scrapers.evaluateScoring(p.id);
+      expect(ev.labelled).toBe(24);
+      expect(ev.model?.explain[0]?.label).toBe("له رقم");
+      expect(ev.aiScoreAuc).toBeNull();
+
+      // New leads get a probability as they arrive.
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(["m100"]), limit: 1 });
+      await settle(t);
+      expect(
+        (await t.scrapers.listLeads({ projectId: p.id, q: "m100" }))[0]?.winProb,
+      ).not.toBeNull();
+    } finally {
+      await t.close();
+    }
+  });
+});

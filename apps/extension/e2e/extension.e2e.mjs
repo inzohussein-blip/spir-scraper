@@ -200,6 +200,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.url?.startsWith("/api/v1/profiles/"))
     return send(404, { error: "Profile not collected" });
+  if (req.url === "/api/v1/compliance/check" && req.method === "POST") {
+    const { text } = JSON.parse(body);
+    return send(200, {
+      ok: true,
+      issues:
+        /تداول/.test(text) && !/مخاطر/.test(text)
+          ? [{ severity: "warn", match: "التداول", message: "أضف تنبيه مخاطر" }]
+          : [],
+    });
+  }
   if (req.url === "/api/v1/accounts" && req.method === "POST") {
     linked.push(JSON.parse(body));
     return send(200, { account: { platform: "tiktok", handle: "goldcoach" } });
@@ -308,6 +318,12 @@ try {
   const wa = await panel.getAttribute("#whatsapp", "data-href");
   if (!wa?.startsWith("https://wa.me/966501234567?text=")) fail(`WhatsApp link: ${wa}`);
   if (!modelRequests.at(-1).messages[1].content.includes("شراكة وكالة")) fail("offer missing");
+  await panel
+    .locator("#compliance")
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => fail("compliance notes not shown for a trading message without a risk warning"));
+  if (!(await panel.textContent("#compliance"))?.includes("أضف تنبيه مخاطر"))
+    fail("compliance text");
   step("manual: scores with the project's criteria and drafts a message with a WhatsApp link");
 
   await panel

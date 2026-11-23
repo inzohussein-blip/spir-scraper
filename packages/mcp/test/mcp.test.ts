@@ -46,6 +46,7 @@ describe("MCP server over Streamable HTTP", () => {
       "build_personas",
       "bulk_update_leads",
       "cancel_job",
+      "check_message",
       "export_leads",
       "get_job",
       "get_profile",
