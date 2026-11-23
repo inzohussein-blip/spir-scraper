@@ -3,7 +3,13 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import type { Runtime } from "@scrapers/runtime";
 
-/** A gzipped JSON copy of projects, leads, profiles, notes, monitors and the do-not-contact list. */
+/** Telegram bots can send files up to 50 MB; keep a margin. */
+export const TELEGRAM_MAX_BACKUP_BYTES = 45 * 1024 * 1024;
+
+/**
+ * A gzipped JSON copy of projects, leads, profiles, notes, monitors, the
+ * do-not-contact list, partners, broker reports, own posts and messages.
+ */
 export async function buildBackup(rt: Runtime) {
   const data = await rt.scrapers.exportBackup();
   const gz = gzipSync(Buffer.from(JSON.stringify(data)));
