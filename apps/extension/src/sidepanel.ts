@@ -11,6 +11,7 @@ import { runAgent } from "./agent/loop.js";
 import { type AgentMode, systemPrompt, toolsFor } from "./agent/tools.js";
 import { activeTab, createExecutor, pageCall, tabIdOf } from "./browser.js";
 import type { PostComment } from "./page/instagram.js";
+import { type OtherPlatform, otherAccountFromUrl, PLATFORM_NAMES } from "./page/platforms.js";
 import type { CollectState, InstagramProfile } from "./page/protocol.js";
 import { Platform } from "./platform.js";
 import {
@@ -246,6 +247,48 @@ $<HTMLButtonElement>("#collectSave").addEventListener("click", (e) =>
     alert(`أُرسل ${r.count} اسماً للمنصة. تُجلب تفاصيلهم في الخلفية (${r.jobIds.length} مهمة).`);
   }),
 );
+
+// ---------- manual: an account on another platform ----------
+
+let other: { platform: OtherPlatform; handle: string; url: string } | null = null;
+
+$<HTMLButtonElement>("#readOther").addEventListener("click", (e) =>
+  withButton(e.currentTarget as HTMLButtonElement, async () => {
+    const tab = await activeTab();
+    other = tab.url ? otherAccountFromUrl(tab.url) : null;
+    const out = $("#otherOut");
+    out.hidden = false;
+    if (!other) {
+      out.textContent =
+        "هذه الصفحة ليست حساباً على تيك توك أو يوتيوب أو تلكرام أو X أو فيسبوك أو لينكدإن.";
+      $("#linkOtherForm").hidden = true;
+      return;
+    }
+    const res = await pageCall(tabIdOf(tab), { kind: "page_meta" }).catch(() => null);
+    const m = (res?.ok ? res.data : {}) as { title?: string | null; description?: string | null };
+    out.textContent = [
+      `${PLATFORM_NAMES[other.platform]} · @${other.handle}`,
+      m.title ?? "",
+      (m.description ?? "").slice(0, 300),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    $("#linkOtherForm").hidden = false;
+  }),
+);
+
+$<HTMLFormElement>("#linkOtherForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const button = (e.currentTarget as HTMLFormElement).querySelector("button") as HTMLButtonElement;
+  void withButton(button, async () => {
+    if (!other) return;
+    const user = $<HTMLInputElement>("#linkOtherUser").value;
+    await platform().addAccount(user, other.url);
+    alert(
+      `رُبط @${other.handle} (${PLATFORM_NAMES[other.platform]}) بالعميل @${user.replace(/^@/, "")}.`,
+    );
+  });
+});
 
 // ---------- manual: commenters on the open post ----------
 

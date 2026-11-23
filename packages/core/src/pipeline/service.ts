@@ -1890,7 +1890,8 @@ export function createScrapers(deps: {
      * a connector (the daily task). YouTube's free quota covers about 10,000 a day.
      */
     async refreshPendingAccounts(limit = 200) {
-      const platforms = [...connectors.keys()];
+      // Paid connectors (TikTok through Apify) are read only when the owner asks.
+      const platforms = [...connectors.values()].filter((c) => !c.paid).map((c) => c.platform);
       if (platforms.length === 0) return 0;
       const pending = await db
         .select({ id: accounts.id })

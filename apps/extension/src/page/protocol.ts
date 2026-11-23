@@ -8,7 +8,8 @@ export type PageRequest =
   | { kind: "collect_start" }
   | { kind: "collect_get" }
   | { kind: "collect_clear" }
-  | { kind: "post_comments" };
+  | { kind: "post_comments" }
+  | { kind: "page_meta" };
 
 export type PageResponse =
   | { ok: true; text?: string; data?: unknown }

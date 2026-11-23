@@ -55,6 +55,8 @@ export interface RemoteAccount {
 export interface Connector {
   /** A Platform from extract/accounts (tiktok, youtube, telegram, ...). */
   readonly platform: string;
+  /** Each read costs money (e.g. through Apify): only read when the owner asks. */
+  readonly paid?: boolean;
   /** Throws AccountNotFoundError when the account does not exist or is private. */
   getAccount(handle: string): Promise<RemoteAccount>;
 }

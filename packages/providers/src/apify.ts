@@ -1,4 +1,5 @@
 import {
+  AccountNotFoundError,
   BudgetExceededError,
   type Capability,
   type PlacesSearch,
@@ -7,6 +8,7 @@ import {
   type RawPlace,
   type RawProfile,
   type RecentPost,
+  type RemoteAccount,
   type Source,
 } from "@scrapers/core";
 import { ensureOk, type FetchLike } from "./http.js";
@@ -25,6 +27,8 @@ export const DEFAULT_ACTORS = {
   followers: "apify~instagram-followers-following-scraper",
   /** Google Maps businesses (name, category, phone, website, rating). */
   places: "compass~crawler-google-places",
+  /** TikTok profiles (author stats come with the latest video). */
+  tiktok: "clockworks~tiktok-profile-scraper",
 } as const;
 
 /** Recent posts of a competitor whose commenters are collected (more posts, more people). */
@@ -194,6 +198,34 @@ export class ApifyProvider implements Provider, PlacesSearch {
     await ensureOk(res, this.id, `apify ${actor}`);
     const items = (await res.json()) as unknown;
     return Array.isArray(items) ? (items as Item[]).filter((i) => !i.error) : [];
+  }
+
+  /** A TikTok account's public profile: name, bio, followers, likes and videos. */
+  async tiktokProfile(handle: string): Promise<RemoteAccount> {
+    const items = await this.run(
+      this.actors.tiktok,
+      {
+        profiles: [handle.replace(/^@/, "")],
+        resultsPerPage: 1,
+        shouldDownloadVideos: false,
+        shouldDownloadCovers: false,
+      },
+      1,
+    );
+    const author = (items[0]?.authorMeta ?? items[0]?.author ?? null) as Item | null;
+    if (!author) throw new AccountNotFoundError(`TikTok @${handle} not found or private`);
+    return {
+      displayName: str(pick(author, "nickName", "nickname")),
+      bio: str(pick(author, "signature", "bio")),
+      followers: num(pick(author, "fans", "followers", "followerCount")),
+      stats: {
+        likes: num(pick(author, "heart", "hearts", "heartCount")),
+        videos: num(pick(author, "video", "videos", "videoCount")),
+        following: num(pick(author, "following", "followingCount")),
+        verified: pick(author, "verified") === true,
+      },
+      links: [str(pick(author, "bioLink", "bioLinkUrl"))].filter((l): l is string => !!l),
+    };
   }
 
   /** About $4 per 1000 places on the public actor's pricing. */

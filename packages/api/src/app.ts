@@ -463,6 +463,38 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
 
   app.openapi(
     createRoute({
+      method: "post",
+      path: "/v1/accounts",
+      summary: "Attach an account on another platform to a lead",
+      description:
+        "Links a TikTok, YouTube, Telegram, X, Facebook, LinkedIn or website address to the person behind an " +
+        "Instagram lead, then reads it when a connector exists (YouTube, Telegram, websites; TikTok only when asked).",
+      security: [{ bearer: [] }],
+      request: {
+        body: {
+          content: {
+            "application/json": {
+              schema: z.object({ username: z.string().min(1), url: z.string().min(4).max(500) }),
+            },
+          },
+        },
+      },
+      responses: { 200: jsonOf(z.record(z.string(), z.unknown())), ...errors },
+    }),
+    async (c) => {
+      const body = c.req.valid("json");
+      const r = await (await getRuntime()).scrapers.addAccount(body);
+      if (r.ok) return c.json(plain({ account: r.account }) as Record<string, unknown>, 200);
+      if (r.reason === "no_lead") return c.json({ error: "Not a collected account" }, 404);
+      return c.json(
+        { error: r.reason === "taken" ? "Linked to another lead" : "Not an account address" },
+        400,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
       method: "get",
       path: "/v1/read",
       summary: "Read a web page",

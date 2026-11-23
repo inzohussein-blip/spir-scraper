@@ -77,5 +77,10 @@ describe("Telegram connector", () => {
     expect(
       connectorsFromEnv({ YOUTUBE_API_KEY: "a", TELEGRAM_BOT_TOKEN: "b" }).map((c) => c.platform),
     ).toEqual(["youtube", "telegram", "website"]);
+    const withApify = connectorsFromEnv({ APIFY_TOKEN: "t" });
+    expect(withApify.map((c) => [c.platform, !!c.paid])).toEqual([
+      ["tiktok", true],
+      ["website", false],
+    ]);
   });
 });

@@ -649,3 +649,41 @@ describe("Google Maps businesses", () => {
     }
   });
 });
+
+describe("paid connectors", () => {
+  it("are never read by the daily task, only when asked", async () => {
+    let reads = 0;
+    const t = await setup(
+      [
+        new FakeProvider("worker", ["profile"], {
+          profile: (u) => ({ ...fakeProfile(u), bio: "tiktok: @paid_one" }),
+        }),
+      ],
+      undefined,
+      {
+        connectors: [
+          {
+            platform: "tiktok",
+            paid: true,
+            getAccount: async () => {
+              reads++;
+              return { displayName: "T", bio: null, followers: 5 };
+            },
+          },
+        ],
+      },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await t.scrapers.startJob({ projectId: p.id, source: uploadSource(["c1"]), limit: 1 });
+      await settle(t);
+      expect(await t.scrapers.refreshPendingAccounts()).toBe(0);
+      expect(reads).toBe(0);
+      const [acc] = await t.scrapers.personAccounts("c1");
+      await t.scrapers.refreshAccount(acc?.id as string);
+      expect(reads).toBe(1);
+    } finally {
+      await t.close();
+    }
+  });
+});

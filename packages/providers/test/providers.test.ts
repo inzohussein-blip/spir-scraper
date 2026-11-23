@@ -1,6 +1,12 @@
 import { BlockedError, BudgetExceededError, NotFoundError, RateLimitedError } from "@scrapers/core";
 import { describe, expect, it } from "vitest";
-import { ApifyProvider, mapApifyProfile, providersFromEnv, WorkerProvider } from "../src/index.js";
+import {
+  ApifyProvider,
+  mapApifyProfile,
+  providersFromEnv,
+  TikTokConnector,
+  WorkerProvider,
+} from "../src/index.js";
 
 type Call = { url: string; init?: RequestInit | undefined };
 
@@ -332,5 +338,95 @@ describe("Google Maps through Apify", () => {
       locationQuery: "الرياض",
       maxCrawledPlacesPerSearch: 5,
     });
+  });
+});
+
+describe("TikTok through Apify", () => {
+  it("reads the author of an account's latest video", async () => {
+    const f = fakeFetch((url) =>
+      url.includes("/limits")
+        ? json({ data: { limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 0 } } })
+        : json([
+            {
+              authorMeta: {
+                name: "goldcoach",
+                nickName: "Gold Coach",
+                signature: "تداول الذهب",
+                fans: 52000,
+                heart: 900000,
+                video: 140,
+                following: 12,
+                verified: false,
+                bioLink: "https://t.me/goldcoach",
+              },
+            },
+          ]),
+    );
+    const tt = new TikTokConnector(new ApifyProvider({ token: "t", fetch: f.fn }));
+    expect(tt.paid).toBe(true);
+    expect(await tt.getAccount("@goldcoach")).toEqual({
+      displayName: "Gold Coach",
+      bio: "تداول الذهب",
+      followers: 52000,
+      stats: { likes: 900000, videos: 140, following: 12, verified: false },
+      links: ["https://t.me/goldcoach"],
+    });
+    const run = f.calls.find((c) => c.url.includes("tiktok-profile-scraper"));
+    expect(JSON.parse(String(run?.init?.body))).toMatchObject({ profiles: ["goldcoach"] });
+    const empty = new TikTokConnector(
+      new ApifyProvider({
+        token: "t",
+        fetch: fakeFetch((url) =>
+          url.includes("/limits")
+            ? json({ data: { limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 0 } } })
+            : json([]),
+        ).fn,
+      }),
+    );
+    await expect(empty.getAccount("nobody")).rejects.toThrow(/not found/);
+  });
+});
+
+describe("TikTok through Apify", () => {
+  const limitsOk = () =>
+    json({ data: { limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 0 } } });
+  it("reads the author of an account's latest video", async () => {
+    const f = fakeFetch((url) =>
+      url.includes("/limits")
+        ? limitsOk()
+        : json([
+            {
+              authorMeta: {
+                name: "goldcoach",
+                nickName: "Gold Coach",
+                signature: "تداول الذهب",
+                fans: 52000,
+                heart: 900000,
+                video: 140,
+                following: 12,
+                verified: false,
+                bioLink: "https://t.me/goldcoach",
+              },
+            },
+          ]),
+    );
+    const tt = new TikTokConnector(new ApifyProvider({ token: "t", fetch: f.fn }));
+    expect(tt.paid).toBe(true);
+    expect(await tt.getAccount("@goldcoach")).toEqual({
+      displayName: "Gold Coach",
+      bio: "تداول الذهب",
+      followers: 52000,
+      stats: { likes: 900000, videos: 140, following: 12, verified: false },
+      links: ["https://t.me/goldcoach"],
+    });
+    const run = f.calls.find((c) => c.url.includes("tiktok-profile-scraper"));
+    expect(JSON.parse(String(run?.init?.body))).toMatchObject({ profiles: ["goldcoach"] });
+    const empty = new TikTokConnector(
+      new ApifyProvider({
+        token: "t",
+        fetch: fakeFetch((url) => (url.includes("/limits") ? limitsOk() : json([]))).fn,
+      }),
+    );
+    await expect(empty.getAccount("nobody")).rejects.toThrow(/not found/);
   });
 });
