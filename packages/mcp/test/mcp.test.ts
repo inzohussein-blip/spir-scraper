@@ -39,10 +39,14 @@ describe("MCP server over Streamable HTTP", () => {
   it("lists the planned tools, resources and prompts", async () => {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(tools).toEqual([
+      "add_lead_note",
+      "analyze_competitor",
+      "bulk_update_leads",
       "cancel_job",
       "export_leads",
       "get_job",
       "get_profile",
+      "lead_detail",
       "list_leads",
       "list_monitors",
       "score_leads",
@@ -87,6 +91,31 @@ describe("MCP server over Streamable HTTP", () => {
     expect(JSON.parse((res.contents[0] as { text: string }).text)).toHaveLength(3);
     const summary = await client.readResource({ uri: `jobs://${jobId}/summary` });
     expect(JSON.parse((summary.contents[0] as { text: string }).text).status).toBe("done");
+  });
+
+  it("changes many leads, keeps notes and shows a lead's history", async () => {
+    const bulk = await call("bulk_update_leads", {
+      project: "عبر Claude",
+      usernames: ["user2", "user3"],
+      status: "interested",
+      follow_up_at: "2030-01-02",
+    });
+    expect(bulk.structuredContent).toEqual({ updated: 2 });
+    expect(
+      (await call("add_lead_note", { project: "عبر Claude", username: "user2", text: "اتصلت" }))
+        .structuredContent,
+    ).toEqual({ added: true });
+    const d = await call("lead_detail", { project: "عبر Claude", username: "@user2" });
+    expect(d.structuredContent.lead.status).toBe("interested");
+    expect(d.structuredContent.events.map((e: { kind: string }) => e.kind)).toEqual([
+      "note",
+      "status",
+    ]);
+    expect((await call("lead_detail", { project: "عبر Claude", username: "nobody" })).isError).toBe(
+      true,
+    );
+    const interested = await call("list_leads", { project: "عبر Claude", status: "interested" });
+    expect(interested.structuredContent.count).toBe(2);
   });
 
   it("reports bad input as tool errors, not crashes", async () => {
