@@ -664,3 +664,82 @@ export async function removeSiteWatch(id: string) {
   await (await getRuntime()).scrapers.removeSiteWatch(id);
   revalidatePath("/competitors");
 }
+
+/** Retrains the project's own model on the owner's decisions. */
+export async function trainModel(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const r = await (await getRuntime()).scrapers.trainProjectModel(str(form, "project"));
+  revalidatePath("/insights");
+  revalidatePath("/leads");
+  if (!r.trained)
+    return {
+      error: `يحتاج النموذج قرارات أكثر: ${r.positives} عميل/مهتم و${r.negatives} مرفوض حتى الآن. سجّل ${r.needed.positives} عملاء و${r.needed.negatives} مرفوضين على الأقل (${r.needed.total} قراراً إضافياً).`,
+    };
+  return {
+    message: `تدرّب النموذج على ${r.positives + r.negatives} قراراً، ودقة ترتيبه ${Math.round((r.auc ?? 0) * 100)}%. قُيّم ${r.scored} عميلاً.`,
+  };
+}
+
+/** Applies the budget plan to the competitor monitors. */
+export async function applyBudget(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  const rt = await getRuntime();
+  const usage = await rt.apifyUsage().catch(() => null);
+  const plan = await rt.scrapers.budgetPlan(
+    projectId,
+    usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5,
+  );
+  const r = await rt.scrapers.applyBudgetPlan(projectId, plan.lines);
+  await audit("budget.apply", r);
+  revalidatePath("/insights");
+  revalidatePath("/leads");
+  return { message: `طُبّقت الخطة على ${r.changed} من مراقبات المنافسين` };
+}
+
+/** Finds new sources from what the best customers follow (paid: Apify). */
+export async function suggestSources(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const r = await (await getRuntime()).scrapers.suggestSources(str(form, "project"));
+    revalidatePath("/insights");
+    return {
+      message: `قُرئ ما يتابعه ${r.seeds} من أفضل عملائك (≈ $${r.costUsd}). وُجد ${r.suggestions.length} مصدراً يتابعه اثنان منهم أو أكثر.`,
+    };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Watches a suggested source (its followers, weekly, new accounts only). */
+export async function watchSuggested(projectId: string, username: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.createMonitor({
+    projectId,
+    source: parseSource(`https://www.instagram.com/${username}/`, "followers") as Exclude<
+      Source,
+      { type: "upload" }
+    >,
+  });
+  await audit("monitor.add", { username, from: "suggestion" });
+  revalidatePath("/insights");
+}
+
+/** Writes this week's plan now (it is also sent every week on Telegram). */
+export async function makeWeeklyPlan(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const rt = await getRuntime();
+  const usage = await rt.apifyUsage().catch(() => null);
+  await rt.scrapers.weeklyPlan(
+    str(form, "project"),
+    usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5,
+  );
+  revalidatePath("/insights");
+  return { message: "كُتبت خطة الأسبوع" };
+}
+
+export async function approvePlan(id: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.approvePlan(id);
+  revalidatePath("/insights");
+}

@@ -2,6 +2,7 @@ import { AnthropicScorer } from "@scrapers/ai";
 import {
   type Connector,
   createScrapers,
+  type FollowingSource,
   type LeadFilters,
   type NotificationSink,
   type PlacesSearch,
@@ -83,6 +84,8 @@ export interface RuntimeOverrides {
   connectors?: Connector[];
   /** Web page reader for watched competitor sites; defaults to the safe reader. */
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
+  /** Who an account follows; defaults to the Apify provider when APIFY_TOKEN is set. */
+  following?: FollowingSource;
   /** Google Maps search; defaults to the Apify provider when APIFY_TOKEN is set. */
   places?: PlacesSearch;
   scorer?: Scorer | null;
@@ -189,7 +192,10 @@ export async function createRuntime(
     readPage: o.readPage ?? ((url) => readPage(url)),
     ...(() => {
       const apify = providers.find((p): p is ApifyProvider => p instanceof ApifyProvider);
-      return o.places ? { places: o.places } : apify ? { places: apify } : {};
+      return {
+        ...(o.places ? { places: o.places } : apify ? { places: apify } : {}),
+        ...(o.following ? { following: o.following } : apify ? { following: apify } : {}),
+      };
     })(),
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,

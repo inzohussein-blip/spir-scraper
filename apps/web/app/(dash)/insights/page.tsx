@@ -1,5 +1,14 @@
+import { DECISION_LABELS } from "@scrapers/core";
 import Link from "next/link";
-import { buildPersonas } from "@/app/actions";
+import {
+  applyBudget,
+  approvePlan,
+  buildPersonas,
+  makeWeeklyPlan,
+  suggestSources,
+  trainModel,
+  watchSuggested,
+} from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Card, cx, fmtNum, Notice } from "@/components/ui";
 import { getRuntime } from "@/lib/runtime";
@@ -59,7 +68,16 @@ export default async function InsightsPage({
     ...(period?.days ? { since: new Date(Date.now() - period.days * 86_400_000) } : {}),
   });
   const { totals } = perf;
-  const personas = await rt.scrapers.personaPerformance(projectId);
+  const usage = await rt.apifyUsage().catch(() => null);
+  const budgetUsd = usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5;
+  const [personas, ev, budget, suggestions, plan] = await Promise.all([
+    rt.scrapers.personaPerformance(projectId),
+    rt.scrapers.evaluateScoring(projectId),
+    rt.scrapers.budgetPlan(projectId, budgetUsd),
+    rt.scrapers.lastSuggestions(projectId),
+    rt.scrapers.lastPlan(projectId),
+  ]);
+  const pct = (v: number | null) => (v === null ? "—" : `${Math.round(v * 100)}%`);
   const missing = totals.customers - totals.customersWithValue;
   const link = (patch: Record<string, string>) =>
     `/insights?${new URLSearchParams({ project: projectId, period: q.period ?? "all", ...patch })}`;
@@ -250,6 +268,185 @@ export default async function InsightsPage({
         >
           <input type="hidden" name="project" value={projectId} />
         </ActionForm>
+      </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card
+          title="نموذجك"
+          icon="sparkles"
+          description="يتعلّم من قراراتك أنت (العملاء والمهتمون مقابل المرفوضين) ويعطي كل عميل احتمال أن يصبح عميلاً. يُعاد تدريبه أسبوعياً."
+        >
+          <dl className="mb-3 grid grid-cols-3 gap-3 text-sm">
+            <div>
+              <dt className="text-xs text-muted">قرارات مسجّلة</dt>
+              <dd className="tabular-nums">{fmtNum(ev.labelled)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">دقة النموذج</dt>
+              <dd>{pct(ev.model?.auc ?? null)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">دقة تقييم الذكاء الاصطناعي</dt>
+              <dd>{pct(ev.aiScoreAuc)}</dd>
+            </div>
+          </dl>
+          <p className="mb-3 text-xs text-muted">
+            الدقة هنا: كم مرة يضع العميل الحقيقي قبل المرفوض. 50% تخمين، و100% كامل. مقيسة على عملاء
+            لم يرهم النموذج أثناء التدريب.
+          </p>
+          {ev.model && (
+            <ul className="mb-3 space-y-1 text-sm">
+              {ev.model.explain.map((e) => (
+                <li key={e.label}>
+                  {e.effect === "up" ? "▲" : "▼"} {e.label}
+                </li>
+              ))}
+            </ul>
+          )}
+          <ActionForm action={trainModel} submit="درّب النموذج الآن">
+            <input type="hidden" name="project" value={projectId} />
+          </ActionForm>
+        </Card>
+
+        <Card
+          title="خطة الأسبوع"
+          icon="check"
+          description="الوكيل المحلل: يراجع العائد والميزانية والمنافسين كل أسبوع، ويرسل الخطة على تلكرام. لا يُطبَّق شيء إلا بموافقتك."
+        >
+          {plan ? (
+            <>
+              <p className="mb-3 whitespace-pre-line text-sm leading-7">{plan.text}</p>
+              {plan.lines.length > 0 &&
+                (plan.applied ? (
+                  <Badge tone="ok" dot={false}>
+                    طُبّقت
+                  </Badge>
+                ) : (
+                  <form action={approvePlan.bind(null, plan.id)}>
+                    <button
+                      type="submit"
+                      className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white"
+                    >
+                      وافق على تغييرات الميزانية ({plan.lines.length})
+                    </button>
+                  </form>
+                ))}
+            </>
+          ) : (
+            <p className="mb-3 text-sm text-muted">
+              لا توجد خطة بعد. تُكتب تلقائياً يوم الملخص الأسبوعي.
+            </p>
+          )}
+          <div className="mt-3">
+            <ActionForm action={makeWeeklyPlan} submit="اكتب الخطة الآن">
+              <input type="hidden" name="project" value={projectId} />
+            </ActionForm>
+          </div>
+        </Card>
+      </div>
+
+      <Card
+        title={`الميزانية الذكية · ${money(budgetUsd)} متبقية هذا الشهر`}
+        icon="chart"
+        description="يوزّع ما تبقّى من رصيد Apify على المصادر حسب ما جلبته من عملاء: 80% للرابحة، و20% لتجربة المصادر قليلة البيانات. التطبيق يغيّر حدود مراقبات المنافسين."
+      >
+        {budget.lines.length === 0 ? (
+          <p className="text-sm text-muted">لا توجد مصادر بعد.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line text-[12.5px] text-muted">
+                  {["المصدر", "القرار", "الميزانية", "حسابات", "السبب", "مراقَب"].map((h) => (
+                    <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {budget.lines.map((l) => (
+                  <tr key={l.source} className="border-b border-line last:border-0">
+                    <td className="py-2 pe-2">{sourceLabel(l.source)}</td>
+                    <td className="px-2">
+                      <Badge
+                        tone={
+                          l.decision === "stop"
+                            ? "bad"
+                            : l.decision === "increase"
+                              ? "ok"
+                              : l.decision === "explore"
+                                ? "info"
+                                : "plain"
+                        }
+                        dot={false}
+                      >
+                        {DECISION_LABELS[l.decision]}
+                      </Badge>
+                    </td>
+                    <td className="px-2 tabular-nums">{money(l.usd)}</td>
+                    <td className="px-2 tabular-nums">{fmtNum(l.accounts)}</td>
+                    <td className="px-2 text-xs text-muted">{l.reason}</td>
+                    <td className="px-2 text-xs">
+                      {l.monitorId ? (l.monitorEnabled ? "نعم" : "متوقف") : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {budget.lines.some((l) => l.monitorId) && (
+          <div className="mt-3">
+            <ActionForm action={applyBudget} submit="طبّق على المراقبات">
+              <input type="hidden" name="project" value={projectId} />
+            </ActionForm>
+          </div>
+        )}
+      </Card>
+
+      <Card
+        title="مصادر جديدة من شبكة عملائك"
+        icon="radar"
+        description="يقرأ من يتابع أفضل عملائك (العملاء أولاً ثم المهتمون) ويقترح الحسابات التي يتابعها اثنان منهم أو أكثر. هؤلاء مصادر جمهورها يشبه عملاءك."
+      >
+        {suggestions && suggestions.suggestions.length > 0 && (
+          <ul className="mb-4 divide-y divide-line text-sm">
+            {suggestions.suggestions.map((s) => (
+              <li key={s.username} className="flex items-center gap-2 py-2">
+                <a
+                  href={`https://www.instagram.com/${s.username}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ltr font-medium text-accent hover:underline"
+                >
+                  @{s.username}
+                </a>
+                <span className="text-xs text-muted">يتابعه {s.followedBy} من أفضل عملائك</span>
+                <form action={watchSuggested.bind(null, projectId, s.username)} className="ms-auto">
+                  <button
+                    type="submit"
+                    className="rounded px-2 py-0.5 text-xs text-accent hover:bg-accent-soft"
+                  >
+                    راقب متابعيه
+                  </button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+        {suggestions && suggestions.suggestions.length === 0 && (
+          <p className="mb-3 text-sm text-muted">آخر بحث لم يجد حساباً مشتركاً بين عملائك.</p>
+        )}
+        {rt.scrapers.suggestionsAvailable ? (
+          <ActionForm
+            action={suggestSources}
+            submit={`ابحث (≈ $${rt.scrapers.suggestCost() ?? 0})`}
+          >
+            <input type="hidden" name="project" value={projectId} />
+          </ActionForm>
+        ) : (
+          <Notice tone="warn">يحتاج APIFY_TOKEN.</Notice>
+        )}
       </Card>
     </div>
   );

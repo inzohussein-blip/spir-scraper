@@ -41,6 +41,10 @@ export interface CommandContext {
       jobsToday: number;
     }>;
   };
+  /** Weekly plans waiting for the owner's approval. */
+  plans?: {
+    approvePlan(id: string): Promise<{ ok: boolean; reason?: string; changed?: number }>;
+  };
   /** Optional readers used for links sent to the bot. */
   links?: {
     getStoredProfile(username: string): Promise<{
@@ -167,6 +171,15 @@ export async function handleCallback(
   data: string,
   state: { project?: string } = {},
 ): Promise<string> {
+  const plan = /^plan:([a-f0-9]{12})$/.exec(data);
+  if (plan?.[1]) {
+    if (!ctx.plans) return "الخطط غير متاحة هنا";
+    const r = await ctx.plans.approvePlan(plan[1]);
+    if (r.ok) return `✅ طُبّقت الخطة: تغيّرت ${r.changed} من مراقبات المنافسين.`;
+    return r.reason === "applied"
+      ? "طُبّقت هذه الخطة من قبل."
+      : "انتهت صلاحية الخطة؛ تصلك خطة جديدة الأسبوع القادم.";
+  }
   const save = /^save:([a-z0-9._]{1,30})$/.exec(data);
   if (!save?.[1]) return "زر غير معروف";
   // Save this one account (not its audience, which is what "/run @x" collects).

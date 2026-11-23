@@ -315,4 +315,26 @@ export class AnthropicScorer implements Scorer {
       keywords: [...new Set(p.keywords.map((k) => k.trim().toLowerCase()).filter(Boolean))],
     }));
   }
+
+  async weeklyBrief(data: unknown): Promise<string> {
+    const res = await this.client.beta.messages.create({
+      model: this.reportModel,
+      max_tokens: 6000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "medium" },
+      system:
+        "You are the weekly analyst of a one-person lead-generation business (trading partners and clients, Arabic market). " +
+        "Write in Arabic, under 220 words, plain text for Telegram (no markdown tables). Use only the numbers given. " +
+        "Structure: one line on the week; what earned money and what did not; the budget changes proposed (they apply only " +
+        "if the owner approves); two or three concrete actions for the owner this week (who to contact first, what to post). " +
+        "Never promise returns.",
+      messages: [{ role: "user", content: `Data (JSON):\n${JSON.stringify(data)}` }],
+    });
+    if (res.stop_reason === "refusal") return "";
+    return res.content
+      .flatMap((b) => (b.type === "text" ? [b.text] : []))
+      .join("\n")
+      .trim();
+  }
 }

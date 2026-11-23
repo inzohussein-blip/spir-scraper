@@ -2,6 +2,7 @@ import {
   AccountNotFoundError,
   BudgetExceededError,
   type Capability,
+  type FollowingSource,
   type PlacesSearch,
   type Provider,
   ProviderError,
@@ -131,7 +132,7 @@ function usernamesFrom(items: Item[]): string[] {
  * Apify provider. Runs actors synchronously and stops before going past the
  * account's free monthly credit (or the configured cap on top of it).
  */
-export class ApifyProvider implements Provider, PlacesSearch {
+export class ApifyProvider implements Provider, PlacesSearch, FollowingSource {
   readonly id = "apify" as const;
   readonly capabilities: ReadonlySet<Capability> = new Set([
     "profile",
@@ -226,6 +227,21 @@ export class ApifyProvider implements Provider, PlacesSearch {
       },
       links: [str(pick(author, "bioLink", "bioLinkUrl"))].filter((l): l is string => !!l),
     };
+  }
+
+  /** Same actor and price as the followers list. */
+  get followingCostPer1k() {
+    return this.costPer1k;
+  }
+
+  /** Accounts a public account follows (the same actor as followers, other direction). */
+  async listFollowing(username: string, limit: number): Promise<string[]> {
+    const items = await this.run(
+      this.actors.followers,
+      { usernames: [username.replace(/^@/, "")], dataToScrape: "following", resultsLimit: limit },
+      limit,
+    );
+    return usernamesFrom(items).filter((u) => u !== username.toLowerCase());
   }
 
   /** About $4 per 1000 places on the public actor's pricing. */

@@ -99,6 +99,22 @@ describe("links sent to the bot", () => {
       expect(site?.buttons).toEqual([{ text: "احفظ @acmefx", data: "save:acmefx" }]);
       expect(pages).toEqual(["acme.example"]);
 
+      // Approving a weekly plan from its button.
+      const approvals: string[] = [];
+      const withPlans = {
+        ...ctx,
+        plans: {
+          approvePlan: async (id: string) => {
+            approvals.push(id);
+            return approvals.length === 1
+              ? { ok: true, changed: 2 }
+              : { ok: false, reason: "applied" };
+          },
+        },
+      };
+      expect(await handleCallback(withPlans, "plan:abcdef123456", state)).toContain("تغيّرت 2");
+      expect(await handleCallback(withPlans, "plan:abcdef123456", state)).toContain("من قبل");
+      expect(await handleCallback(ctx, "plan:abcdef123456", state)).toContain("غير متاحة");
       expect(await handleLink(ctx, "مرحبا", state)).toBeNull();
       expect(await handleCallback(ctx, "drop table", state)).toBe("زر غير معروف");
     } finally {

@@ -84,6 +84,13 @@ export interface PlacesSearch {
   searchPlaces(query: string, location: string, limit: number): Promise<RawPlace[]>;
 }
 
+/** Lists the accounts an Instagram account follows (e.g. through Apify). */
+export interface FollowingSource {
+  /** Approximate USD per 1000 accounts listed. */
+  readonly followingCostPer1k: number;
+  listFollowing(username: string, limit: number): Promise<string[]>;
+}
+
 export class AccountNotFoundError extends Error {
   constructor(message: string) {
     super(message);

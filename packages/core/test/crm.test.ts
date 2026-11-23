@@ -803,3 +803,145 @@ describe("the project's own model", () => {
     }
   });
 });
+
+describe("budget and the network", () => {
+  it("plans the budget by revenue, applies it to monitors, and finds sources from customers' follows", async () => {
+    const lists: Record<string, string[]> = {
+      winner: Array.from({ length: 30 }, (_, i) => `w${i}`),
+      loser: Array.from({ length: 30 }, (_, i) => `l${i}`),
+    };
+    let current = "winner";
+    const followed: Record<string, string[]> = {
+      w0: ["hub_gold", "hub_fx", "random1"],
+      w1: ["hub_gold", "hub_fx"],
+      w2: ["hub_gold", "winner"],
+    };
+    const t = await setup(
+      [
+        new FakeProvider(
+          "apify",
+          ["profile", "account_followers"],
+          { profile: fakeProfile, engagers: () => lists[current] ?? [] },
+          6000,
+          2.5,
+        ),
+      ],
+      undefined,
+      {
+        following: {
+          followingCostPer1k: 2.5,
+          listFollowing: async (u: string) => followed[u] ?? [],
+        },
+      },
+    );
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      for (const name of ["winner", "loser"]) {
+        current = name;
+        const source = parseSource(`https://instagram.com/${name}`, "followers") as never;
+        await t.scrapers.createMonitor({ projectId: p.id, source, everyDays: 7, limit: 100 });
+        await t.scrapers.startJob({ projectId: p.id, source, limit: 30 });
+        await settle(t);
+      }
+      // 25 reached from each; 3 customers from the winner only.
+      await t.scrapers.bulkUpdateLeads({
+        projectId: p.id,
+        usernames: lists.winner?.slice(3, 25) ?? [],
+        status: "contacted",
+      });
+      await t.scrapers.bulkUpdateLeads({
+        projectId: p.id,
+        usernames: lists.loser?.slice(0, 25) ?? [],
+        status: "rejected",
+      });
+      for (const u of ["w0", "w1", "w2"])
+        await t.scrapers.setDeal({ projectId: p.id, username: u, value: 300 });
+
+      const plan = await t.scrapers.budgetPlan(p.id, 10);
+      const by = (n: string) => plan.lines.find((l) => l.source.includes(`/${n}/`));
+      expect(by("winner")).toMatchObject({ decision: "increase", usd: 10, accounts: 2000 });
+      expect(by("loser")).toMatchObject({ decision: "stop", usd: 0 });
+      expect(by("winner")?.monitorId).not.toBeNull();
+
+      expect(await t.scrapers.applyBudgetPlan(p.id, plan.lines)).toEqual({ changed: 2 });
+      const mons = await t.scrapers.listMonitors(p.id);
+      const mon = (n: string) => mons.find((m) => m.sourceUrl.includes(`/${n}/`));
+      expect(mon("loser")?.enabled).toBe(false);
+      // 2000 accounts a month over about 4 runs.
+      expect(mon("winner")).toMatchObject({ enabled: true, limit: 500 });
+
+      expect(t.scrapers.suggestCost(8, 150)).toBe(3);
+      const s = await t.scrapers.suggestSources(p.id);
+      expect(s.seeds).toBe(3);
+      // Followed by 2+ customers, not already watched, not a customer itself.
+      expect(s.suggestions).toEqual([
+        { username: "hub_gold", followedBy: 3 },
+        { username: "hub_fx", followedBy: 2 },
+      ]);
+      expect((await t.scrapers.lastSuggestions(p.id))?.suggestions).toHaveLength(2);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("weekly analyst", () => {
+  it("writes the plan, keeps budget changes pending, and applies them once on approval", async () => {
+    const lists: Record<string, string[]> = {
+      good: Array.from({ length: 25 }, (_, i) => `g${i}`),
+      bad: Array.from({ length: 25 }, (_, i) => `b${i}`),
+    };
+    let current = "good";
+    const t = await setup([
+      new FakeProvider(
+        "apify",
+        ["profile", "account_followers"],
+        { profile: fakeProfile, engagers: () => lists[current] ?? [] },
+        6000,
+        2.5,
+      ),
+    ]);
+    try {
+      const p = await t.scrapers.createProject({ name: "وكلاء", owner: "o" });
+      for (const name of ["good", "bad"]) {
+        current = name;
+        const source = parseSource(`https://instagram.com/${name}`, "followers") as never;
+        await t.scrapers.createMonitor({ projectId: p.id, source });
+        await t.scrapers.startJob({ projectId: p.id, source, limit: 25 });
+        await settle(t);
+      }
+      await t.scrapers.bulkUpdateLeads({
+        projectId: p.id,
+        usernames: lists.good?.slice(2, 22) ?? [],
+        status: "contacted",
+      });
+      await t.scrapers.bulkUpdateLeads({
+        projectId: p.id,
+        usernames: lists.bad?.slice(0, 22) ?? [],
+        status: "rejected",
+      });
+      for (const u of ["g0", "g1"])
+        await t.scrapers.setDeal({ projectId: p.id, username: u, value: 400 });
+
+      const plan = await t.scrapers.weeklyPlan(p.id, 8);
+      expect(plan.changes).toBe(2);
+      expect(plan.text).toContain("خطة الأسبوع · وكلاء");
+      expect(plan.text).toContain("$800");
+      expect(plan.text).toMatch(/أوقف https:\/\/www\.instagram\.com\/bad\/followers\//);
+      // Nothing changes before approval.
+      expect((await t.scrapers.listMonitors(p.id)).every((m) => m.enabled)).toBe(true);
+      expect((await t.scrapers.lastPlan(p.id))?.id).toBe(plan.id);
+
+      expect(await t.scrapers.approvePlan(plan.id)).toEqual({ ok: true, changed: 2 });
+      const bad = (await t.scrapers.listMonitors(p.id)).find((m) => m.sourceUrl.includes("/bad/"));
+      expect(bad?.enabled).toBe(false);
+      expect(await t.scrapers.approvePlan(plan.id)).toEqual({ ok: false, reason: "applied" });
+      expect(await t.scrapers.approvePlan("000000000000")).toEqual({
+        ok: false,
+        reason: "expired",
+      });
+    } finally {
+      await t.close();
+    }
+  });
+});

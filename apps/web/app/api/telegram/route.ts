@@ -37,6 +37,7 @@ export async function POST(req: Request) {
   const ctx = {
     scrapers: rt.scrapers,
     links: { ...rt.scrapers, readPage: rt.readPage },
+    plans: rt.scrapers,
     owner: rt.owner,
     appUrl: appOrigin(req),
     onJobStarted: () =>

@@ -59,6 +59,7 @@ import {
   risingSignal,
   searchTextOf,
 } from "../extract/index.js";
+import { type BudgetLine, planBudget } from "../learn/budget.js";
 import {
   auc,
   explainModel,
@@ -75,6 +76,7 @@ import { type SuppressionKind, suppressionHash } from "../suppression.js";
 import {
   AccountNotFoundError,
   type Connector,
+  type FollowingSource,
   NotFoundError,
   type PlacesSearch,
   type RawProfile,
@@ -233,6 +235,8 @@ export function createScrapers(deps: {
   connectors?: Connector[];
   /** Google Maps search (Apify). */
   places?: PlacesSearch;
+  /** Who an account follows (Apify), for finding new sources from the best customers. */
+  following?: FollowingSource;
   /** Reads one public web page (for watching competitor sites). */
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
 }) {
@@ -2227,6 +2231,239 @@ export function createScrapers(deps: {
             }
           : null,
       };
+    },
+
+    /**
+     * Next period's collection budget split across the project's sources by
+     * what they earned (see learn/budget), with each line matched to the
+     * monitor that collects it, when there is one.
+     */
+    async budgetPlan(projectId: string, budgetUsd: number) {
+      const perf = await this.sourcePerformance(projectId);
+      const unit = router.unitCost("apify") || 0.0025;
+      const plan = planBudget(perf.sources, { budgetUsd, costPerAccount: unit * 2 });
+      const mons = await this.listMonitors(projectId);
+      return {
+        ...plan,
+        budgetUsd,
+        costPerAccount: unit * 2,
+        lines: plan.lines.map((l) => {
+          const m = mons.find((x) => x.sourceUrl === l.source);
+          return { ...l, monitorId: m?.id ?? null, monitorEnabled: m?.enabled ?? null };
+        }),
+      };
+    },
+
+    /**
+     * Applies a budget plan to the monitors (the owner approved it): stopped
+     * sources are paused; the others collect what their share buys per run.
+     */
+    async applyBudgetPlan(projectId: string, lines: (BudgetLine & { monitorId: string | null })[]) {
+      const mons = await this.listMonitors(projectId);
+      let changed = 0;
+      for (const l of lines) {
+        const m = mons.find((x) => x.id === l.monitorId);
+        if (!m) continue;
+        if (l.decision === "stop") {
+          await db.update(monitors).set({ enabled: false }).where(eq(monitors.id, m.id));
+        } else {
+          const runs = Math.max(1, Math.round(30 / m.everyDays));
+          const limit = Math.min(maxLimit, Math.max(10, Math.floor(l.accounts / runs)));
+          await db.update(monitors).set({ enabled: true, limit }).where(eq(monitors.id, m.id));
+        }
+        changed++;
+      }
+      return { changed };
+    },
+
+    /** Whether new sources can be found from customers' follows (needs Apify). */
+    get suggestionsAvailable() {
+      return !!deps.following;
+    },
+
+    /** What suggestSources would cost, before running it. */
+    suggestCost(seeds = 8, perSeed = 150) {
+      return deps.following
+        ? Math.round(((deps.following.followingCostPer1k * seeds * perSeed) / 1000) * 100) / 100
+        : null;
+    },
+
+    /**
+     * New sources from the network: the accounts several of the owner's best
+     * leads (customers first, then interested) follow, that are not watched
+     * yet. Saved so the page can show them without paying again.
+     */
+    async suggestSources(projectId: string, opts: { seeds?: number; perSeed?: number } = {}) {
+      if (!deps.following) throw new Error("اكتشاف المصادر يحتاج APIFY_TOKEN");
+      const seeds = await db
+        .select({ username: profiles.username })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(
+          and(eq(leads.projectId, projectId), inArray(leads.status, ["customer", "interested"])),
+        )
+        .orderBy(sql`${leads.dealValue} desc nulls last`, desc(leads.statusAt))
+        .limit(Math.min(opts.seeds ?? 8, 20));
+      if (seeds.length < 3) throw new Error("نحتاج 3 عملاء أو مهتمين على الأقل لنعرف من يتابعون");
+      const counts = new Map<string, number>();
+      let read = 0;
+      for (const s of seeds) {
+        try {
+          const follows = await deps.following.listFollowing(s.username, opts.perSeed ?? 150);
+          read += follows.length;
+          for (const f of new Set(follows)) counts.set(f, (counts.get(f) ?? 0) + 1);
+        } catch {
+          // A private or missing account is skipped.
+        }
+      }
+      const watched = new Set(
+        (await this.listMonitors(projectId))
+          .map((m) => /instagram\.com\/([A-Za-z0-9._]{1,30})/.exec(m.sourceUrl)?.[1]?.toLowerCase())
+          .filter(Boolean),
+      );
+      const seedNames = new Set(seeds.map((s) => s.username));
+      const suggestions = [...counts.entries()]
+        .filter(([u, n]) => n >= 2 && !watched.has(u) && !seedNames.has(u))
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([username, followedBy]) => ({ username, followedBy }));
+      const result = {
+        at: new Date().toISOString(),
+        seeds: seeds.length,
+        read,
+        costUsd: Math.round(((deps.following.followingCostPer1k * read) / 1000) * 100) / 100,
+        suggestions,
+      };
+      await setValue(`suggest:${projectId}`, result, 60 * 86_400_000);
+      return result;
+    },
+
+    async lastSuggestions(projectId: string) {
+      return getValue<{
+        at: string;
+        seeds: number;
+        read: number;
+        costUsd: number;
+        suggestions: { username: string; followedBy: number }[];
+      }>(`suggest:${projectId}`);
+    },
+
+    /**
+     * The weekly analyst: retrains the project's model, reads its revenue by
+     * source, the budget plan, competitors' growth and site changes, and the
+     * best new leads, then writes the plan (with AI when available). Budget
+     * changes are saved as a pending plan and applied only when approved.
+     */
+    async weeklyPlan(projectId: string, budgetUsd: number, now = new Date()) {
+      const project = await this.getProject(projectId);
+      if (!project) throw new Error("Project not found");
+      const model = await this.trainProjectModel(projectId);
+      const [perf, budget, ev] = await Promise.all([
+        this.sourcePerformance(projectId, { since: new Date(now.getTime() - 90 * 86_400_000) }),
+        this.budgetPlan(projectId, budgetUsd),
+        this.evaluateScoring(projectId),
+      ]);
+      const since = new Date(now.getTime() - 7 * 86_400_000);
+      const changedSites = (await this.listSiteWatches()).filter(
+        (w) => w.lastChangedAt && w.lastChangedAt >= since,
+      );
+      const best = await leadsPage({ projectId, status: "new", minWinProb: 60, limit: 5 });
+      const rising = await leadsPage({ projectId, signal: "rising", limit: 5 });
+      const changes = budget.lines.filter((l) => l.monitorId && l.decision !== "keep");
+      const data = {
+        project: project.name,
+        revenue90d: perf.totals,
+        topSources: perf.sources.slice(0, 5).map((s) => ({
+          source: s.source,
+          customers: s.customers,
+          revenue: s.revenue,
+          cost: s.costUsd,
+        })),
+        model: model.trained ? { auc: model.auc } : { needed: model.needed },
+        aiScoreAuc: ev.aiScoreAuc,
+        budget: {
+          usd: budgetUsd,
+          changes: changes.map((l) => ({ source: l.source, decision: l.decision, usd: l.usd })),
+        },
+        competitorSiteChanges: changedSites.map((w) => ({
+          page: w.label ?? w.url,
+          added: w.lastDiff?.added.slice(0, 3) ?? [],
+        })),
+        contactFirst: best.leads.map((l) => ({ username: l.username, winProb: l.winProb })),
+        rising: rising.leads.map((l) => l.username),
+      };
+      let text = "";
+      if (scorer?.weeklyBrief) {
+        try {
+          text = await scorer.weeklyBrief(data);
+        } catch {
+          text = "";
+        }
+      }
+      if (!text) {
+        const money = (n: number) => `$${n.toLocaleString("en", { maximumFractionDigits: 2 })}`;
+        text = [
+          `خطة الأسبوع · ${project.name}`,
+          `آخر 90 يوماً: ${money(perf.totals.revenue)} من ${perf.totals.customers} عميل، بتكلفة جمع ${money(perf.totals.costUsd)}.`,
+          perf.sources[0]
+            ? `الأفضل: ${perf.sources[0].source} (${perf.sources[0].customers} عميل).`
+            : "",
+          model.trained
+            ? `نموذجك محدَّث (دقة الترتيب ${Math.round((model.auc ?? 0) * 100)}%).`
+            : `النموذج ينتظر قرارات أكثر: سجّل ${model.needed.positives} عملاء و${model.needed.negatives} مرفوضين على الأقل.`,
+          changes.length
+            ? `تغييرات الميزانية المقترحة: ${changes.map((l) => `${l.decision === "stop" ? "أوقف" : l.decision === "increase" ? "زِد" : l.decision === "decrease" ? "خفّض" : "جرّب"} ${l.source}`).join("، ")}.`
+            : "لا تغيير في الميزانية.",
+          best.leads.length
+            ? `ابدأ بـ: ${best.leads.map((l) => `@${l.username} (${l.winProb}%)`).join("، ")}.`
+            : "",
+          rising.leads.length
+            ? `ينمون بسرعة: ${rising.leads.map((l) => `@${l.username}`).join("، ")}.`
+            : "",
+          changedSites.length ? `تغيّرت ${changedSites.length} من صفحات المنافسين هذا الأسبوع.` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+      const id = randomBytes(6).toString("hex");
+      await setValue(
+        `plan:${id}`,
+        { id, projectId, createdAt: now.toISOString(), text, lines: changes, applied: false },
+        14 * 86_400_000,
+      );
+      await setValue(`plan:last:${projectId}`, id, 14 * 86_400_000);
+      return { id, text, changes: changes.length };
+    },
+
+    async getPlan(id: string) {
+      return getValue<{
+        id: string;
+        projectId: string;
+        createdAt: string;
+        text: string;
+        lines: (BudgetLine & { monitorId: string | null })[];
+        applied: boolean;
+      }>(`plan:${id}`);
+    },
+
+    async lastPlan(projectId: string) {
+      const id = await getValue<string>(`plan:last:${projectId}`);
+      return id ? this.getPlan(id) : null;
+    },
+
+    /** Applies a weekly plan the owner approved (once). */
+    async approvePlan(id: string) {
+      const plan = await this.getPlan(id);
+      if (!plan) return { ok: false as const, reason: "expired" };
+      if (plan.applied) return { ok: false as const, reason: "applied" };
+      const r = await this.applyBudgetPlan(plan.projectId, plan.lines);
+      await setValue(`plan:${id}`, { ...plan, applied: true }, 14 * 86_400_000);
+      await this.audit({
+        actor: "owner",
+        action: "plan.approve",
+        detail: { id, changed: r.changed },
+      });
+      return { ok: true as const, changed: r.changed };
     },
 
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */

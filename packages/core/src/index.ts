@@ -1,5 +1,6 @@
 export * from "./compliance.js";
 export * from "./extract/index.js";
+export * from "./learn/budget.js";
 export * from "./learn/model.js";
 export * from "./normalize.js";
 export * from "./notify.js";

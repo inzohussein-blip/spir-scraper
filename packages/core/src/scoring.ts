@@ -91,6 +91,8 @@ export interface Scorer {
     sample: { username: string; bio: string | null; category: string | null }[],
     criteria: string,
   ): Promise<Persona[]>;
+  /** The weekly plan in Arabic, written from the numbers given. */
+  weeklyBrief?(data: unknown): Promise<string>;
   /** A short Arabic brief on a competitor with content ideas. */
   competitorBrief?(input: CompetitorBriefInput, criteria: string): Promise<string>;
 }

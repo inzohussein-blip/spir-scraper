@@ -11,6 +11,7 @@ import type { LeadScore, Scorer, ScoringInput } from "../src/scoring.js";
 import {
   type Capability,
   type Connector,
+  type FollowingSource,
   NotFoundError,
   type PlacesSearch,
   type Provider,
@@ -27,6 +28,7 @@ export async function setup(
     connectors?: Connector[];
     places?: PlacesSearch;
     readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
+    following?: FollowingSource;
   } = {},
 ) {
   const pg = new PGlite({ extensions: { pg_trgm } });
@@ -52,6 +54,7 @@ export async function setup(
     ...(opts.connectors ? { connectors: opts.connectors } : {}),
     ...(opts.places ? { places: opts.places } : {}),
     ...(opts.readPage ? { readPage: opts.readPage } : {}),
+    ...(opts.following ? { following: opts.following } : {}),
   });
   await scrapers.init();
   return {

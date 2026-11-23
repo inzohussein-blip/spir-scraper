@@ -119,6 +119,21 @@ try {
   await page.waitForSelector("text=قائمة ملصقة");
   step("deal value and revenue by source");
 
+  // The project's own model says how many more decisions it needs; the plan is written on demand.
+  await page.click('button:has-text("درّب النموذج الآن")');
+  await page.waitForSelector("text=يحتاج النموذج قرارات أكثر");
+  await page.click('button:has-text("اكتب الخطة الآن")');
+  await page.waitForSelector("text=خطة الأسبوع ·");
+  await page.waitForSelector("text=الميزانية الذكية");
+  step("own model, budget plan and weekly plan");
+
+  // A WhatsApp template that promises returns is refused.
+  await page.goto(`${B}/leads`);
+  await page.fill('textarea[name="template"]', "مرحباً {name}، أرباح مضمونة كل شهر!");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=قالب الرسالة لم يُحفظ");
+  step("compliance: a template promising returns is refused");
+
   await page.goto(`${B}/leads`);
   const download = page.waitForEvent("download");
   await page.click("text=Excel");

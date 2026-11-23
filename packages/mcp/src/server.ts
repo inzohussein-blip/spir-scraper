@@ -171,6 +171,15 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
           .describe("Found in at least this many competitors' audiences or posts"),
         min_followers: z.number().int().min(0).optional(),
         max_followers: z.number().int().min(0).optional(),
+        min_win_prob: z
+          .number()
+          .int()
+          .min(0)
+          .max(100)
+          .optional()
+          .describe(
+            "Only leads the project's own model gives at least this chance (see train_model)",
+          ),
         persona: z.string().optional().describe("Audience segment name (see build_personas)"),
         signal: z
           .enum(["rising", "became_business"])
@@ -218,6 +227,7 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         ...(a.min_sources ? { minSources: a.min_sources } : {}),
         ...(a.min_followers !== undefined ? { minFollowers: a.min_followers } : {}),
         ...(a.max_followers !== undefined ? { maxFollowers: a.max_followers } : {}),
+        ...(a.min_win_prob !== undefined ? { minWinProb: a.min_win_prob } : {}),
         ...(a.persona ? { persona: a.persona } : {}),
         ...(a.signal ? { signal: a.signal } : {}),
         ...(a.terms?.length ? { terms: a.terms } : {}),
@@ -679,6 +689,95 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
           error: w.error,
         })),
       });
+    }),
+  );
+
+  server.registerTool(
+    "train_model",
+    {
+      title: "Train the project's own model",
+      description:
+        "Train the project's prediction model on the owner's decisions (customers and interested vs rejected) and give " +
+        "every lead a win probability (list_leads min_win_prob). Says how many more decisions it needs when there are too few. " +
+        "Also returns how well the AI score and the model rank real outcomes (AUC).",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const trained = await rt.scrapers.trainProjectModel(projectId);
+      return json({ trained, evaluation: await rt.scrapers.evaluateScoring(projectId) });
+    }),
+  );
+
+  server.registerTool(
+    "budget_plan",
+    {
+      title: "Plan the collection budget",
+      description:
+        "Split the remaining Apify budget across the project's sources by the customers they brought (Bayesian close " +
+        "rate, 80% exploit, 20% explore). apply=true applies it to the competitor monitors: losers are paused, the others " +
+        "collect what their share buys. Only apply when the owner agreed.",
+      inputSchema: z.object({
+        project: z.string(),
+        budget_usd: z.number().min(0).max(10_000).optional(),
+        apply: z.boolean().default(false),
+      }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const usage = await rt.apifyUsage().catch(() => null);
+      const budget = a.budget_usd ?? (usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5);
+      const plan = await rt.scrapers.budgetPlan(projectId, budget);
+      const applied = a.apply ? await rt.scrapers.applyBudgetPlan(projectId, plan.lines) : null;
+      return json({ plan, applied });
+    }),
+  );
+
+  server.registerTool(
+    "suggest_sources",
+    {
+      title: "Find new sources from customers' follows",
+      description:
+        "Read who the project's best leads follow (Apify, about $2.5 per 1000 accounts read; dry_run=true gives the cost " +
+        "only) and return accounts followed by two or more of them that are not watched yet. Then watch_competitor them.",
+      inputSchema: z.object({ project: z.string(), dry_run: z.boolean().default(true) }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      if (a.dry_run)
+        return json({
+          estimatedCostUsd: rt.scrapers.suggestCost(),
+          last: await rt.scrapers.lastSuggestions(projectId),
+        });
+      return json(await rt.scrapers.suggestSources(projectId));
+    }),
+  );
+
+  server.registerTool(
+    "weekly_plan",
+    {
+      title: "The weekly plan",
+      description:
+        "Write this week's plan for a project (model retrained, revenue by source, budget changes, competitors, who to " +
+        "contact first), or approve a plan by id when the owner says so. Budget changes apply only on approval.",
+      inputSchema: z.object({
+        project: z.string(),
+        approve_id: z
+          .string()
+          .regex(/^[a-f0-9]{12}$/)
+          .optional(),
+      }),
+    },
+    guard(async (a) => {
+      if (a.approve_id) return json(await rt.scrapers.approvePlan(a.approve_id));
+      const projectId = await projectIdFor(rt, a.project);
+      const usage = await rt.apifyUsage().catch(() => null);
+      return json(
+        await rt.scrapers.weeklyPlan(
+          projectId,
+          usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5,
+        ),
+      );
     }),
   );
 
