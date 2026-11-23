@@ -248,7 +248,11 @@ try {
   panel.on("pageerror", (e) => errors.push(e.message));
 
   // First run: no settings yet, so the settings tab shows.
-  if (await panel.locator("#setup").isHidden()) fail("setup notice not shown without settings");
+  // The panel reads its settings asynchronously: wait for the notice rather than sampling it.
+  await panel
+    .locator("#setup")
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => fail("setup notice not shown without settings"));
   step("asks for settings on first run");
 
   await panel.evaluate((s) => chrome.storage.local.set({ settings: s }), {
@@ -306,7 +310,10 @@ try {
   if (!modelRequests.at(-1).messages[1].content.includes("شراكة وكالة")) fail("offer missing");
   step("manual: scores with the project's criteria and drafts a message with a WhatsApp link");
 
-  if (await panel.locator("#update").isHidden()) fail("update notice not shown for a newer build");
+  await panel
+    .locator("#update")
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => fail("update notice not shown for a newer build"));
   step("shows a notice when the dashboard has a newer build");
 
   // Manual: open the followers list and scroll by hand while collecting.
