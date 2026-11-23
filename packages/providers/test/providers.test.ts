@@ -1,6 +1,12 @@
 import { BlockedError, BudgetExceededError, NotFoundError, RateLimitedError } from "@scrapers/core";
 import { describe, expect, it } from "vitest";
-import { ApifyProvider, mapApifyProfile, providersFromEnv, WorkerProvider } from "../src/index.js";
+import {
+  ApifyProvider,
+  mapApifyProfile,
+  providersFromEnv,
+  TikTokConnector,
+  WorkerProvider,
+} from "../src/index.js";
 
 type Call = { url: string; init?: RequestInit | undefined };
 
@@ -285,5 +291,96 @@ describe("providersFromEnv", () => {
     expect(
       providersFromEnv({ WORKER_URL: "http://w", WORKER_RATE_PER_MINUTE: "5" })[0]?.ratePerMinute,
     ).toBe(5);
+  });
+});
+
+describe("Google Maps through Apify", () => {
+  it("maps the places actor's items", async () => {
+    const f = fakeFetch((url) =>
+      url.includes("/limits")
+        ? json({ data: { limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 0 } } })
+        : json([
+            {
+              placeId: "ChIJ1",
+              title: "صرافة",
+              categoryName: "Currency exchange",
+              city: "Riyadh",
+              countryCode: "sa",
+              phone: "+966 50",
+              website: "https://x.example",
+              totalScore: 4.4,
+              reviewsCount: 31,
+              url: "https://maps.google.com/?cid=1",
+            },
+            { title: "no id" },
+          ]),
+    );
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    const places = await p.searchPlaces("صرافة", "الرياض", 5);
+    expect(places).toEqual([
+      {
+        placeId: "ChIJ1",
+        name: "صرافة",
+        category: "Currency exchange",
+        address: null,
+        city: "Riyadh",
+        country: "SA",
+        phone: "+966 50",
+        website: "https://x.example",
+        rating: 4.4,
+        reviews: 31,
+        url: "https://maps.google.com/?cid=1",
+      },
+    ]);
+    const run = f.calls.find((c) => c.url.includes("crawler-google-places"));
+    expect(JSON.parse(String(run?.init?.body))).toMatchObject({
+      searchStringsArray: ["صرافة"],
+      locationQuery: "الرياض",
+      maxCrawledPlacesPerSearch: 5,
+    });
+  });
+});
+
+describe("TikTok through Apify", () => {
+  const limitsOk = () =>
+    json({ data: { limits: { maxMonthlyUsageUsd: 5 }, current: { monthlyUsageUsd: 0 } } });
+  it("reads the author of an account's latest video", async () => {
+    const f = fakeFetch((url) =>
+      url.includes("/limits")
+        ? limitsOk()
+        : json([
+            {
+              authorMeta: {
+                name: "goldcoach",
+                nickName: "Gold Coach",
+                signature: "تداول الذهب",
+                fans: 52000,
+                heart: 900000,
+                video: 140,
+                following: 12,
+                verified: false,
+                bioLink: "https://t.me/goldcoach",
+              },
+            },
+          ]),
+    );
+    const tt = new TikTokConnector(new ApifyProvider({ token: "t", fetch: f.fn }));
+    expect(tt.paid).toBe(true);
+    expect(await tt.getAccount("@goldcoach")).toEqual({
+      displayName: "Gold Coach",
+      bio: "تداول الذهب",
+      followers: 52000,
+      stats: { likes: 900000, videos: 140, following: 12, verified: false },
+      links: ["https://t.me/goldcoach"],
+    });
+    const run = f.calls.find((c) => c.url.includes("tiktok-profile-scraper"));
+    expect(JSON.parse(String(run?.init?.body))).toMatchObject({ profiles: ["goldcoach"] });
+    const empty = new TikTokConnector(
+      new ApifyProvider({
+        token: "t",
+        fetch: fakeFetch((url) => (url.includes("/limits") ? limitsOk() : json([]))).fn,
+      }),
+    );
+    await expect(empty.getAccount("nobody")).rejects.toThrow(/not found/);
   });
 });

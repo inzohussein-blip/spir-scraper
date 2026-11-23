@@ -1,6 +1,7 @@
 "use server";
 
 import {
+  checkMessage,
   parseSource,
   parseUsernameCsv,
   type Source,
@@ -337,6 +338,15 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
     .map((k) => k.trim())
     .filter(Boolean)
     .slice(0, 50);
+  const template = str(form, "template").slice(0, 1000);
+  const check = template ? checkMessage(template) : { ok: true, issues: [] };
+  if (!check.ok)
+    return {
+      error: `قالب الرسالة لم يُحفظ: ${check.issues
+        .filter((i) => i.severity === "block")
+        .map((i) => `«${i.match}» — ${i.message}`)
+        .join(" ")}`,
+    };
   try {
     await (await getRuntime()).scrapers.updateProject(id, {
       autoExport: form.get("auto_export") === "on",
@@ -351,7 +361,12 @@ export async function updateProjectSettings(_: ActionState, form: FormData): Pro
   }
   await audit("project.update", { id });
   revalidatePath("/leads");
-  return { message: "حُفظت إعدادات المشروع" };
+  const warnings = check.issues.map((i) => i.message);
+  return {
+    message: warnings.length
+      ? `حُفظت إعدادات المشروع. ملاحظات على القالب: ${warnings.join(" ")}`
+      : "حُفظت إعدادات المشروع",
+  };
 }
 
 /** Sets (or clears, with an empty value) the day to be reminded about a lead. */
@@ -475,4 +490,256 @@ export async function analyzeCompetitor(_: ActionState, form: FormData): Promise
   await audit("competitor.analyze", { username });
   revalidatePath("/competitors");
   redirect(`/competitors?u=${username}`);
+}
+
+/** Records (or clears, with an empty value) what a closed deal was worth. */
+export async function saveDeal(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  const username = str(form, "username");
+  const raw = str(form, "value").replace(/[,،\s$]/g, "");
+  const value = raw === "" ? null : Number(raw);
+  if (value !== null && (!Number.isFinite(value) || value < 0))
+    return { error: "اكتب رقماً صحيحاً، مثل 500" };
+  const ok = await (await getRuntime()).scrapers.setDeal({ projectId, username, value });
+  if (!ok) return { error: "العميل غير موجود في هذا المشروع" };
+  await audit("lead.deal", { username, value });
+  revalidatePath(`/leads/${username}`);
+  revalidatePath("/leads");
+  revalidatePath("/insights");
+  return { message: value === null ? "أُلغيت الصفقة" : "سُجّلت الصفقة وأصبح عميلاً" };
+}
+
+/** Finds the project's audience segments with AI and assigns every lead to one. */
+export async function buildPersonas(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  try {
+    const r = await (await getRuntime()).scrapers.buildPersonas(projectId);
+    await audit("project.personas", { count: r.personas.length, assigned: r.assigned });
+    revalidatePath("/insights");
+    revalidatePath("/leads");
+    return { message: `وُجدت ${r.personas.length} شرائح، ووُزّع عليها ${r.assigned} عميلاً` };
+  } catch (err) {
+    return fail(
+      /ANTHROPIC_API_KEY/.test((err as Error).message)
+        ? new Error("الشرائح تحتاج ANTHROPIC_API_KEY في Vercel")
+        : err,
+    );
+  }
+}
+
+/** Adds a lead's account on another platform from a pasted link, and reads it. */
+export async function addAccount(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const username = str(form, "username");
+  const r = await (await getRuntime()).scrapers.addAccount({ username, url: str(form, "url") });
+  if (!r.ok)
+    return {
+      error:
+        r.reason === "taken"
+          ? "هذا الحساب مربوط بعميل آخر"
+          : r.reason === "no_lead"
+            ? "العميل غير موجود"
+            : "الرابط ليس حساباً على منصة (مثال: t.me/قناة أو youtube.com/@قناة أو tiktok.com/@حساب)",
+    };
+  await audit("account.add", { username, platform: r.account?.platform ?? null });
+  revalidatePath(`/leads/${username}`);
+  return { message: r.account?.error ? `أُضيف، لكن: ${r.account.error}` : "أُضيف الحساب" };
+}
+
+/** Reads one account again through its platform's connector. */
+export async function refreshAccount(id: string, username: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.refreshAccount(id);
+  revalidatePath(`/leads/${username}`);
+}
+
+export async function removeAccount(id: string, username: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.removeAccount(id);
+  await audit("account.remove", { id });
+  revalidatePath(`/leads/${username}`);
+}
+
+/** Finds other-platform accounts in the bios of a project's leads and reads some of them. */
+export async function linkProjectAccounts(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const r = await (await getRuntime()).scrapers.linkProjectAccounts(str(form, "project"), {
+    read: 30,
+  });
+  await audit("project.link_accounts", r);
+  revalidatePath("/leads");
+  return {
+    message: `فُحص ${r.leads} عميلاً: ${r.found} حساباً جديداً على منصات أخرى، قُرئ منها ${r.read}. الباقي يُقرأ مع المهمة اليومية.`,
+  };
+}
+
+/** Searches Google Maps and keeps the businesses in the project. */
+export async function searchPlaces(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  try {
+    const r = await (await getRuntime()).scrapers.searchPlaces({
+      projectId,
+      query: str(form, "query"),
+      location: str(form, "location"),
+      limit: Number(str(form, "limit")) || 30,
+    });
+    await audit("places.search", { query: str(form, "query"), found: r.found });
+    revalidatePath("/places");
+    return {
+      message: `وُجدت ${r.found} شركة (≈ $${r.costUsd.toFixed(3)}). حلّل مواقعها لتجد حساباتها على إنستقرام.`,
+    };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Reads the websites of businesses not analysed yet. */
+export async function analyzePlaces(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const r = await (await getRuntime()).scrapers.analyzePlaces(str(form, "project"), 20);
+  revalidatePath("/places");
+  return {
+    message: r.analyzed
+      ? `حُلّل ${r.analyzed} موقعاً، ووُجد ${r.instagram} حساب إنستقرام. الباقي مع الضغطة التالية أو المهمة اليومية.`
+      : "لا توجد مواقع جديدة للتحليل",
+  };
+}
+
+/** Sends the businesses' Instagram accounts to the project as leads. */
+export async function placesToLeads(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  try {
+    const r = await (await getRuntime()).scrapers.placesToLeads(projectId);
+    if (!r.jobId) return { error: "لا توجد حسابات إنستقرام جديدة. حلّل المواقع أولاً." };
+    await audit("places.to_leads", { sent: r.sent });
+    await scheduleDrain();
+    revalidatePath("/places");
+    return { message: `بدأت مهمة لـ ${r.sent} حساباً`, url: `/jobs/${r.jobId}` };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Saves (or refreshes) one Instagram account shared from another app. */
+export async function saveSharedAccount(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const username = str(form, "username").replace(/^@/, "").toLowerCase();
+  if (!/^[a-z0-9._]{1,30}$/.test(username)) return { error: "معرّف غير صالح" };
+  try {
+    await (await getRuntime()).scrapers.startJob({
+      projectId: str(form, "project"),
+      source: uploadSource([username], `مشاركة: @${username}`),
+      limit: 1,
+    });
+    await audit("share.save", { username });
+    await scheduleDrain();
+    return { message: "بدأ الحفظ، يظهر في العملاء خلال لحظات", url: `/leads/${username}` };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Watches a competitor page (prices, offers, partner terms) for changes. */
+export async function addSiteWatch(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const rt = await getRuntime();
+    await rt.scrapers.addSiteWatch({ url: str(form, "url"), label: str(form, "label") || null });
+    // First reading now sets the baseline.
+    await rt.scrapers.checkSiteWatches();
+  } catch (err) {
+    return fail(err);
+  }
+  await audit("site_watch.add", { url: str(form, "url") });
+  revalidatePath("/competitors");
+  return { message: "تُراقب الصفحة الآن، ويصلك تنبيه حين تتغيّر" };
+}
+
+export async function removeSiteWatch(id: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.removeSiteWatch(id);
+  revalidatePath("/competitors");
+}
+
+/** Retrains the project's own model on the owner's decisions. */
+export async function trainModel(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const r = await (await getRuntime()).scrapers.trainProjectModel(str(form, "project"));
+  revalidatePath("/insights");
+  revalidatePath("/leads");
+  if (!r.trained)
+    return {
+      error: `يحتاج النموذج قرارات أكثر: ${r.positives} عميل/مهتم و${r.negatives} مرفوض حتى الآن. سجّل ${r.needed.positives} عملاء و${r.needed.negatives} مرفوضين على الأقل (${r.needed.total} قراراً إضافياً).`,
+    };
+  return {
+    message: `تدرّب النموذج على ${r.positives + r.negatives} قراراً، ودقة ترتيبه ${Math.round((r.auc ?? 0) * 100)}%. قُيّم ${r.scored} عميلاً.`,
+  };
+}
+
+/** Applies the budget plan to the competitor monitors. */
+export async function applyBudget(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  const rt = await getRuntime();
+  const usage = await rt.apifyUsage().catch(() => null);
+  const plan = await rt.scrapers.budgetPlan(
+    projectId,
+    usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5,
+  );
+  const r = await rt.scrapers.applyBudgetPlan(projectId, plan.lines);
+  await audit("budget.apply", r);
+  revalidatePath("/insights");
+  revalidatePath("/leads");
+  return { message: `طُبّقت الخطة على ${r.changed} من مراقبات المنافسين` };
+}
+
+/** Finds new sources from what the best customers follow (paid: Apify). */
+export async function suggestSources(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const r = await (await getRuntime()).scrapers.suggestSources(str(form, "project"));
+    revalidatePath("/insights");
+    return {
+      message: `قُرئ ما يتابعه ${r.seeds} من أفضل عملائك (≈ $${r.costUsd}). وُجد ${r.suggestions.length} مصدراً يتابعه اثنان منهم أو أكثر.`,
+    };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/** Watches a suggested source (its followers, weekly, new accounts only). */
+export async function watchSuggested(projectId: string, username: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.createMonitor({
+    projectId,
+    source: parseSource(`https://www.instagram.com/${username}/`, "followers") as Exclude<
+      Source,
+      { type: "upload" }
+    >,
+  });
+  await audit("monitor.add", { username, from: "suggestion" });
+  revalidatePath("/insights");
+}
+
+/** Writes this week's plan now (it is also sent every week on Telegram). */
+export async function makeWeeklyPlan(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const rt = await getRuntime();
+  const usage = await rt.apifyUsage().catch(() => null);
+  await rt.scrapers.weeklyPlan(
+    str(form, "project"),
+    usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5,
+  );
+  revalidatePath("/insights");
+  return { message: "كُتبت خطة الأسبوع" };
+}
+
+export async function approvePlan(id: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.approvePlan(id);
+  revalidatePath("/insights");
 }

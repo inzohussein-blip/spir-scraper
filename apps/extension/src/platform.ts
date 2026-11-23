@@ -74,6 +74,21 @@ export class Platform {
     return hit ? { status: hit.status, aiScore: hit.aiScore ?? null } : null;
   }
 
+  /** Financial-promotion red flags in a message (promised returns, "risk-free", no risk warning...). */
+  async checkMessage(
+    text: string,
+  ): Promise<{ ok: boolean; issues: { severity: string; message: string; match: string }[] }> {
+    return this.call("/compliance/check", { method: "POST", body: JSON.stringify({ text }) });
+  }
+
+  /** Links an account on another platform to the person behind an Instagram lead. */
+  async addAccount(username: string, url: string): Promise<{ account: Record<string, unknown> }> {
+    return this.call<{ account: Record<string, unknown> }>("/accounts", {
+      method: "POST",
+      body: JSON.stringify({ username: username.replace(/^@/, "").trim().toLowerCase(), url }),
+    });
+  }
+
   /** Queues jobs (the API takes up to 1000 accounts each) that collect public details and contacts. */
   async save(projectId: string, usernames: string[]): Promise<{ jobIds: string[]; count: number }> {
     if (!projectId) throw new Error("اختر مشروعاً من الإعدادات");

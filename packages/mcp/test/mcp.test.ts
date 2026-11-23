@@ -38,24 +38,43 @@ afterAll(async () => {
 describe("MCP server over Streamable HTTP", () => {
   it("lists the planned tools, resources and prompts", async () => {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(tools).toEqual([
-      "add_lead_note",
-      "analyze_competitor",
-      "bulk_update_leads",
-      "cancel_job",
-      "export_leads",
-      "get_job",
-      "get_profile",
-      "lead_detail",
-      "list_leads",
-      "list_monitors",
-      "score_leads",
-      "set_lead_status",
-      "start_job",
-      "suppress",
-      "update_project",
-      "watch_competitor",
-    ]);
+    expect(tools).toEqual(
+      [
+        "add_account",
+        "add_lead_note",
+        "analyze_competitor",
+        "analyze_places",
+        "budget_plan",
+        "build_personas",
+        "bulk_update_leads",
+        "cancel_job",
+        "check_message",
+        "export_leads",
+        "get_job",
+        "get_profile",
+        "lead_detail",
+        "link_accounts",
+        "list_leads",
+        "list_monitors",
+        "list_places",
+        "places_to_leads",
+        "read_page",
+        "score_leads",
+        "search_places",
+        "set_deal",
+        "set_lead_status",
+        "similar_leads",
+        "source_performance",
+        "suggest_sources",
+        "train_model",
+        "start_job",
+        "suppress",
+        "update_project",
+        "watch_competitor",
+        "watch_site",
+        "weekly_plan",
+      ].sort(),
+    );
     const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();
     expect(prompts).toEqual(["audience_report", "find_partners"]);
   });
@@ -116,6 +135,12 @@ describe("MCP server over Streamable HTTP", () => {
     );
     const interested = await call("list_leads", { project: "عبر Claude", status: "interested" });
     expect(interested.structuredContent.count).toBe(2);
+    expect(
+      (await call("set_deal", { project: "عبر Claude", username: "user3", value: 400 }))
+        .structuredContent,
+    ).toEqual({ recorded: true });
+    const perf = await call("source_performance", { project: "عبر Claude" });
+    expect(perf.structuredContent.totals).toMatchObject({ revenue: 400, customers: 1 });
   });
 
   it("reports bad input as tool errors, not crashes", async () => {

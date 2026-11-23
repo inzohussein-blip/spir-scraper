@@ -46,6 +46,19 @@ export interface LeadQuery {
   minSources?: number;
   /** Words to look for in the username, name and bio. */
   q?: string;
+  /** Words and phrases with the asked meaning, in Arabic and English (any may match). */
+  terms?: string[];
+  /** Audience segment name, when the question names one. */
+  persona?: string;
+  /** rising | became_business */
+  signal?: string;
+}
+
+/** An audience segment found in a project's bios. */
+export interface Persona {
+  name: string;
+  description: string;
+  keywords: string[];
 }
 
 /** What the competitor brief is written from. */
@@ -73,6 +86,13 @@ export interface Scorer {
   report?(stats: AudienceStats, criteria: string): Promise<string>;
   /** Turns an Arabic or English question into lead filters. */
   parseQuery?(question: string): Promise<LeadQuery>;
+  /** Audience segments in a sample of bios, each with words that mark it. */
+  personas?(
+    sample: { username: string; bio: string | null; category: string | null }[],
+    criteria: string,
+  ): Promise<Persona[]>;
+  /** The weekly plan in Arabic, written from the numbers given. */
+  weeklyBrief?(data: unknown): Promise<string>;
   /** A short Arabic brief on a competitor with content ideas. */
   competitorBrief?(input: CompetitorBriefInput, criteria: string): Promise<string>;
 }

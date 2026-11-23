@@ -1,3 +1,4 @@
+import { escapeHtml } from "@scrapers/runtime";
 import { buildBackup } from "@/lib/backup";
 import { isCronRequest } from "@/lib/drain";
 import { getRuntime } from "@/lib/runtime";
@@ -29,7 +30,42 @@ export async function GET(req: Request) {
   const monitorJobs = await step("monitors", () => rt.scrapers.runDueMonitors(), [] as string[]);
   const competitors = await step("competitors", () => rt.scrapers.snapshotCompetitors(), null);
   const followUps = await step("follow-ups", () => rt.scrapers.sendDueFollowUps(), 0);
+  const accountsRead = await step("accounts", () => rt.scrapers.refreshPendingAccounts(), 0);
+  const placesRead = await step(
+    "places",
+    async () => {
+      let n = 0;
+      for (const p of await rt.scrapers.listProjects())
+        n += (await rt.scrapers.analyzePlaces(p.id, 20)).analyzed;
+      return n;
+    },
+    0,
+  );
+  const sites = await step("sites", () => rt.scrapers.checkSiteWatches(), null);
   const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
+  // The weekly analyst: a plan per project, applied only when the owner approves it.
+  const plans = weekly
+    ? await step(
+        "plans",
+        async () => {
+          const usage = await rt.apifyUsage().catch(() => null);
+          const budget = usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5;
+          const sent: string[] = [];
+          for (const p of await rt.scrapers.listProjects()) {
+            const plan = await rt.scrapers.weeklyPlan(p.id, budget);
+            sent.push(plan.id);
+            await rt.telegram?.sendText(
+              escapeHtml(plan.text),
+              plan.changes
+                ? [{ text: "✅ وافق على تغييرات الميزانية", data: `plan:${plan.id}` }]
+                : undefined,
+            );
+          }
+          return sent;
+        },
+        [] as string[],
+      )
+    : [];
   let backupSent = false;
   if (weekly && rt.telegram) {
     // The weekly backup goes to the owner's Telegram chat: free and off-site.
@@ -64,7 +100,11 @@ export async function GET(req: Request) {
     monitorJobs,
     competitors,
     followUps,
+    accountsRead,
+    placesRead,
+    sites,
     weeklySent: !!weekly,
+    plans,
     backupSent,
   });
 }

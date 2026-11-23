@@ -21,6 +21,7 @@ const fail = (msg) => {
 // ---------- local site + fake model + fake platform ----------
 
 const saved = [];
+const linked = [];
 const modelRequests = [];
 
 const profileHtml = `<!doctype html><html><head>
@@ -199,6 +200,20 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.url?.startsWith("/api/v1/profiles/"))
     return send(404, { error: "Profile not collected" });
+  if (req.url === "/api/v1/compliance/check" && req.method === "POST") {
+    const { text } = JSON.parse(body);
+    return send(200, {
+      ok: true,
+      issues:
+        /تداول/.test(text) && !/مخاطر/.test(text)
+          ? [{ severity: "warn", match: "التداول", message: "أضف تنبيه مخاطر" }]
+          : [],
+    });
+  }
+  if (req.url === "/api/v1/accounts" && req.method === "POST") {
+    linked.push(JSON.parse(body));
+    return send(200, { account: { platform: "tiktok", handle: "goldcoach" } });
+  }
   if (req.url === "/api/v1/jobs" && req.method === "POST") {
     if (req.headers.authorization !== "Bearer sk_test") return send(401, { error: "bad key" });
     const j = JSON.parse(body);
@@ -243,7 +258,11 @@ try {
   panel.on("pageerror", (e) => errors.push(e.message));
 
   // First run: no settings yet, so the settings tab shows.
-  if (await panel.locator("#setup").isHidden()) fail("setup notice not shown without settings");
+  // The panel reads its settings asynchronously: wait for the notice rather than sampling it.
+  await panel
+    .locator("#setup")
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => fail("setup notice not shown without settings"));
   step("asks for settings on first run");
 
   await panel.evaluate((s) => chrome.storage.local.set({ settings: s }), {
@@ -299,9 +318,18 @@ try {
   const wa = await panel.getAttribute("#whatsapp", "data-href");
   if (!wa?.startsWith("https://wa.me/966501234567?text=")) fail(`WhatsApp link: ${wa}`);
   if (!modelRequests.at(-1).messages[1].content.includes("شراكة وكالة")) fail("offer missing");
+  await panel
+    .locator("#compliance")
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => fail("compliance notes not shown for a trading message without a risk warning"));
+  if (!(await panel.textContent("#compliance"))?.includes("أضف تنبيه مخاطر"))
+    fail("compliance text");
   step("manual: scores with the project's criteria and drafts a message with a WhatsApp link");
 
-  if (await panel.locator("#update").isHidden()) fail("update notice not shown for a newer build");
+  await panel
+    .locator("#update")
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .catch(() => fail("update notice not shown for a newer build"));
   step("shows a notice when the dashboard has a newer build");
 
   // Manual: open the followers list and scroll by hand while collecting.
@@ -353,6 +381,32 @@ try {
   if (JSON.stringify(saved.slice(before).sort()) !== JSON.stringify(["buyer_1", "buyer_3"]))
     fail(`expected the two interested commenters, got ${saved.slice(before)}`);
   step("manual: reads a post's commenters and saves the interested ones");
+
+  // An account on another platform (a stand-in TikTok page), linked to a lead.
+  await context.route("https://www.tiktok.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body: `<!doctype html><html><head><title>Gold Coach (@goldcoach) | TikTok</title>
+        <meta property="og:description" content="تداول الذهب يومياً"></head><body><h1>goldcoach</h1></body></html>`,
+    }),
+  );
+  await site.goto("https://www.tiktok.com/@GoldCoach");
+  await panel.click("#readOther");
+  await panel.waitForFunction(() =>
+    document.querySelector("#otherOut")?.textContent?.includes("@goldcoach"),
+  );
+  if (!(await panel.textContent("#otherOut"))?.includes("تداول الذهب"))
+    fail("page description missing");
+  await panel.fill("#linkOtherUser", "@Acme");
+  panel.once("dialog", (d) => d.accept());
+  await panel.click('#linkOtherForm button[type="submit"]');
+  await panel.waitForTimeout(500);
+  if (
+    JSON.stringify(linked.at(-1)) !==
+    JSON.stringify({ username: "acme", url: "https://www.tiktok.com/@goldcoach" })
+  )
+    fail(`unexpected link request ${JSON.stringify(linked)}`);
+  step("manual: reads an account on another platform and links it to a lead");
   await site.goto(`${origin}/acme/`);
   saved.length = 0;
   await panel.click("#collectClear");

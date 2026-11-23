@@ -40,14 +40,45 @@ export const LeadQuerySchema = z.object({
   minFollowers: z.number().int().min(0).nullable(),
   maxFollowers: z.number().int().min(0).nullable(),
   minSources: z.number().int().min(1).nullable(),
-  q: z.string().nullable().describe("Keywords to find in the username, name or bio"),
+  q: z
+    .string()
+    .nullable()
+    .describe("An exact word or handle to find, only when the question quotes one"),
+  terms: z
+    .array(z.string())
+    .nullable()
+    .describe(
+      "When the question describes a kind of account (e.g. gold coaches), 6-15 short words and phrases in Arabic and English that such bios use, including Gulf/Egyptian spellings",
+    ),
+  persona: z.string().nullable().describe("One of the project's segment names, only if asked"),
+  signal: z
+    .enum(["rising", "became_business"])
+    .nullable()
+    .describe("rising = growing fast lately; became_business = recently switched to business"),
+});
+
+export const PersonasSchema = z.object({
+  personas: z
+    .array(
+      z.object({
+        name: z.string().describe("Short Arabic name, 2-4 words"),
+        description: z.string().describe("One Arabic sentence: who they are and why they matter"),
+        keywords: z
+          .array(z.string())
+          .describe(
+            "8-20 lower-case words or short phrases (Arabic and English) that mark this segment in bios",
+          ),
+      }),
+    )
+    .describe("3 to 8 segments that cover most accounts"),
 });
 
 const QUERY_SYSTEM = `You turn a marketer's question about their saved Instagram leads into filters.
 Fields: status (new=جديد, contacted=تواصلت, interested=مهتم, customer=عميل, rejected=مرفوض), minScore (AI fit 0-100),
 country (ISO alpha-2; Gulf countries are SA, AE, KW, QA, BH, OM), language, business (business account),
 hasEmail, hasPhone, minFollowers, maxFollowers, minSources (found in at least N competitors' audiences),
-q (words to search in the bio). Set only what the question asks for; everything else is null.
+q (an exact word or handle), terms (synonyms for a described kind of account), persona, signal.
+Prefer terms over q when the question describes a type of person. Set only what the question asks for; everything else is null.
 "Good" or "strong" leads mean minScore 70 unless a number is given.`;
 
 const SYSTEM = `You classify public Instagram profiles as potential business leads.
@@ -249,6 +280,56 @@ export class AnthropicScorer implements Scorer {
           content: `Marketer's goal: ${criteria || "general"}\n\nCompetitor data (JSON):\n${JSON.stringify(input)}`,
         },
       ],
+    });
+    if (res.stop_reason === "refusal") return "";
+    return res.content
+      .flatMap((b) => (b.type === "text" ? [b.text] : []))
+      .join("\n")
+      .trim();
+  }
+
+  async personas(
+    sample: { username: string; bio: string | null; category: string | null }[],
+    criteria: string,
+  ) {
+    const res = await this.client.messages.parse({
+      model: this.reportModel,
+      max_tokens: 8000,
+      system:
+        "You segment an Instagram audience for a marketer. From the bios given, find 3 to 8 segments that cover most " +
+        "accounts and matter for the marketer's goal. Each gets a short Arabic name, one Arabic sentence, and the words " +
+        "that mark it in bios (both Arabic and English, as people actually write them). Use only what the bios show.",
+      output_config: { effort: "medium", format: zodOutputFormat(PersonasSchema) },
+      messages: [
+        {
+          role: "user",
+          content: `Goal: ${criteria || "general"}\n\nBios (JSON):\n${JSON.stringify(
+            sample.map((s) => ({ u: s.username, c: s.category, b: (s.bio ?? "").slice(0, 200) })),
+          )}`,
+        },
+      ],
+    });
+    if (res.stop_reason === "refusal" || !res.parsed_output) return [];
+    return res.parsed_output.personas.map((p) => ({
+      ...p,
+      keywords: [...new Set(p.keywords.map((k) => k.trim().toLowerCase()).filter(Boolean))],
+    }));
+  }
+
+  async weeklyBrief(data: unknown): Promise<string> {
+    const res = await this.client.beta.messages.create({
+      model: this.reportModel,
+      max_tokens: 6000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "medium" },
+      system:
+        "You are the weekly analyst of a one-person lead-generation business (trading partners and clients, Arabic market). " +
+        "Write in Arabic, under 220 words, plain text for Telegram (no markdown tables). Use only the numbers given. " +
+        "Structure: one line on the week; what earned money and what did not; the budget changes proposed (they apply only " +
+        "if the owner approves); two or three concrete actions for the owner this week (who to contact first, what to post). " +
+        "Never promise returns.",
+      messages: [{ role: "user", content: `Data (JSON):\n${JSON.stringify(data)}` }],
     });
     if (res.stop_reason === "refusal") return "";
     return res.content

@@ -37,6 +37,67 @@ export interface RecentPost {
   url?: string | null;
 }
 
+/** What a connector reads about an account on another platform. */
+export interface RemoteAccount {
+  displayName: string | null;
+  bio: string | null;
+  /** Followers, subscribers or members. */
+  followers: number | null;
+  stats?: Record<string, unknown>;
+  /** Addresses of the person's other accounts found while reading (e.g. links on their website). */
+  links?: string[];
+}
+
+/**
+ * Reads public accounts on one platform through its official interface
+ * (YouTube Data API, Telegram Bot API, ...). One connector per platform.
+ */
+export interface Connector {
+  /** A Platform from extract/accounts (tiktok, youtube, telegram, ...). */
+  readonly platform: string;
+  /** Each read costs money (e.g. through Apify): only read when the owner asks. */
+  readonly paid?: boolean;
+  /** Throws AccountNotFoundError when the account does not exist or is private. */
+  getAccount(handle: string): Promise<RemoteAccount>;
+}
+
+/** A business from Google Maps as a provider returns it. */
+export interface RawPlace {
+  placeId: string;
+  name: string;
+  category?: string | null;
+  address?: string | null;
+  city?: string | null;
+  /** ISO 3166-1 alpha-2. */
+  country?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  rating?: number | null;
+  reviews?: number | null;
+  url?: string | null;
+}
+
+/** Searches Google Maps (e.g. through Apify). */
+export interface PlacesSearch {
+  /** Approximate USD per 1000 places. */
+  readonly placesCostPer1k: number;
+  searchPlaces(query: string, location: string, limit: number): Promise<RawPlace[]>;
+}
+
+/** Lists the accounts an Instagram account follows (e.g. through Apify). */
+export interface FollowingSource {
+  /** Approximate USD per 1000 accounts listed. */
+  readonly followingCostPer1k: number;
+  listFollowing(username: string, limit: number): Promise<string[]>;
+}
+
+export class AccountNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AccountNotFoundError";
+  }
+}
+
 export type ProviderId = "graph" | "apify" | "worker";
 
 export type SourceType = "profile" | "followers" | "post" | "hashtag" | "upload";

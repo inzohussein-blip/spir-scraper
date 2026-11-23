@@ -46,12 +46,21 @@ try {
   await page.click('button:has-text("تطبيق")');
   await page.waitForURL(/q=user12/);
   assert.equal(await rows.count(), 1);
-  await page.selectOption('select[aria-label="حالة @user12"]', "interested");
-  await page.waitForTimeout(1000);
+  // Wait for hydration so the change reaches the server action, then for the save to finish
+  // (the select is disabled while it runs) instead of a fixed pause.
+  await page.waitForSelector("html[data-ready]", { state: "attached" });
+  const statusSelect = page.locator('select[aria-label="حالة @user12"]');
+  const saved = page.waitForResponse((r) => r.request().method() === "POST" && r.ok());
+  await statusSelect.selectOption("interested");
+  await saved;
+  await statusSelect.waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => !document.querySelector('select[aria-label="حالة @user12"]')?.hasAttribute("disabled"),
+  );
   await page.goto(`${B}/leads?status=interested`);
   assert.equal(await page.locator("tbody tr").count(), 1);
   // Status chips show their label with the count.
-  assert.ok(await page.getByRole("link", { name: "مهتم 1" }).isVisible());
+  await page.getByRole("link", { name: "مهتم 1" }).waitFor({ timeout: 10_000 });
   step("search and CRM status");
 
   // Follow-up date (saved on change, kept after reload).
@@ -92,6 +101,39 @@ try {
   await page.waitForSelector("li >> text=طلب عرض الأسعار");
   step("lead page: history and notes");
 
+  await page.fill(
+    'input[aria-label="رابط حساب على منصة أخرى"]',
+    "https://www.tiktok.com/@gold.coach",
+  );
+  await page.click('button:has-text("أضف")');
+  await page.waitForSelector("text=أُضيف الحساب");
+  await page.waitForSelector("a:has-text('@gold.coach')");
+  step("lead page: an account on another platform");
+
+  // A closed deal shows up as revenue for the source that found the lead.
+  await page.fill('input[aria-label="قيمة الصفقة بالدولار"]', "750");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=سُجّلت الصفقة");
+  await page.goto(`${B}/insights`);
+  await page.waitForSelector("text=$750");
+  await page.waitForSelector("text=قائمة ملصقة");
+  step("deal value and revenue by source");
+
+  // The project's own model says how many more decisions it needs; the plan is written on demand.
+  await page.click('button:has-text("درّب النموذج الآن")');
+  await page.waitForSelector("text=يحتاج النموذج قرارات أكثر");
+  await page.click('button:has-text("اكتب الخطة الآن")');
+  await page.waitForSelector("text=خطة الأسبوع ·");
+  await page.waitForSelector("text=الميزانية الذكية");
+  step("own model, budget plan and weekly plan");
+
+  // A WhatsApp template that promises returns is refused.
+  await page.goto(`${B}/leads`);
+  await page.fill('textarea[name="template"]', "مرحباً {name}، أرباح مضمونة كل شهر!");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=قالب الرسالة لم يُحفظ");
+  step("compliance: a template promising returns is refused");
+
   await page.goto(`${B}/leads`);
   const download = page.waitForEvent("download");
   await page.click("text=Excel");
@@ -124,6 +166,22 @@ try {
   await page.waitForURL(/\/competitors\?u=rival7/);
   await page.waitForSelector("text=@rival7");
   step("competitor analysis");
+
+  // Google Maps needs Apify; without it the page says so instead of failing.
+  await page.goto(`${B}/places`);
+  await page.waitForSelector("text=APIFY_TOKEN");
+  step("businesses page without Apify");
+
+  // Shared from another app (Android share sheet → /share).
+  await page.goto(
+    `${B}/share?text=${encodeURIComponent("شوف https://www.instagram.com/user40/ 👌")}`,
+  );
+  await page.waitForSelector("text=غير محفوظ بعد");
+  await page.click('button:has-text("احفظ كعميل")');
+  await page.waitForSelector("text=بدأ الحفظ");
+  await page.goto(`${B}/share?url=${encodeURIComponent("https://www.tiktok.com/@gold.coach")}`);
+  await page.waitForSelector("text=اربطه بعميل");
+  step("share target: save an Instagram account, link another platform");
 
   // The browser extension is offered from the dashboard (built into public/downloads by the deploy).
   await page.goto(`${B}/extension`);

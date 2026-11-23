@@ -196,6 +196,11 @@ export class ProviderRouter {
     throw new NoProviderError(`Discovery failed: ${hint}`);
   }
 
+  /** Approximate USD cost of one result from this provider (0 when free or unknown). */
+  unitCost(id: ProviderId): number {
+    return (this.providers.find((p) => p.id === id)?.costPer1k ?? 0) / 1000;
+  }
+
   /** Rough USD cost of a job, shown before it runs. */
   estimateCost(source: Source, limit: number): number {
     let usd = 0;

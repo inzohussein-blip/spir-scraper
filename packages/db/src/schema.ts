@@ -52,6 +52,10 @@ export const projects = pgTable("projects", {
   watchKeywords: text("watch_keywords").array(),
   /** First-message template for WhatsApp links; {name} and {username} are filled in. */
   messageTemplate: text("message_template"),
+  /** Audience segments found by AI: name, description and the words that mark them. */
+  personas: jsonb("personas").$type<{ name: string; description: string; keywords: string[] }[]>(),
+  /** The prediction model trained on this project's outcomes (see core learn/model). */
+  model: jsonb("model").$type<Record<string, unknown>>(),
   /** Do not keep accounts with two or more fake-account signals and no contact. */
   skipFake: boolean("skip_fake").notNull().default(false),
   createdAt: createdAt(),
@@ -101,8 +105,16 @@ export const jobs = pgTable(
   ],
 );
 
+/** One real person or business, whatever platforms they are on. */
+export const people = pgTable("people", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdAt: createdAt(),
+});
+
 export const profiles = pgTable("profiles", {
   igUserId: text("ig_user_id").primaryKey(),
+  /** The person this Instagram account belongs to (see accounts for their other platforms). */
+  personId: uuid("person_id").references(() => people.id, { onDelete: "set null" }),
   username: text("username").notNull().unique(),
   fullName: text("full_name"),
   bio: text("bio"),
@@ -125,6 +137,10 @@ export const profiles = pgTable("profiles", {
   qualityFlags: text("quality_flags").array(),
   /** Main script of the name and bio: ar, fa, en, ... (heuristic). */
   language: text("language"),
+  /** Lower-cased username, name, category and bio, for trigram similarity search. */
+  searchText: text("search_text"),
+  /** Timing signals from the account's history, e.g. rising, became_business. */
+  signals: text("signals").array(),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
   fetchedBy: providerId("fetched_by").notNull(),
 });
@@ -162,6 +178,13 @@ export const leads = pgTable(
     statusAt: timestamp("status_at", { withTimezone: true }),
     /** When the owner wants to be reminded to follow up (cleared once reminded). */
     followUpAt: timestamp("follow_up_at", { withTimezone: true }),
+    /** What the deal was worth to the owner (deposit, commission...), set when it closes. */
+    dealValue: numeric("deal_value", { precision: 12, scale: 2 }),
+    /** Chance (0-100) it becomes a customer, by the model trained on the owner's outcomes. */
+    winProb: smallint("win_prob"),
+    /** The project's audience segment this account belongs to (see projects.personas). */
+    persona: text("persona"),
+    dealAt: timestamp("deal_at", { withTimezone: true }),
     /** Every source (competitor, post, hashtag) the account was found in for this project. */
     sources: text("sources").array(),
     /** Number of distinct sources; following several competitors signals interest. */
@@ -347,3 +370,108 @@ export const competitorSnapshots = pgTable(
 );
 
 export type LeadEvent = typeof leadEvents.$inferSelect;
+
+/** Each fetch of a profile, so growth and changes over time can be read. */
+export const profileSnapshots = pgTable(
+  "profile_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    profileId: text("profile_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    followers: integer("followers"),
+    following: integer("following"),
+    posts: integer("posts"),
+    isBusiness: boolean("is_business"),
+  },
+  (t) => [index("profile_snapshots_profile_idx").on(t.profileId, t.at.desc())],
+);
+
+/**
+ * A person's accounts on other platforms (TikTok, YouTube, Telegram, X, their
+ * website...). Found in their own bio or link, or added by the owner.
+ */
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    personId: uuid("person_id")
+      .notNull()
+      .references(() => people.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    handle: text("handle").notNull(),
+    url: text("url").notNull(),
+    /** bio_link (their own bio or link) | website (linked from their site) | manual (added by the owner) */
+    source: text("source").notNull(),
+    displayName: text("display_name"),
+    bio: text("bio"),
+    /** Followers, subscribers or members, whatever the platform counts. */
+    followers: integer("followers"),
+    /** Platform-specific numbers, e.g. videos and views for YouTube. */
+    stats: jsonb("stats").$type<Record<string, unknown>>(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+    error: text("error"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("accounts_platform_handle_uq").on(t.platform, t.handle),
+    index("accounts_person_idx").on(t.personId),
+  ],
+);
+
+export type Account = typeof accounts.$inferSelect;
+
+/** Businesses found on Google Maps for a project (shops, offices, training centers...). */
+export const places = pgTable(
+  "places",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    placeId: text("place_id").notNull(),
+    /** The search that found it, e.g. "مكتب صرافة · الرياض". */
+    query: text("query").notNull(),
+    name: text("name").notNull(),
+    category: text("category"),
+    address: text("address"),
+    city: text("city"),
+    country: char("country", { length: 2 }),
+    phone: text("phone"),
+    website: text("website"),
+    rating: numeric("rating", { precision: 2, scale: 1 }),
+    reviews: integer("reviews"),
+    url: text("url"),
+    /** Found on its website. */
+    instagram: text("instagram"),
+    emails: text("emails").array(),
+    analyzedAt: timestamp("analyzed_at", { withTimezone: true }),
+    /** When its Instagram account was sent to the project as a lead. */
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("places_project_place_uq").on(t.projectId, t.placeId),
+    index("places_project_idx").on(t.projectId, t.createdAt.desc()),
+  ],
+);
+
+export type Place = typeof places.$inferSelect;
+
+/** Competitor pages (prices, offers, partner terms) checked for changes. */
+export const siteWatches = pgTable("site_watches", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  url: text("url").notNull().unique(),
+  label: text("label"),
+  /** sha256 of the page's normalised text. */
+  lastHash: text("last_hash"),
+  lastText: text("last_text"),
+  lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+  lastChangedAt: timestamp("last_changed_at", { withTimezone: true }),
+  /** Lines added and removed at the last change. */
+  lastDiff: jsonb("last_diff").$type<{ added: string[]; removed: string[] }>(),
+  error: text("error"),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: createdAt(),
+});
+
+export type SiteWatch = typeof siteWatches.$inferSelect;

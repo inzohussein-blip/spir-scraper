@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
@@ -7,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as schema from "../src/schema.js";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
-const pg = new PGlite();
+const pg = new PGlite({ extensions: { pg_trgm } });
 const db = drizzle(pg, { schema });
 
 const inDays = (d: number) => new Date(Date.now() + d * 86_400_000);
@@ -70,6 +71,7 @@ describe("migrations", () => {
        where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname`,
     );
     expect(rows.map((r) => r.relname)).toEqual([
+      "accounts",
       "api_keys",
       "audit_log",
       "competitor_snapshots",
@@ -80,9 +82,13 @@ describe("migrations", () => {
       "leads",
       "monitors",
       "notifications",
+      "people",
+      "places",
+      "profile_snapshots",
       "profiles",
       "projects",
       "push_subscriptions",
+      "site_watches",
       "suppression",
     ]);
     expect(rows.every((r) => r.relrowsecurity)).toBe(true);

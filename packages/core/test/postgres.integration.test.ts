@@ -101,6 +101,11 @@ describe.skipIf(!url)("on real Postgres", () => {
       await scrapers.setLeadStatus({ projectId, username: "user2", status: "contacted" }),
     ).toBe(true);
     expect(await scrapers.leadStatusCounts(projectId)).toMatchObject({ contacted: 1 });
+    // Raw SQL report through postgres.js (rows come back as an array here).
+    expect(await scrapers.setDeal({ projectId, username: "user2", value: 250 })).toBe(true);
+    const perf = await scrapers.sourcePerformance(projectId);
+    expect(perf.totals).toMatchObject({ revenue: 250, customers: 1 });
+    expect(perf.sources[0]).toMatchObject({ customers: 1, revenue: 250 });
     await scrapers.suppress("phone", "+966501000004");
     expect((await scrapers.listLeads({ projectId })).map((l) => l.username)).not.toContain("user4");
   });

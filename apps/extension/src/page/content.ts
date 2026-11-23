@@ -302,6 +302,15 @@ function handle(req: PageRequest): PageResponse {
       return { ok: true, data: clearCollect() };
     case "post_comments":
       return { ok: true, data: postComments() };
+    case "page_meta":
+      return {
+        ok: true,
+        data: {
+          url: location.href,
+          title: meta("og:title") || document.title || null,
+          description: meta("og:description") || meta("description") || null,
+        },
+      };
   }
 }
 

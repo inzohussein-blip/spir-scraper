@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   type AnyDb,
+  accounts,
   apiKeys,
   auditLog,
   competitorSnapshots,
@@ -12,9 +13,13 @@ import {
   leads,
   monitors,
   notifications,
+  people,
+  places,
+  profileSnapshots,
   profiles,
   projects,
   pushSubscriptions,
+  siteWatches,
   suppression,
 } from "@scrapers/db";
 import {
@@ -36,20 +41,47 @@ import {
 } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 import {
+  type AccountRef,
   analyzePosts,
+  assignPersona,
   createMxChecker,
   detectLanguage,
   fetchLinkPage,
   growthPercent,
+  linkedAccounts,
+  normalizePageText,
+  pageDiff,
+  parseAccountUrl,
   profileChanges,
   profileQuality,
   type ResolveDeps,
   resolveContact,
+  risingSignal,
+  searchTextOf,
 } from "../extract/index.js";
+import { type BudgetLine, planBudget } from "../learn/budget.js";
+import {
+  auc,
+  explainModel,
+  type LeadFeatures,
+  MIN_LABELLED,
+  MIN_POSITIVES,
+  predictWin,
+  type TrainedModel,
+  trainModel,
+} from "../learn/model.js";
 import { type NotificationInput, type NotificationSink, redactSecrets } from "../notify.js";
 import type { AudienceStats, LeadQuery, LeadScore, Scorer, ScoringInput } from "../scoring.js";
 import { type SuppressionKind, suppressionHash } from "../suppression.js";
-import { NotFoundError, type RawProfile, type Source } from "../types.js";
+import {
+  AccountNotFoundError,
+  type Connector,
+  type FollowingSource,
+  NotFoundError,
+  type PlacesSearch,
+  type RawProfile,
+  type Source,
+} from "../types.js";
 import { NoProviderError, type ProviderRouter } from "./router.js";
 
 export const QUEUES = {
@@ -100,6 +132,16 @@ export interface LeadFilters {
   minSources?: number;
   minFollowers?: number;
   maxFollowers?: number;
+  /** Audience segment (see buildPersonas). */
+  persona?: string;
+  /** A timing signal such as rising or became_business. */
+  signal?: string;
+  /** Words or phrases with the same meaning; a lead matches any of them. */
+  terms?: string[];
+  /** Has an account on this other platform (youtube, telegram, tiktok, website...). */
+  platform?: string;
+  /** Model's chance of becoming a customer at least this high (0-100). */
+  minWinProb?: number;
   limit?: number;
   offset?: number;
   /** Opaque cursor from a previous page (keyset pagination). */
@@ -145,6 +187,12 @@ export interface LeadRow {
   sourceCount?: number;
   country?: string | null;
   language?: string | null;
+  /** Value of the closed deal, when recorded. */
+  dealValue?: number | null;
+  /** Chance (0-100) it becomes a customer, by the project's own model. */
+  winProb?: number | null;
+  persona?: string | null;
+  signals?: string[] | null;
 }
 
 /** Lead statuses in Arabic, for reminders. */
@@ -183,6 +231,14 @@ export function createScrapers(deps: {
   resolve?: ResolveDeps;
   /** Called when a finished job (scored, if the project has AI criteria) is ready to export. */
   onReadyToExport?: (jobId: string) => Promise<void>;
+  /** Readers for other platforms (YouTube, Telegram...), one per platform. */
+  connectors?: Connector[];
+  /** Google Maps search (Apify). */
+  places?: PlacesSearch;
+  /** Who an account follows (Apify), for finding new sources from the best customers. */
+  following?: FollowingSource;
+  /** Reads one public web page (for watching competitor sites). */
+  readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
 }) {
   const { db, boss, router, config, scorer } = deps;
   const sinks = deps.sinks ?? [];
@@ -191,6 +247,7 @@ export function createScrapers(deps: {
     checkEmail: createMxChecker(),
   };
   const cacheDays = config.profileCacheDays ?? 30;
+  const connectors = new Map((deps.connectors ?? []).map((c) => [c.platform, c]));
   const pepper = config.suppressionPepper;
 
   // ---- small shared stores (serverless-safe) ----
@@ -290,6 +347,15 @@ export function createScrapers(deps: {
     return row;
   }
   const maxLimit = config.maxJobLimit ?? 1000;
+
+  /** Adds what a step cost (estimated from the provider's price per result) to the job. */
+  async function addCost(jobId: string, usd: number) {
+    if (!(usd > 0)) return;
+    await db
+      .update(jobs)
+      .set({ costUsd: sql`${jobs.costUsd} + ${usd.toFixed(4)}::numeric` })
+      .where(eq(jobs.id, jobId));
+  }
 
   async function bump(jobId: string, delta: Record<string, number>) {
     const parts = Object.entries(delta)
@@ -411,14 +477,49 @@ export function createScrapers(deps: {
       engagementRate: quality.engagementRate === null ? null : String(quality.engagementRate),
       qualityFlags: quality.flags.length ? quality.flags : null,
       language: detectLanguage(`${p.fullName ?? ""} ${p.bio ?? ""}`),
+      searchText: searchTextOf(p),
       fetchedAt: new Date(),
       fetchedBy,
     };
+    // Every fetch is kept as a snapshot, so growth over time can be read.
+    await db.insert(profileSnapshots).values({
+      profileId: p.igUserId,
+      followers: values.followers,
+      following: values.following,
+      posts: values.posts,
+      isBusiness: values.isBusiness,
+    });
+    const history = await db
+      .select({ at: profileSnapshots.at, followers: profileSnapshots.followers })
+      .from(profileSnapshots)
+      .where(
+        and(
+          eq(profileSnapshots.profileId, p.igUserId),
+          gte(profileSnapshots.at, new Date(Date.now() - 120 * 86_400_000)),
+        ),
+      )
+      .orderBy(profileSnapshots.at);
+    const rise = risingSignal(history);
+    const signals = [
+      ...(rise.rising ? ["rising"] : []),
+      ...(before && !before.isBusiness && p.isBusiness ? ["became_business"] : []),
+    ];
+    // Every Instagram account belongs to a person; their other platforms hang off the person.
+    let personId = before?.personId ?? null;
+    if (!personId) {
+      const [person] = await db.insert(people).values({}).returning({ id: people.id });
+      personId = person?.id ?? null;
+    }
+    const row = { ...values, personId, signals: signals.length ? signals : null };
     await db
       .insert(profiles)
-      .values(values)
-      .onConflictDoUpdate({ target: profiles.igUserId, set: values });
-    return before ? profileChanges(before, values) : [];
+      .values(row)
+      .onConflictDoUpdate({ target: profiles.igUserId, set: row });
+    if (personId) await linkAccounts(personId, linkedAccounts(p.bio, p.externalUrl), "bio_link");
+    const changes = before ? profileChanges(before, values) : [];
+    if (rise.rising && !before?.signals?.includes("rising"))
+      changes.push(`ينمو بسرعة (+${rise.percent}% خلال ${rise.days} يوماً)`);
+    return changes;
   }
 
   async function handleDiscover(payload: DiscoverPayload) {
@@ -438,6 +539,7 @@ export function createScrapers(deps: {
         const found = await router.listEngagers(source, job.limit);
         usernames = found.usernames;
         await db.update(jobs).set({ provider: found.provider }).where(eq(jobs.id, job.id));
+        await addCost(job.id, router.unitCost(found.provider) * usernames.length);
       }
     } catch (err) {
       await db
@@ -538,6 +640,7 @@ export function createScrapers(deps: {
     }
 
     const delta = { enriched: 0, leads: 0, skipped: 0, failed: 0, cached: 0 };
+    let costUsd = 0;
     const watchHits: string[] = [];
     const changed: string[] = [];
     let deferred: string[] = [];
@@ -574,6 +677,7 @@ export function createScrapers(deps: {
           const fetched = await router.getProfile(username);
           profile = fetched.profile;
           provider = fetched.provider;
+          costUsd += router.unitCost(provider);
           quality = profileQuality(profile);
         } catch (err) {
           if (err instanceof NotFoundError) {
@@ -607,7 +711,27 @@ export function createScrapers(deps: {
         delta.skipped++;
         continue;
       }
+      const projectModel = (project.model as TrainedModel | null) ?? null;
       const leadValues = {
+        ...(projectModel
+          ? {
+              winProb: predictWin(projectModel, {
+                followers: profile.followers ?? null,
+                engagementRate: quality.engagementRate,
+                sourceCount: 1,
+                isBusiness: profile.isBusiness,
+                hasEmail: !!contact.email,
+                hasPhone: !!phone,
+                aiScore: null,
+                arabic: detectLanguage(`${profile.fullName ?? ""} ${profile.bio ?? ""}`) === "ar",
+                rising: false,
+                qualityFlags: quality.flags.length,
+              }),
+            }
+          : {}),
+        ...(project.personas?.length
+          ? { persona: assignPersona(searchTextOf(profile), project.personas) }
+          : {}),
         jobId: job.id,
         email: contact.email,
         phoneE164: contact.phoneE164,
@@ -653,6 +777,7 @@ export function createScrapers(deps: {
     }
 
     await bump(job.id, delta);
+    await addCost(job.id, costUsd);
     await saveRouterState();
     if (deferred.length > 0) {
       const waitSeconds = Math.ceil(router.nextAvailableIn("profile") / 1000) + 5;
@@ -760,7 +885,156 @@ export function createScrapers(deps: {
       );
     await db.delete(ephemeral).where(lt(ephemeral.expiresAt, now));
     await db.delete(counters).where(lt(counters.expiresAt, now));
+    // A year of history is enough to read growth.
+    await db
+      .delete(profileSnapshots)
+      .where(lt(profileSnapshots.at, new Date(now.getTime() - 365 * 86_400_000)));
     await collectPendingScores();
+  }
+
+  /**
+   * Attaches accounts to a person. An account already attached to someone
+   * else stays where it is (two people never share an account).
+   */
+  async function linkAccounts(
+    personId: string,
+    refs: AccountRef[],
+    source: "bio_link" | "manual" | "website",
+  ) {
+    const own = refs.filter((r) => !(r.platform === "instagram"));
+    if (own.length === 0) return [];
+    return db
+      .insert(accounts)
+      .values(
+        own.map((r) => ({ personId, platform: r.platform, handle: r.handle, url: r.url, source })),
+      )
+      .onConflictDoNothing({ target: [accounts.platform, accounts.handle] })
+      .returning({ id: accounts.id, platform: accounts.platform });
+  }
+
+  /** Reads an account through its platform's connector and stores what it found. */
+  async function refreshAccount(id: string) {
+    const [acc] = await db.select().from(accounts).where(eq(accounts.id, id));
+    if (!acc) return null;
+    const connector = connectors.get(acc.platform);
+    if (!connector) return acc;
+    try {
+      const r = await connector.getAccount(acc.handle);
+      // Accounts the person links from there (e.g. their website's social icons) are theirs too.
+      if (r.links?.length)
+        await linkAccounts(
+          acc.personId,
+          r.links.map((l) => parseAccountUrl(l)).filter((x): x is AccountRef => !!x),
+          "website",
+        );
+      const [updated] = await db
+        .update(accounts)
+        .set({
+          displayName: r.displayName,
+          bio: r.bio?.slice(0, 2000) ?? null,
+          followers: r.followers,
+          stats: r.stats ?? null,
+          fetchedAt: new Date(),
+          error: null,
+        })
+        .where(eq(accounts.id, id))
+        .returning();
+      return updated ?? acc;
+    } catch (err) {
+      const message =
+        err instanceof AccountNotFoundError
+          ? "غير موجود أو خاص"
+          : (err as Error).message.slice(0, 300);
+      const [updated] = await db
+        .update(accounts)
+        .set({ error: message, fetchedAt: new Date() })
+        .where(eq(accounts.id, id))
+        .returning();
+      return updated ?? acc;
+    }
+  }
+
+  /** What the model reads for every lead of a project, with its outcome when known. */
+  async function projectFeatures(projectId: string) {
+    const rows = await db
+      .select({
+        id: leads.id,
+        status: leads.status,
+        aiScore: leads.aiScore,
+        sourceCount: leads.sourceCount,
+        email: leads.email,
+        phone: sql<string | null>`coalesce(${leads.phoneE164}, ${leads.phoneRaw})`,
+        followers: profiles.followers,
+        engagementRate: profiles.engagementRate,
+        isBusiness: profiles.isBusiness,
+        language: profiles.language,
+        signals: profiles.signals,
+        qualityFlags: profiles.qualityFlags,
+      })
+      .from(leads)
+      .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+      .where(eq(leads.projectId, projectId))
+      .limit(50_000);
+    return rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      aiScore: r.aiScore,
+      features: {
+        followers: r.followers,
+        engagementRate: r.engagementRate === null ? null : Number(r.engagementRate),
+        sourceCount: r.sourceCount,
+        isBusiness: r.isBusiness,
+        hasEmail: !!r.email,
+        hasPhone: !!r.phone,
+        aiScore: r.aiScore,
+        arabic: r.language === "ar",
+        rising: !!r.signals?.includes("rising"),
+        qualityFlags: r.qualityFlags?.length ?? 0,
+      } satisfies LeadFeatures,
+    }));
+  }
+
+  /** Customers and interested leads are wins; rejected ones are losses; the rest are unknown. */
+  const outcomeOf = (status: string): 0 | 1 | null =>
+    status === "customer" || status === "interested" ? 1 : status === "rejected" ? 0 : null;
+
+  /** Puts every lead of the project in the persona whose words it uses most. */
+  async function assignPersonas(
+    projectId: string,
+    personas: { name: string; keywords: string[] }[],
+  ): Promise<number> {
+    const rows = await db
+      .select({
+        id: leads.id,
+        text: profiles.searchText,
+        username: profiles.username,
+        bio: profiles.bio,
+      })
+      .from(leads)
+      .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+      .where(eq(leads.projectId, projectId))
+      .limit(50_000);
+    const groups = new Map<string | null, string[]>();
+    for (const r of rows) {
+      const name = assignPersona(
+        r.text ?? searchTextOf({ username: r.username, bio: r.bio }),
+        personas,
+      );
+      const ids = groups.get(name) ?? [];
+      ids.push(r.id);
+      groups.set(name, ids);
+    }
+    let assigned = 0;
+    for (const [name, ids] of groups) {
+      for (let i = 0; i < ids.length; i += 1000) {
+        await db
+          .update(leads)
+          .set({ persona: name })
+          .where(inArray(leads.id, ids.slice(i, i + 1000)));
+      }
+      if (name) assigned += ids.length;
+    }
+    return assigned;
   }
 
   /**
@@ -862,6 +1136,25 @@ export function createScrapers(deps: {
     if (f.minSources) conds.push(gte(leads.sourceCount, f.minSources));
     if (f.minFollowers !== undefined) conds.push(gte(profiles.followers, f.minFollowers));
     if (f.maxFollowers !== undefined) conds.push(lte(profiles.followers, f.maxFollowers));
+    if (f.persona) conds.push(eq(leads.persona, f.persona));
+    if (f.minWinProb !== undefined) conds.push(gte(leads.winProb, f.minWinProb));
+    if (f.platform)
+      conds.push(
+        sql`exists (select 1 from ${accounts} a where a.person_id = ${profiles.personId} and a.platform = ${f.platform})`,
+      );
+    if (f.signal) conds.push(sql`${profiles.signals} @> array[${f.signal}]::text[]`);
+    const terms = (f.terms ?? []).map((t) => t.trim().toLowerCase()).filter((t) => t.length > 1);
+    if (terms.length)
+      conds.push(
+        or(
+          ...terms
+            .slice(0, 20)
+            .map(
+              (t) =>
+                sql`(${profiles.searchText} ilike ${`%${t.replace(/[%_\\]/g, (m) => `\\${m}`)}%`} or word_similarity(${t}, ${profiles.searchText}) > 0.6)`,
+            ),
+        ),
+      );
     if (f.q?.trim()) {
       const like = `%${f.q.trim().replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
       conds.push(
@@ -902,6 +1195,10 @@ export function createScrapers(deps: {
       followUpAt: lead.followUpAt,
       sources: lead.sources,
       sourceCount: lead.sourceCount,
+      dealValue: lead.dealValue === null ? null : Number(lead.dealValue),
+      winProb: lead.winProb,
+      persona: lead.persona,
+      signals: profile.signals,
       country: lead.country,
       language: profile.language,
       aiScore: lead.aiScore,
@@ -1234,6 +1531,941 @@ export function createScrapers(deps: {
       return updated.length > 0;
     },
 
+    /**
+     * Records a closed deal: the lead becomes a customer and its value is
+     * credited to every source it was found in (see sourcePerformance).
+     * A null value clears the deal.
+     */
+    async setDeal(input: { projectId: string; username: string; value: number | null; at?: Date }) {
+      const u = input.username.trim().replace(/^@/, "").toLowerCase();
+      const [profile] = await db
+        .select({ id: profiles.igUserId })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      if (!profile) return false;
+      const value = input.value === null ? null : Math.max(0, Math.round(input.value * 100) / 100);
+      const at = input.at ?? new Date();
+      const updated = await db
+        .update(leads)
+        .set(
+          value === null
+            ? { dealValue: null, dealAt: null }
+            : {
+                dealValue: value.toFixed(2),
+                dealAt: at,
+                status: "customer",
+                statusAt: sql`coalesce(${leads.statusAt}, ${at.toISOString()}::timestamptz)`,
+                followUpAt: null,
+              },
+        )
+        .where(and(eq(leads.projectId, input.projectId), eq(leads.profileId, profile.id)))
+        .returning({ id: leads.id });
+      if (updated[0])
+        await db.insert(leadEvents).values({
+          leadId: updated[0].id,
+          kind: "status",
+          text: value === null ? "أُلغيت الصفقة" : `صفقة بقيمة ${value.toLocaleString("en")}$`,
+        });
+      return updated.length > 0;
+    },
+
+    /**
+     * What each source (competitor followers, post, hashtag, upload) brought:
+     * accounts, contacts, how far they got, deals and their value, cost, and
+     * return. A lead found in several sources counts in each; its deal value
+     * is split evenly between them so totals add up.
+     */
+    async sourcePerformance(projectId: string, opts: { since?: Date } = {}) {
+      const since = opts.since
+        ? sql`and l.created_at >= ${opts.since.toISOString()}::timestamptz`
+        : sql``;
+      const res = await db.execute<{
+        source: string;
+        leads: number;
+        contact: number;
+        reached: number;
+        interested: number;
+        customers: number;
+        revenue: string | null;
+        days_to_close: string | null;
+      }>(sql`
+        select src as source,
+               count(*)::int as leads,
+               count(*) filter (where l.email is not null or l.phone_e164 is not null or l.phone_raw is not null)::int as contact,
+               count(*) filter (where l.status <> 'new')::int as reached,
+               count(*) filter (where l.status in ('interested', 'customer'))::int as interested,
+               count(*) filter (where l.status = 'customer')::int as customers,
+               sum(l.deal_value / greatest(l.source_count, 1)) as revenue,
+               avg(extract(epoch from (l.deal_at - l.created_at)) / 86400) filter (where l.deal_at is not null) as days_to_close
+        from ${leads} l
+        cross join lateral unnest(coalesce(l.sources, '{}'::text[])) as src
+        where l.project_id = ${projectId}::uuid ${since}
+        group by src`);
+      const rows = (Array.isArray(res) ? res : (res as { rows: unknown[] }).rows) as {
+        source: string;
+        leads: number;
+        contact: number;
+        reached: number;
+        interested: number;
+        customers: number;
+        revenue: string | null;
+        days_to_close: string | null;
+      }[];
+      const costs = await db
+        .select({
+          source: jobs.sourceUrl,
+          cost: sql<string>`sum(${jobs.costUsd})`,
+          runs: sql<number>`count(*)::int`,
+        })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.projectId, projectId),
+            opts.since ? gte(jobs.createdAt, opts.since) : undefined,
+          ),
+        )
+        .groupBy(jobs.sourceUrl);
+      const costBy = new Map(
+        costs.map((c) => [c.source, { cost: Number(c.cost ?? 0), runs: c.runs }]),
+      );
+      const out = rows.map((r) => {
+        const revenue = Math.round(Number(r.revenue ?? 0) * 100) / 100;
+        const cost = Math.round((costBy.get(r.source)?.cost ?? 0) * 10000) / 10000;
+        return {
+          source: r.source,
+          runs: costBy.get(r.source)?.runs ?? 0,
+          leads: Number(r.leads),
+          contact: Number(r.contact),
+          reached: Number(r.reached),
+          interested: Number(r.interested),
+          customers: Number(r.customers),
+          revenue,
+          costUsd: cost,
+          /** Revenue per dollar spent; null when nothing was spent. */
+          roi: cost > 0 ? Math.round((revenue / cost) * 10) / 10 : null,
+          /** Share of reached accounts that became customers, in percent. */
+          closeRate:
+            Number(r.reached) > 0
+              ? Math.round((Number(r.customers) / Number(r.reached)) * 1000) / 10
+              : null,
+          costPerCustomer:
+            Number(r.customers) > 0 ? Math.round((cost / Number(r.customers)) * 100) / 100 : null,
+          daysToClose:
+            r.days_to_close === null ? null : Math.round(Number(r.days_to_close) * 10) / 10,
+        };
+      });
+      out.sort((a, b) => b.revenue - a.revenue || b.customers - a.customers || b.leads - a.leads);
+      const total = out.reduce(
+        (t, r) => ({ revenue: t.revenue + r.revenue, costUsd: t.costUsd + r.costUsd }),
+        { revenue: 0, costUsd: 0 },
+      );
+      const [deals] = await db
+        .select({
+          customers: sql<number>`count(*) filter (where ${leads.status} = 'customer')::int`,
+          withValue: sql<number>`count(*) filter (where ${leads.dealValue} is not null)::int`,
+        })
+        .from(leads)
+        .where(eq(leads.projectId, projectId));
+      return {
+        sources: out,
+        totals: {
+          revenue: Math.round(total.revenue * 100) / 100,
+          costUsd: Math.round(total.costUsd * 10000) / 10000,
+          customers: deals?.customers ?? 0,
+          /** Customers whose deal value is recorded; the report is only as good as this. */
+          customersWithValue: deals?.withValue ?? 0,
+        },
+      };
+    },
+
+    /**
+     * Accounts in the project that read most like this one (name, category and
+     * bio, by trigram similarity): "find more like my best customer".
+     */
+    async similarLeads(projectId: string, username: string, limit = 10) {
+      const u = username.replace(/^@/, "").toLowerCase();
+      const [seed] = await db
+        .select({ id: profiles.igUserId, text: profiles.searchText, bio: profiles.bio })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      if (!seed) return [];
+      const text = seed.text ?? searchTextOf({ username: u, bio: seed.bio });
+      const score = sql<number>`similarity(${profiles.searchText}, ${text})`;
+      const rows = await db
+        .select({
+          username: profiles.username,
+          fullName: profiles.fullName,
+          followers: profiles.followers,
+          status: leads.status,
+          aiScore: leads.aiScore,
+          persona: leads.persona,
+          similarity: score,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(
+          and(
+            eq(leads.projectId, projectId),
+            ne(leads.profileId, seed.id),
+            // Measured: same-topic bios score 0.2-0.3, unrelated ones about 0.1.
+            sql`${score} > 0.15`,
+          ),
+        )
+        .orderBy(desc(score))
+        .limit(Math.min(limit, 50));
+      return rows.map((r) => ({ ...r, similarity: Math.round(Number(r.similarity) * 100) / 100 }));
+    },
+
+    /**
+     * Finds the project's audience segments with AI (from a sample of bios),
+     * saves them, and assigns every lead to the segment whose words it uses.
+     */
+    async buildPersonas(projectId: string) {
+      if (!scorer?.personas)
+        throw new ScoringUnavailableError("Audience segments need ANTHROPIC_API_KEY");
+      const project = await this.getProject(projectId);
+      if (!project) throw new Error("Project not found");
+      const sample = await db
+        .select({ username: profiles.username, bio: profiles.bio, category: profiles.category })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(and(eq(leads.projectId, projectId), isNotNull(profiles.bio)))
+        .orderBy(sql`random()`)
+        .limit(150);
+      if (sample.length < 5) throw new Error("نحتاج 5 حسابات على الأقل لها بايو");
+      const personas = (await scorer.personas(sample, project.aiCriteria ?? "")).slice(0, 8);
+      await db.update(projects).set({ personas }).where(eq(projects.id, projectId));
+      const assigned = await assignPersonas(projectId, personas);
+      return { personas, assigned };
+    },
+
+    /** Leads, customers and revenue per audience segment. */
+    async personaPerformance(projectId: string) {
+      const rows = await db
+        .select({
+          persona: leads.persona,
+          leads: sql<number>`count(*)::int`,
+          reached: sql<number>`count(*) filter (where ${leads.status} <> 'new')::int`,
+          customers: sql<number>`count(*) filter (where ${leads.status} = 'customer')::int`,
+          revenue: sql<string>`coalesce(sum(${leads.dealValue}), 0)`,
+        })
+        .from(leads)
+        .where(and(eq(leads.projectId, projectId), isNotNull(leads.persona)))
+        .groupBy(leads.persona);
+      return rows
+        .map((r) => ({
+          persona: r.persona as string,
+          leads: Number(r.leads),
+          reached: Number(r.reached),
+          customers: Number(r.customers),
+          revenue: Number(r.revenue),
+          closeRate:
+            Number(r.reached) > 0
+              ? Math.round((Number(r.customers) / Number(r.reached)) * 1000) / 10
+              : null,
+        }))
+        .sort((a, b) => b.revenue - a.revenue || b.customers - a.customers || b.leads - a.leads);
+    },
+
+    /** Whether Google Maps search is configured (needs APIFY_TOKEN). */
+    get placesAvailable() {
+      return !!deps.places;
+    },
+
+    /**
+     * Searches Google Maps and keeps the businesses in the project (a business
+     * found again is updated, not duplicated). The cost is estimated from the
+     * provider's price and returned.
+     */
+    async searchPlaces(input: {
+      projectId: string;
+      query: string;
+      location: string;
+      limit?: number;
+    }) {
+      if (!deps.places) throw new Error("البحث في خرائط جوجل يحتاج APIFY_TOKEN");
+      const limit = Math.min(Math.max(1, input.limit ?? 30), 200);
+      const found = await deps.places.searchPlaces(
+        input.query.trim(),
+        input.location.trim(),
+        limit,
+      );
+      const label = `${input.query.trim()} · ${input.location.trim()}`;
+      let saved = 0;
+      for (const f of found) {
+        const values = {
+          name: f.name.slice(0, 300),
+          category: f.category ?? null,
+          address: f.address ?? null,
+          city: f.city ?? null,
+          country: f.country && /^[A-Z]{2}$/.test(f.country) ? f.country : null,
+          phone: f.phone ?? null,
+          website: f.website ?? null,
+          rating: f.rating === null || f.rating === undefined ? null : f.rating.toFixed(1),
+          reviews: f.reviews ?? null,
+          url: f.url ?? null,
+        };
+        await db
+          .insert(places)
+          .values({ projectId: input.projectId, placeId: f.placeId, query: label, ...values })
+          .onConflictDoUpdate({ target: [places.projectId, places.placeId], set: values });
+        saved++;
+      }
+      return {
+        found: saved,
+        costUsd: Math.round(((deps.places.placesCostPer1k * found.length) / 1000) * 10000) / 10000,
+      };
+    },
+
+    async listPlaces(projectId: string, opts: { query?: string; limit?: number } = {}) {
+      return db
+        .select()
+        .from(places)
+        .where(
+          and(
+            eq(places.projectId, projectId),
+            opts.query ? eq(places.query, opts.query) : undefined,
+          ),
+        )
+        .orderBy(desc(places.createdAt))
+        .limit(Math.min(opts.limit ?? 500, 2000));
+    },
+
+    async placeQueries(projectId: string) {
+      const rows = await db
+        .select({ query: places.query, n: sql<number>`count(*)::int` })
+        .from(places)
+        .where(eq(places.projectId, projectId))
+        .groupBy(places.query);
+      return rows.map((r) => ({ query: r.query, count: Number(r.n) }));
+    },
+
+    /**
+     * Reads the websites of businesses not analysed yet (contact, about and
+     * partner pages) for their Instagram account and emails.
+     */
+    async analyzePlaces(projectId: string, limit = 20) {
+      const reader = connectors.get("website");
+      if (!reader) return { analyzed: 0, instagram: 0 };
+      const todo = await db
+        .select()
+        .from(places)
+        .where(
+          and(
+            eq(places.projectId, projectId),
+            isNull(places.analyzedAt),
+            isNotNull(places.website),
+          ),
+        )
+        .limit(Math.min(limit, 50));
+      let instagram = 0;
+      for (const p of todo) {
+        let ig: string | null = null;
+        let emails: string[] | null = null;
+        try {
+          const host = parseAccountUrl(p.website as string)?.handle;
+          const fromWebsite = p.website ? parseAccountUrl(p.website) : null;
+          // Some businesses list their Instagram page as the "website".
+          if (fromWebsite?.platform === "instagram") ig = fromWebsite.handle;
+          else if (host) {
+            const r = await reader.getAccount(host);
+            const igLink = (r.links ?? [])
+              .map((l) => parseAccountUrl(l))
+              .find((a) => a?.platform === "instagram");
+            ig = igLink?.handle ?? null;
+            const e = r.stats?.emails;
+            emails = Array.isArray(e) && e.length ? (e as string[]).slice(0, 5) : null;
+          }
+        } catch {
+          // An unreadable site is marked analysed so it is not retried every day.
+        }
+        if (ig) instagram++;
+        await db
+          .update(places)
+          .set({ instagram: ig, emails, analyzedAt: new Date() })
+          .where(eq(places.id, p.id));
+      }
+      return { analyzed: todo.length, instagram };
+    },
+
+    /**
+     * Starts a job for the Instagram accounts of the project's businesses that
+     * were not sent yet: they become ordinary leads (contacts, score, revenue).
+     */
+    async placesToLeads(projectId: string) {
+      const rows = await db
+        .select({ id: places.id, instagram: places.instagram, query: places.query })
+        .from(places)
+        .where(
+          and(eq(places.projectId, projectId), isNotNull(places.instagram), isNull(places.sentAt)),
+        );
+      if (rows.length === 0) return { sent: 0, jobId: null as string | null };
+      const names = [...new Set(rows.map((r) => r.instagram as string))].slice(0, maxLimit);
+      const { job } = await this.startJob({
+        projectId,
+        source: { type: "upload", usernames: names, url: `خرائط جوجل: ${rows[0]?.query ?? ""}` },
+        limit: names.length,
+      });
+      await db
+        .update(places)
+        .set({ sentAt: new Date() })
+        .where(
+          inArray(
+            places.id,
+            rows.map((r) => r.id),
+          ),
+        );
+      return { sent: names.length, jobId: job.id };
+    },
+
+    /**
+     * Reads an account on another platform without saving anything (e.g. a
+     * link sent to the Telegram bot). Paid connectors are skipped unless asked.
+     */
+    async peekAccount(url: string, opts: { allowPaid?: boolean } = {}) {
+      const ref = parseAccountUrl(url);
+      if (!ref) return null;
+      const connector = connectors.get(ref.platform);
+      if (!connector || (connector.paid && !opts.allowPaid)) return { ref, account: null };
+      try {
+        return { ref, account: await connector.getAccount(ref.handle) };
+      } catch (err) {
+        return { ref, account: null, error: (err as Error).message };
+      }
+    },
+
+    async addSiteWatch(input: { url: string; label?: string | null }) {
+      const url = /^https?:\/\//i.test(input.url.trim())
+        ? input.url.trim()
+        : `https://${input.url.trim()}`;
+      new URL(url);
+      const [w] = await db
+        .insert(siteWatches)
+        .values({ url, label: input.label?.trim() || null })
+        .onConflictDoUpdate({
+          target: siteWatches.url,
+          set: { enabled: true, label: input.label?.trim() || null },
+        })
+        .returning();
+      return w;
+    },
+
+    async listSiteWatches() {
+      return db.select().from(siteWatches).orderBy(desc(siteWatches.createdAt));
+    },
+
+    async removeSiteWatch(id: string) {
+      await db.delete(siteWatches).where(eq(siteWatches.id, id));
+    },
+
+    /**
+     * Reads each watched page (at most once every `everyHours`) and, when its
+     * text changed, records the added and removed lines and alerts the owner.
+     * The first reading only sets the baseline.
+     */
+    async checkSiteWatches(now = new Date(), everyHours = 20) {
+      if (!deps.readPage) return { checked: 0, changed: 0 };
+      const due = await db
+        .select()
+        .from(siteWatches)
+        .where(
+          and(
+            eq(siteWatches.enabled, true),
+            or(
+              isNull(siteWatches.lastCheckedAt),
+              lt(siteWatches.lastCheckedAt, new Date(now.getTime() - everyHours * 3_600_000)),
+            ),
+          ),
+        )
+        .limit(30);
+      let changed = 0;
+      const alerts: string[] = [];
+      for (const w of due) {
+        try {
+          const page = await deps.readPage(w.url);
+          const text = normalizePageText(page.text).slice(0, 30_000);
+          const hash = createHash("sha256").update(text).digest("hex");
+          if (w.lastHash && w.lastHash !== hash) {
+            const diff = pageDiff(w.lastText ?? "", text);
+            if (diff.added.length + diff.removed.length > 0) {
+              changed++;
+              await db
+                .update(siteWatches)
+                .set({
+                  lastDiff: { added: diff.added.slice(0, 40), removed: diff.removed.slice(0, 40) },
+                  lastChangedAt: now,
+                })
+                .where(eq(siteWatches.id, w.id));
+              alerts.push(
+                [
+                  `<${w.label ?? page.title ?? w.url}>`,
+                  ...diff.added.slice(0, 5).map((l) => `+ ${l.slice(0, 140)}`),
+                  ...diff.removed.slice(0, 3).map((l) => `− ${l.slice(0, 140)}`),
+                ].join("\n"),
+              );
+            }
+          }
+          await db
+            .update(siteWatches)
+            .set({ lastHash: hash, lastText: text, lastCheckedAt: now, error: null })
+            .where(eq(siteWatches.id, w.id));
+        } catch (err) {
+          await db
+            .update(siteWatches)
+            .set({ lastCheckedAt: now, error: (err as Error).message.slice(0, 300) })
+            .where(eq(siteWatches.id, w.id));
+        }
+      }
+      if (alerts.length > 0)
+        await notify({
+          type: "system",
+          level: "warn",
+          title: `تغيّر ${alerts.length} من مواقع المنافسين`,
+          body: alerts.join("\n\n").slice(0, 1500),
+          url: "/competitors",
+          key: `site-change:${now.toISOString().slice(0, 13)}`,
+        });
+      return { checked: due.length, changed };
+    },
+
+    /** Platforms this server can read (an official connector is configured). */
+    connectedPlatforms(): string[] {
+      return [...connectors.keys()];
+    },
+
+    /** A lead's person's accounts on other platforms. */
+    async personAccounts(username: string) {
+      const [p] = await db
+        .select({ personId: profiles.personId })
+        .from(profiles)
+        .where(eq(profiles.username, username.replace(/^@/, "").toLowerCase()));
+      if (!p?.personId) return [];
+      return db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.personId, p.personId))
+        .orderBy(accounts.platform, accounts.handle);
+    },
+
+    /**
+     * Adds an account on another platform to a lead (pasted by the owner),
+     * then reads it if a connector exists. Returns null for an address that
+     * is not an account, or the account when it already belongs to someone else.
+     */
+    async addAccount(input: { username: string; url: string }) {
+      const ref = parseAccountUrl(input.url);
+      if (!ref || ref.platform === "instagram")
+        return { ok: false as const, reason: "not_account" };
+      const [p] = await db
+        .select({ igUserId: profiles.igUserId, personId: profiles.personId })
+        .from(profiles)
+        .where(eq(profiles.username, input.username.replace(/^@/, "").toLowerCase()));
+      if (!p) return { ok: false as const, reason: "no_lead" };
+      let personId = p.personId;
+      if (!personId) {
+        const [person] = await db.insert(people).values({}).returning({ id: people.id });
+        personId = person?.id ?? null;
+        await db.update(profiles).set({ personId }).where(eq(profiles.igUserId, p.igUserId));
+      }
+      if (!personId) return { ok: false as const, reason: "no_lead" };
+      const [existing] = await db
+        .select()
+        .from(accounts)
+        .where(and(eq(accounts.platform, ref.platform), eq(accounts.handle, ref.handle)));
+      if (existing && existing.personId !== personId)
+        return { ok: false as const, reason: "taken", account: existing };
+      const [added] = existing ? [existing] : await linkAccounts(personId, [ref], "manual");
+      if (!added) return { ok: false as const, reason: "not_account" };
+      return { ok: true as const, account: await refreshAccount(added.id) };
+    },
+
+    refreshAccount,
+
+    /**
+     * Reads accounts found in bios that were never read, for the platforms with
+     * a connector (the daily task). YouTube's free quota covers about 10,000 a day.
+     */
+    async refreshPendingAccounts(limit = 200) {
+      // Paid connectors (TikTok through Apify) are read only when the owner asks.
+      const platforms = [...connectors.values()].filter((c) => !c.paid).map((c) => c.platform);
+      if (platforms.length === 0) return 0;
+      const pending = await db
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(and(isNull(accounts.fetchedAt), inArray(accounts.platform, platforms)))
+        .orderBy(accounts.createdAt)
+        .limit(limit);
+      for (const a of pending) await refreshAccount(a.id);
+      return pending.length;
+    },
+
+    async removeAccount(id: string) {
+      await db.delete(accounts).where(eq(accounts.id, id));
+    },
+
+    /**
+     * Finds other-platform accounts in the bios and links of a project's leads
+     * (no network: only what is already stored), then reads up to `read` of
+     * them through the connectors. For leads collected before this existed.
+     */
+    async linkProjectAccounts(projectId: string, opts: { read?: number } = {}) {
+      const rows = await db
+        .select({
+          igUserId: profiles.igUserId,
+          personId: profiles.personId,
+          bio: profiles.bio,
+          externalUrl: profiles.externalUrl,
+        })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(eq(leads.projectId, projectId))
+        .limit(20_000);
+      let found = 0;
+      const toRead: string[] = [];
+      for (const r of rows) {
+        const refs = linkedAccounts(r.bio, r.externalUrl);
+        if (refs.length === 0) continue;
+        let personId = r.personId;
+        if (!personId) {
+          const [person] = await db.insert(people).values({}).returning({ id: people.id });
+          personId = person?.id ?? null;
+          await db.update(profiles).set({ personId }).where(eq(profiles.igUserId, r.igUserId));
+        }
+        if (!personId) continue;
+        const added = await linkAccounts(personId, refs, "bio_link");
+        found += added.length;
+        for (const a of added) if (connectors.has(a.platform)) toRead.push(a.id);
+      }
+      let read = 0;
+      for (const id of toRead.slice(0, opts.read ?? 50)) {
+        await refreshAccount(id);
+        read++;
+      }
+      return { leads: rows.length, found, read };
+    },
+
+    /** How many of a project's leads have an account on each platform. */
+    async platformCounts(projectId: string) {
+      const rows = await db
+        .select({ platform: accounts.platform, n: sql<number>`count(distinct ${leads.id})::int` })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .innerJoin(accounts, eq(accounts.personId, profiles.personId))
+        .where(eq(leads.projectId, projectId))
+        .groupBy(accounts.platform);
+      return Object.fromEntries(rows.map((r) => [r.platform, Number(r.n)])) as Record<
+        string,
+        number
+      >;
+    },
+
+    /**
+     * Trains the project's own model on the owner's decisions and scores every
+     * lead with it. Too few decisions: nothing changes and the report says how
+     * many more are needed.
+     */
+    async trainProjectModel(projectId: string) {
+      const rows = await projectFeatures(projectId);
+      const labelled = rows
+        .map((r) => ({ ...r, label: outcomeOf(r.status) }))
+        .filter((r): r is typeof r & { label: 0 | 1 } => r.label !== null);
+      const model = trainModel(labelled.map((r) => ({ features: r.features, label: r.label })));
+      const positives = labelled.filter((r) => r.label === 1).length;
+      const negatives = labelled.length - positives;
+      if (!model)
+        return {
+          trained: false as const,
+          positives,
+          negatives,
+          needed: {
+            positives: Math.max(0, MIN_POSITIVES - positives),
+            negatives: Math.max(0, MIN_POSITIVES - negatives),
+            total: Math.max(0, MIN_LABELLED - labelled.length),
+          },
+        };
+      await db
+        .update(projects)
+        .set({ model: model as unknown as Record<string, unknown> })
+        .where(eq(projects.id, projectId));
+      // One update per probability value keeps this to at most 101 statements.
+      const byProb = new Map<number, string[]>();
+      for (const r of rows) {
+        const p = predictWin(model, r.features);
+        byProb.set(p, [...(byProb.get(p) ?? []), r.id]);
+      }
+      for (const [p, ids] of byProb)
+        for (let i = 0; i < ids.length; i += 1000)
+          await db
+            .update(leads)
+            .set({ winProb: p })
+            .where(inArray(leads.id, ids.slice(i, i + 1000)));
+      return { trained: true as const, positives, negatives, auc: model.auc, scored: rows.length };
+    },
+
+    /**
+     * How good the scoring is, judged by the owner's real decisions: the AUC of
+     * the AI score and of the project's own model (0.5 = guessing, 1 = perfect).
+     */
+    async evaluateScoring(projectId: string) {
+      const rows = await projectFeatures(projectId);
+      const labelled = rows
+        .map((r) => ({ ...r, label: outcomeOf(r.status) }))
+        .filter((r) => r.label !== null);
+      const withAi = labelled.filter((r) => r.aiScore !== null);
+      const project = await this.getProject(projectId);
+      const model = (project?.model as TrainedModel | null | undefined) ?? null;
+      return {
+        labelled: labelled.length,
+        positives: labelled.filter((r) => r.label === 1).length,
+        aiScoreAuc: auc(
+          withAi.map((r) => r.aiScore as number),
+          withAi.map((r) => r.label as number),
+        ),
+        aiScored: withAi.length,
+        model: model
+          ? {
+              auc: model.auc,
+              trainedAt: model.trainedAt,
+              trainedOn: model.trainedOn,
+              explain: explainModel(model, 5),
+            }
+          : null,
+      };
+    },
+
+    /**
+     * Next period's collection budget split across the project's sources by
+     * what they earned (see learn/budget), with each line matched to the
+     * monitor that collects it, when there is one.
+     */
+    async budgetPlan(projectId: string, budgetUsd: number) {
+      const perf = await this.sourcePerformance(projectId);
+      const unit = router.unitCost("apify") || 0.0025;
+      const plan = planBudget(perf.sources, { budgetUsd, costPerAccount: unit * 2 });
+      const mons = await this.listMonitors(projectId);
+      return {
+        ...plan,
+        budgetUsd,
+        costPerAccount: unit * 2,
+        lines: plan.lines.map((l) => {
+          const m = mons.find((x) => x.sourceUrl === l.source);
+          return { ...l, monitorId: m?.id ?? null, monitorEnabled: m?.enabled ?? null };
+        }),
+      };
+    },
+
+    /**
+     * Applies a budget plan to the monitors (the owner approved it): stopped
+     * sources are paused; the others collect what their share buys per run.
+     */
+    async applyBudgetPlan(projectId: string, lines: (BudgetLine & { monitorId: string | null })[]) {
+      const mons = await this.listMonitors(projectId);
+      let changed = 0;
+      for (const l of lines) {
+        const m = mons.find((x) => x.id === l.monitorId);
+        if (!m) continue;
+        if (l.decision === "stop") {
+          await db.update(monitors).set({ enabled: false }).where(eq(monitors.id, m.id));
+        } else {
+          const runs = Math.max(1, Math.round(30 / m.everyDays));
+          const limit = Math.min(maxLimit, Math.max(10, Math.floor(l.accounts / runs)));
+          await db.update(monitors).set({ enabled: true, limit }).where(eq(monitors.id, m.id));
+        }
+        changed++;
+      }
+      return { changed };
+    },
+
+    /** Whether new sources can be found from customers' follows (needs Apify). */
+    get suggestionsAvailable() {
+      return !!deps.following;
+    },
+
+    /** What suggestSources would cost, before running it. */
+    suggestCost(seeds = 8, perSeed = 150) {
+      return deps.following
+        ? Math.round(((deps.following.followingCostPer1k * seeds * perSeed) / 1000) * 100) / 100
+        : null;
+    },
+
+    /**
+     * New sources from the network: the accounts several of the owner's best
+     * leads (customers first, then interested) follow, that are not watched
+     * yet. Saved so the page can show them without paying again.
+     */
+    async suggestSources(projectId: string, opts: { seeds?: number; perSeed?: number } = {}) {
+      if (!deps.following) throw new Error("اكتشاف المصادر يحتاج APIFY_TOKEN");
+      const seeds = await db
+        .select({ username: profiles.username })
+        .from(leads)
+        .innerJoin(profiles, eq(profiles.igUserId, leads.profileId))
+        .where(
+          and(eq(leads.projectId, projectId), inArray(leads.status, ["customer", "interested"])),
+        )
+        .orderBy(sql`${leads.dealValue} desc nulls last`, desc(leads.statusAt))
+        .limit(Math.min(opts.seeds ?? 8, 20));
+      if (seeds.length < 3) throw new Error("نحتاج 3 عملاء أو مهتمين على الأقل لنعرف من يتابعون");
+      const counts = new Map<string, number>();
+      let read = 0;
+      for (const s of seeds) {
+        try {
+          const follows = await deps.following.listFollowing(s.username, opts.perSeed ?? 150);
+          read += follows.length;
+          for (const f of new Set(follows)) counts.set(f, (counts.get(f) ?? 0) + 1);
+        } catch {
+          // A private or missing account is skipped.
+        }
+      }
+      const watched = new Set(
+        (await this.listMonitors(projectId))
+          .map((m) => /instagram\.com\/([A-Za-z0-9._]{1,30})/.exec(m.sourceUrl)?.[1]?.toLowerCase())
+          .filter(Boolean),
+      );
+      const seedNames = new Set(seeds.map((s) => s.username));
+      const suggestions = [...counts.entries()]
+        .filter(([u, n]) => n >= 2 && !watched.has(u) && !seedNames.has(u))
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([username, followedBy]) => ({ username, followedBy }));
+      const result = {
+        at: new Date().toISOString(),
+        seeds: seeds.length,
+        read,
+        costUsd: Math.round(((deps.following.followingCostPer1k * read) / 1000) * 100) / 100,
+        suggestions,
+      };
+      await setValue(`suggest:${projectId}`, result, 60 * 86_400_000);
+      return result;
+    },
+
+    async lastSuggestions(projectId: string) {
+      return getValue<{
+        at: string;
+        seeds: number;
+        read: number;
+        costUsd: number;
+        suggestions: { username: string; followedBy: number }[];
+      }>(`suggest:${projectId}`);
+    },
+
+    /**
+     * The weekly analyst: retrains the project's model, reads its revenue by
+     * source, the budget plan, competitors' growth and site changes, and the
+     * best new leads, then writes the plan (with AI when available). Budget
+     * changes are saved as a pending plan and applied only when approved.
+     */
+    async weeklyPlan(projectId: string, budgetUsd: number, now = new Date()) {
+      const project = await this.getProject(projectId);
+      if (!project) throw new Error("Project not found");
+      const model = await this.trainProjectModel(projectId);
+      const [perf, budget, ev] = await Promise.all([
+        this.sourcePerformance(projectId, { since: new Date(now.getTime() - 90 * 86_400_000) }),
+        this.budgetPlan(projectId, budgetUsd),
+        this.evaluateScoring(projectId),
+      ]);
+      const since = new Date(now.getTime() - 7 * 86_400_000);
+      const changedSites = (await this.listSiteWatches()).filter(
+        (w) => w.lastChangedAt && w.lastChangedAt >= since,
+      );
+      const best = await leadsPage({ projectId, status: "new", minWinProb: 60, limit: 5 });
+      const rising = await leadsPage({ projectId, signal: "rising", limit: 5 });
+      const changes = budget.lines.filter((l) => l.monitorId && l.decision !== "keep");
+      const data = {
+        project: project.name,
+        revenue90d: perf.totals,
+        topSources: perf.sources.slice(0, 5).map((s) => ({
+          source: s.source,
+          customers: s.customers,
+          revenue: s.revenue,
+          cost: s.costUsd,
+        })),
+        model: model.trained ? { auc: model.auc } : { needed: model.needed },
+        aiScoreAuc: ev.aiScoreAuc,
+        budget: {
+          usd: budgetUsd,
+          changes: changes.map((l) => ({ source: l.source, decision: l.decision, usd: l.usd })),
+        },
+        competitorSiteChanges: changedSites.map((w) => ({
+          page: w.label ?? w.url,
+          added: w.lastDiff?.added.slice(0, 3) ?? [],
+        })),
+        contactFirst: best.leads.map((l) => ({ username: l.username, winProb: l.winProb })),
+        rising: rising.leads.map((l) => l.username),
+      };
+      let text = "";
+      if (scorer?.weeklyBrief) {
+        try {
+          text = await scorer.weeklyBrief(data);
+        } catch {
+          text = "";
+        }
+      }
+      if (!text) {
+        const money = (n: number) => `$${n.toLocaleString("en", { maximumFractionDigits: 2 })}`;
+        text = [
+          `خطة الأسبوع · ${project.name}`,
+          `آخر 90 يوماً: ${money(perf.totals.revenue)} من ${perf.totals.customers} عميل، بتكلفة جمع ${money(perf.totals.costUsd)}.`,
+          perf.sources[0]
+            ? `الأفضل: ${perf.sources[0].source} (${perf.sources[0].customers} عميل).`
+            : "",
+          model.trained
+            ? `نموذجك محدَّث (دقة الترتيب ${Math.round((model.auc ?? 0) * 100)}%).`
+            : `النموذج ينتظر قرارات أكثر: سجّل ${model.needed.positives} عملاء و${model.needed.negatives} مرفوضين على الأقل.`,
+          changes.length
+            ? `تغييرات الميزانية المقترحة: ${changes.map((l) => `${l.decision === "stop" ? "أوقف" : l.decision === "increase" ? "زِد" : l.decision === "decrease" ? "خفّض" : "جرّب"} ${l.source}`).join("، ")}.`
+            : "لا تغيير في الميزانية.",
+          best.leads.length
+            ? `ابدأ بـ: ${best.leads.map((l) => `@${l.username} (${l.winProb}%)`).join("، ")}.`
+            : "",
+          rising.leads.length
+            ? `ينمون بسرعة: ${rising.leads.map((l) => `@${l.username}`).join("، ")}.`
+            : "",
+          changedSites.length ? `تغيّرت ${changedSites.length} من صفحات المنافسين هذا الأسبوع.` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+      const id = randomBytes(6).toString("hex");
+      await setValue(
+        `plan:${id}`,
+        { id, projectId, createdAt: now.toISOString(), text, lines: changes, applied: false },
+        14 * 86_400_000,
+      );
+      await setValue(`plan:last:${projectId}`, id, 14 * 86_400_000);
+      return { id, text, changes: changes.length };
+    },
+
+    async getPlan(id: string) {
+      return getValue<{
+        id: string;
+        projectId: string;
+        createdAt: string;
+        text: string;
+        lines: (BudgetLine & { monitorId: string | null })[];
+        applied: boolean;
+      }>(`plan:${id}`);
+    },
+
+    async lastPlan(projectId: string) {
+      const id = await getValue<string>(`plan:last:${projectId}`);
+      return id ? this.getPlan(id) : null;
+    },
+
+    /** Applies a weekly plan the owner approved (once). */
+    async approvePlan(id: string) {
+      const plan = await this.getPlan(id);
+      if (!plan) return { ok: false as const, reason: "expired" };
+      if (plan.applied) return { ok: false as const, reason: "applied" };
+      const r = await this.applyBudgetPlan(plan.projectId, plan.lines);
+      await setValue(`plan:${id}`, { ...plan, applied: true }, 14 * 86_400_000);
+      await this.audit({
+        actor: "owner",
+        action: "plan.approve",
+        detail: { id, changed: r.changed },
+      });
+      return { ok: true as const, changed: r.changed };
+    },
+
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */
     async bulkUpdateLeads(input: {
       projectId: string;
@@ -1313,7 +2545,18 @@ export function createScrapers(deps: {
         .select({ bio: profiles.bio })
         .from(profiles)
         .where(eq(profiles.username, u));
-      return { lead: row, bio: p?.bio ?? null, events };
+      const [pp] = await db
+        .select({ personId: profiles.personId })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      const accs = pp?.personId
+        ? await db
+            .select()
+            .from(accounts)
+            .where(eq(accounts.personId, pp.personId))
+            .orderBy(accounts.platform, accounts.handle)
+        : [];
+      return { lead: row, bio: p?.bio ?? null, events, accounts: accs };
     },
 
     /** Understands a question in plain language and returns the matching leads. */

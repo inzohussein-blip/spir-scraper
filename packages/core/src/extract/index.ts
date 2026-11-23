@@ -6,6 +6,7 @@ import { findEmails, isPlausibleEmail } from "./emails.js";
 import { contactsFromUrl } from "./links.js";
 import { findPhones, type PhoneMatch, parseButtonPhone } from "./phones.js";
 
+export * from "./accounts.js";
 export * from "./competitor.js";
 export * from "./country.js";
 export * from "./emails.js";
@@ -13,6 +14,7 @@ export * from "./language.js";
 export * from "./linkpages.js";
 export * from "./links.js";
 export * from "./mx.js";
+export * from "./pagediff.js";
 export * from "./phones.js";
 export * from "./quality.js";
 export * from "./resolve.js";

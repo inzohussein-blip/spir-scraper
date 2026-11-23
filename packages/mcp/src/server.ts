@@ -1,5 +1,5 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
-import { parseSource, type Source, SourceError, uploadSource } from "@scrapers/core";
+import { checkMessage, parseSource, type Source, SourceError, uploadSource } from "@scrapers/core";
 import type { Runtime } from "@scrapers/runtime";
 import { z } from "zod";
 
@@ -171,6 +171,41 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
           .describe("Found in at least this many competitors' audiences or posts"),
         min_followers: z.number().int().min(0).optional(),
         max_followers: z.number().int().min(0).optional(),
+        min_win_prob: z
+          .number()
+          .int()
+          .min(0)
+          .max(100)
+          .optional()
+          .describe(
+            "Only leads the project's own model gives at least this chance (see train_model)",
+          ),
+        persona: z.string().optional().describe("Audience segment name (see build_personas)"),
+        signal: z
+          .enum(["rising", "became_business"])
+          .optional()
+          .describe("rising: grew 20%+ over 2+ weeks while 1k-200k followers"),
+        platform: z
+          .enum([
+            "tiktok",
+            "youtube",
+            "telegram",
+            "x",
+            "facebook",
+            "linkedin",
+            "snapchat",
+            "threads",
+            "website",
+          ])
+          .optional()
+          .describe("Only leads with an account on this other platform"),
+        terms: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe(
+            "Words with one meaning, in Arabic and English; a lead matches any (search by meaning)",
+          ),
         limit: z.number().int().min(1).max(200).default(50),
         cursor: z.string().optional(),
       }),
@@ -192,6 +227,11 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         ...(a.min_sources ? { minSources: a.min_sources } : {}),
         ...(a.min_followers !== undefined ? { minFollowers: a.min_followers } : {}),
         ...(a.max_followers !== undefined ? { maxFollowers: a.max_followers } : {}),
+        ...(a.min_win_prob !== undefined ? { minWinProb: a.min_win_prob } : {}),
+        ...(a.persona ? { persona: a.persona } : {}),
+        ...(a.signal ? { signal: a.signal } : {}),
+        ...(a.terms?.length ? { terms: a.terms } : {}),
+        ...(a.platform ? { platform: a.platform } : {}),
         ...(a.cursor ? { cursor: a.cursor } : {}),
         limit: a.limit,
       });
@@ -475,6 +515,370 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         }),
       );
     }),
+  );
+
+  server.registerTool(
+    "set_deal",
+    {
+      title: "Record a closed deal",
+      description:
+        "Record what a closed deal was worth (deposit, commission... in USD). The lead becomes a customer and the value " +
+        "is credited to the sources that found it (see source_performance). value null clears the deal.",
+      inputSchema: z.object({
+        project: z.string(),
+        username: z.string(),
+        value: z.number().min(0).nullable(),
+      }),
+    },
+    guard(async (a) => {
+      const ok = await rt.scrapers.setDeal({
+        projectId: await projectIdFor(rt, a.project),
+        username: a.username,
+        value: a.value,
+      });
+      return ok ? json({ recorded: true }) : fail(`@${a.username} is not a lead in this project`);
+    }),
+  );
+
+  server.registerTool(
+    "similar_leads",
+    {
+      title: "Find look-alikes",
+      description:
+        "Accounts in the project whose name, category and bio read most like the given one (trigram similarity). " +
+        "Use it on the owner's best customers to find more like them.",
+      inputSchema: z.object({
+        project: z.string(),
+        username: z.string(),
+        limit: z.number().int().min(1).max(50).default(10),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json({
+        similar: await rt.scrapers.similarLeads(
+          await projectIdFor(rt, a.project),
+          a.username,
+          a.limit,
+        ),
+      }),
+    ),
+  );
+
+  server.registerTool(
+    "build_personas",
+    {
+      title: "Find audience segments",
+      description:
+        "With the server's AI key: read a sample of the project's bios, find 3-8 audience segments with the words " +
+        "that mark them, save them, and assign every lead. Then list_leads(persona=...) and persona revenue in " +
+        "source_performance's sibling report on the dashboard.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) => {
+      if (!rt.scrapers.scoringAvailable)
+        return fail(
+          "This server has no ANTHROPIC_API_KEY. Read list_leads and segment them yourself.",
+        );
+      return json(await rt.scrapers.buildPersonas(await projectIdFor(rt, a.project)));
+    }),
+  );
+
+  server.registerTool(
+    "search_places",
+    {
+      title: "Find businesses on Google Maps",
+      description:
+        "Search Google Maps (through Apify, about $4 per 1000 places) for businesses such as exchange offices, " +
+        "brokers or trading academies in a place, and keep them in the project. Then analyze_places reads their " +
+        "websites for Instagram accounts and emails, and places_to_leads turns those accounts into leads.",
+      inputSchema: z.object({
+        project: z.string(),
+        query: z.string().min(2).max(100),
+        location: z.string().min(2).max(100),
+        limit: z.number().int().min(1).max(200).default(30),
+      }),
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.searchPlaces({
+          projectId: await projectIdFor(rt, a.project),
+          query: a.query,
+          location: a.location,
+          limit: a.limit,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "list_places",
+    {
+      title: "Businesses found",
+      description:
+        "The project's Google Maps businesses with phone, website, rating, Instagram and emails found.",
+      inputSchema: z.object({
+        project: z.string(),
+        limit: z.number().int().min(1).max(500).default(100),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json({
+        places: await rt.scrapers.listPlaces(await projectIdFor(rt, a.project), { limit: a.limit }),
+      }),
+    ),
+  );
+
+  server.registerTool(
+    "analyze_places",
+    {
+      title: "Read businesses' websites",
+      description:
+        "Read up to 20 businesses' websites (not read yet) for their Instagram account and emails.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) =>
+      json(await rt.scrapers.analyzePlaces(await projectIdFor(rt, a.project), 20)),
+    ),
+  );
+
+  server.registerTool(
+    "places_to_leads",
+    {
+      title: "Turn businesses into leads",
+      description:
+        "Start a job for the Instagram accounts found on businesses' websites, so they become leads.",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) => {
+      const r = await rt.scrapers.placesToLeads(await projectIdFor(rt, a.project));
+      if (r.jobId) opts.onJobStarted?.(r.jobId);
+      return json(r);
+    }),
+  );
+
+  server.registerTool(
+    "watch_site",
+    {
+      title: "Watch a competitor's page",
+      description:
+        "Watch a competitor's web page (prices, commissions, offers). It is read daily; when its text changes the " +
+        "owner is alerted with the lines added and removed. Pass remove_id to stop watching. Lists all watches.",
+      inputSchema: z.object({
+        url: z.string().min(4).max(500).optional(),
+        label: z.string().max(100).optional(),
+        remove_id: z.string().uuid().optional(),
+      }),
+    },
+    guard(async (a) => {
+      if (a.remove_id) await rt.scrapers.removeSiteWatch(a.remove_id);
+      if (a.url) {
+        await rt.scrapers.addSiteWatch({ url: a.url, label: a.label ?? null });
+        await rt.scrapers.checkSiteWatches();
+      }
+      const watches = await rt.scrapers.listSiteWatches();
+      return json({
+        watches: watches.map((w) => ({
+          id: w.id,
+          url: w.url,
+          label: w.label,
+          lastCheckedAt: w.lastCheckedAt,
+          lastChangedAt: w.lastChangedAt,
+          lastDiff: w.lastDiff,
+          error: w.error,
+        })),
+      });
+    }),
+  );
+
+  server.registerTool(
+    "train_model",
+    {
+      title: "Train the project's own model",
+      description:
+        "Train the project's prediction model on the owner's decisions (customers and interested vs rejected) and give " +
+        "every lead a win probability (list_leads min_win_prob). Says how many more decisions it needs when there are too few. " +
+        "Also returns how well the AI score and the model rank real outcomes (AUC).",
+      inputSchema: z.object({ project: z.string() }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const trained = await rt.scrapers.trainProjectModel(projectId);
+      return json({ trained, evaluation: await rt.scrapers.evaluateScoring(projectId) });
+    }),
+  );
+
+  server.registerTool(
+    "budget_plan",
+    {
+      title: "Plan the collection budget",
+      description:
+        "Split the remaining Apify budget across the project's sources by the customers they brought (Bayesian close " +
+        "rate, 80% exploit, 20% explore). apply=true applies it to the competitor monitors: losers are paused, the others " +
+        "collect what their share buys. Only apply when the owner agreed.",
+      inputSchema: z.object({
+        project: z.string(),
+        budget_usd: z.number().min(0).max(10_000).optional(),
+        apply: z.boolean().default(false),
+      }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      const usage = await rt.apifyUsage().catch(() => null);
+      const budget = a.budget_usd ?? (usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5);
+      const plan = await rt.scrapers.budgetPlan(projectId, budget);
+      const applied = a.apply ? await rt.scrapers.applyBudgetPlan(projectId, plan.lines) : null;
+      return json({ plan, applied });
+    }),
+  );
+
+  server.registerTool(
+    "suggest_sources",
+    {
+      title: "Find new sources from customers' follows",
+      description:
+        "Read who the project's best leads follow (Apify, about $2.5 per 1000 accounts read; dry_run=true gives the cost " +
+        "only) and return accounts followed by two or more of them that are not watched yet. Then watch_competitor them.",
+      inputSchema: z.object({ project: z.string(), dry_run: z.boolean().default(true) }),
+    },
+    guard(async (a) => {
+      const projectId = await projectIdFor(rt, a.project);
+      if (a.dry_run)
+        return json({
+          estimatedCostUsd: rt.scrapers.suggestCost(),
+          last: await rt.scrapers.lastSuggestions(projectId),
+        });
+      return json(await rt.scrapers.suggestSources(projectId));
+    }),
+  );
+
+  server.registerTool(
+    "weekly_plan",
+    {
+      title: "The weekly plan",
+      description:
+        "Write this week's plan for a project (model retrained, revenue by source, budget changes, competitors, who to " +
+        "contact first), or approve a plan by id when the owner says so. Budget changes apply only on approval.",
+      inputSchema: z.object({
+        project: z.string(),
+        approve_id: z
+          .string()
+          .regex(/^[a-f0-9]{12}$/)
+          .optional(),
+      }),
+    },
+    guard(async (a) => {
+      if (a.approve_id) return json(await rt.scrapers.approvePlan(a.approve_id));
+      const projectId = await projectIdFor(rt, a.project);
+      const usage = await rt.apifyUsage().catch(() => null);
+      return json(
+        await rt.scrapers.weeklyPlan(
+          projectId,
+          usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : 5,
+        ),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "check_message",
+    {
+      title: "Check a message for financial-promotion red flags",
+      description:
+        "Before the owner sends a message about trading: flags promised or guaranteed returns, 'risk-free', 100% " +
+        "success claims, time pressure, license claims and a missing risk warning (Arabic and English). " +
+        "ok=false means do not send it as written. A check, not legal advice. Run it on every message you draft.",
+      inputSchema: z.object({ text: z.string().min(1).max(4000) }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) => json(checkMessage(a.text))),
+  );
+
+  server.registerTool(
+    "read_page",
+    {
+      title: "Read a web page",
+      description:
+        "Read any public web page: title, description, language, readable text (up to 15k characters), links, " +
+        "emails, phone numbers and the social accounts it links to. robots.txt is honored and internal addresses " +
+        "are refused. Use it to look at a lead's website, a competitor's offer or any link the owner sends.",
+      inputSchema: z.object({ url: z.string().min(4).max(2000) }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    guard(async (a) => json(await rt.readPage(a.url))),
+  );
+
+  server.registerTool(
+    "add_account",
+    {
+      title: "Add a lead's account on another platform",
+      description:
+        "Attach a lead's TikTok, YouTube, Telegram, X, Facebook, LinkedIn or website by its address. YouTube channels " +
+        "and public Telegram channels are then read through their official APIs (name, description, subscribers or members). " +
+        "lead_detail lists every account a lead has.",
+      inputSchema: z.object({ username: z.string(), url: z.string().max(500) }),
+    },
+    guard(async (a) => {
+      const r = await rt.scrapers.addAccount({ username: a.username, url: a.url });
+      if (r.ok) return json({ account: r.account });
+      return fail(
+        r.reason === "taken"
+          ? "That account is already linked to another lead"
+          : r.reason === "no_lead"
+            ? `@${a.username} is not a collected account`
+            : "Not an account address on a known platform",
+      );
+    }),
+  );
+
+  server.registerTool(
+    "link_accounts",
+    {
+      title: "Link leads' other platforms",
+      description:
+        "Scan the bios and links of a project's leads for their accounts on other platforms (no network), link them, " +
+        "and read up to `read` of them through the official connectors. New leads are linked automatically.",
+      inputSchema: z.object({
+        project: z.string(),
+        read: z.number().int().min(0).max(200).default(30),
+      }),
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.linkProjectAccounts(await projectIdFor(rt, a.project), { read: a.read }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "source_performance",
+    {
+      title: "Revenue by source",
+      description:
+        "For each source of a project (a competitor's followers, a post, a hashtag, an upload): accounts found, with " +
+        "contact, reached, interested, customers, revenue (split evenly when an account came from several sources), " +
+        "estimated collection cost, return per dollar, close rate, cost per customer and days to close. Use it to decide " +
+        "which competitors to mine more and which to stop.",
+      inputSchema: z.object({
+        project: z.string(),
+        days: z
+          .number()
+          .int()
+          .min(1)
+          .max(3650)
+          .optional()
+          .describe("Only leads collected in the last N days"),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.sourcePerformance(await projectIdFor(rt, a.project), {
+          ...(a.days ? { since: new Date(Date.now() - a.days * 86_400_000) } : {}),
+        }),
+      ),
+    ),
   );
 
   server.registerTool(

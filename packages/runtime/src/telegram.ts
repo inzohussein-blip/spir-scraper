@@ -18,7 +18,7 @@ export class TelegramNotifier implements NotificationSink {
     this.fetch = fetchImpl ?? globalThis.fetch;
   }
 
-  async sendText(html: string): Promise<void> {
+  async sendText(html: string, buttons?: { text: string; data: string }[]): Promise<void> {
     const res = await this.fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -27,10 +27,29 @@ export class TelegramNotifier implements NotificationSink {
         text: html,
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
+        ...(buttons?.length
+          ? {
+              reply_markup: {
+                inline_keyboard: buttons.map((b) => [
+                  { text: b.text, callback_data: b.data.slice(0, 64) },
+                ]),
+              },
+            }
+          : {}),
       }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`Telegram sendMessage failed: HTTP ${res.status}`);
+  }
+
+  /** Acknowledges a button press so Telegram stops its loading spinner. */
+  async answerCallback(id: string, text?: string): Promise<void> {
+    await this.fetch(`https://api.telegram.org/bot${this.token}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ callback_query_id: id, ...(text ? { text } : {}) }),
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => undefined);
   }
 
   /** Sends a file to the owner's chat (bots may send up to 50 MB). */

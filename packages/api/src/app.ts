@@ -1,5 +1,6 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import {
+  checkMessage,
   JobNotFoundError,
   parseSource,
   type Source,
@@ -458,6 +459,79 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
     async (c) => {
       const p = await (await getRuntime()).scrapers.getStoredProfile(c.req.valid("param").username);
       return p ? c.json(plain(p), 200) : c.json({ error: "Profile not collected" }, 404);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/accounts",
+      summary: "Attach an account on another platform to a lead",
+      description:
+        "Links a TikTok, YouTube, Telegram, X, Facebook, LinkedIn or website address to the person behind an " +
+        "Instagram lead, then reads it when a connector exists (YouTube, Telegram, websites; TikTok only when asked).",
+      security: [{ bearer: [] }],
+      request: {
+        body: {
+          content: {
+            "application/json": {
+              schema: z.object({ username: z.string().min(1), url: z.string().min(4).max(500) }),
+            },
+          },
+        },
+      },
+      responses: { 200: jsonOf(z.record(z.string(), z.unknown())), ...errors },
+    }),
+    async (c) => {
+      const body = c.req.valid("json");
+      const r = await (await getRuntime()).scrapers.addAccount(body);
+      if (r.ok) return c.json(plain({ account: r.account }) as Record<string, unknown>, 200);
+      if (r.reason === "no_lead") return c.json({ error: "Not a collected account" }, 404);
+      return c.json(
+        { error: r.reason === "taken" ? "Linked to another lead" : "Not an account address" },
+        400,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/v1/compliance/check",
+      summary: "Check a message for financial-promotion red flags",
+      security: [{ bearer: [] }],
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: z.object({ text: z.string().min(1).max(4000) }) },
+          },
+        },
+      },
+      responses: { 200: jsonOf(z.record(z.string(), z.unknown())), ...errors },
+    }),
+    async (c) =>
+      c.json(checkMessage(c.req.valid("json").text) as unknown as Record<string, unknown>, 200),
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/v1/read",
+      summary: "Read a web page",
+      description:
+        "Readable text, links, emails, phones and social accounts of any public page, for any AI tool. " +
+        "robots.txt is honored and internal addresses are refused.",
+      security: [{ bearer: [] }],
+      request: { query: z.object({ url: z.string().min(4).max(2000) }) },
+      responses: { 200: jsonOf(z.record(z.string(), z.unknown())), ...errors },
+    }),
+    async (c) => {
+      try {
+        const page = await (await getRuntime()).readPage(c.req.valid("query").url);
+        return c.json(plain(page) as Record<string, unknown>, 200);
+      } catch (err) {
+        return c.json({ error: (err as Error).message }, 400);
+      }
     },
   );
 

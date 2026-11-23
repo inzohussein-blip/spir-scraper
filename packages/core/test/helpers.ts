@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import * as schema from "@scrapers/db";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
@@ -9,7 +10,10 @@ import { createScrapers } from "../src/pipeline/service.js";
 import type { LeadScore, Scorer, ScoringInput } from "../src/scoring.js";
 import {
   type Capability,
+  type Connector,
+  type FollowingSource,
   NotFoundError,
+  type PlacesSearch,
   type Provider,
   type ProviderId,
   type RawProfile,
@@ -17,8 +21,17 @@ import {
 
 const migrationsFolder = fileURLToPath(new URL("../../db/drizzle", import.meta.url));
 
-export async function setup(providers: Provider[], scorer?: Scorer) {
-  const pg = new PGlite();
+export async function setup(
+  providers: Provider[],
+  scorer?: Scorer,
+  opts: {
+    connectors?: Connector[];
+    places?: PlacesSearch;
+    readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
+    following?: FollowingSource;
+  } = {},
+) {
+  const pg = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(pg, { schema });
   await migrate(db, { migrationsFolder });
   const boss = new PgBoss({
@@ -38,6 +51,10 @@ export async function setup(providers: Provider[], scorer?: Scorer) {
     // No network in tests: link-in-bio pages and MX checks are tested separately.
     resolve: {},
     config: { suppressionPepper: "test-pepper" },
+    ...(opts.connectors ? { connectors: opts.connectors } : {}),
+    ...(opts.places ? { places: opts.places } : {}),
+    ...(opts.readPage ? { readPage: opts.readPage } : {}),
+    ...(opts.following ? { following: opts.following } : {}),
   });
   await scrapers.init();
   return {
