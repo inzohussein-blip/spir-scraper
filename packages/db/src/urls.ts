@@ -77,8 +77,6 @@ export function databaseRegion(url: string | undefined): {
   } catch {
     host = null;
   }
-  const region = host
-    ? (/^[^.]+\.([a-z]{2}-[a-z]+-\d)\.aws\.neon\.tech$/.exec(host)?.[1] ?? null)
-    : null;
+  const region = host ? (/\.([a-z]{2}-[a-z]+-\d)\.aws\.neon\.tech$/.exec(host)?.[1] ?? null) : null;
   return { host, region, vercelRegion: region ? (NEON_TO_VERCEL[region] ?? null) : null };
 }
