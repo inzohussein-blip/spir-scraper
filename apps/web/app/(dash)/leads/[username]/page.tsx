@@ -1,10 +1,10 @@
 import { LANGUAGE_LABELS } from "@scrapers/core";
 import Link from "next/link";
-import { addLeadNote } from "@/app/actions";
+import { addLeadNote, saveDeal } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { FollowUpInput } from "@/components/follow-up";
 import { StatusSelect } from "@/components/status-select";
-import { Badge, Card, fmtDate, fmtNum, Notice, Textarea } from "@/components/ui";
+import { Badge, Card, fmtDate, fmtNum, Input, Notice, Textarea } from "@/components/ui";
 import { getRuntime } from "@/lib/runtime";
 import { fillTemplate, waLink } from "@/lib/whatsapp";
 
@@ -144,6 +144,23 @@ export default async function LeadPage({
               <FollowUpInput projectId={projectId} username={r.username} at={r.followUpAt} />
             </div>
           </div>
+        </Card>
+        <Card title="قيمة الصفقة" icon="chart">
+          <ActionForm action={saveDeal} submit="حفظ" className="flex items-start gap-2">
+            <input type="hidden" name="project" value={projectId} />
+            <input type="hidden" name="username" value={r.username} />
+            <Input
+              name="value"
+              inputMode="decimal"
+              defaultValue={r.dealValue ?? ""}
+              placeholder="مثال: 500"
+              aria-label="قيمة الصفقة بالدولار"
+              className="ltr"
+            />
+          </ActionForm>
+          <p className="mt-2 text-xs text-muted">
+            الإيداع أو العمولة بالدولار. يُحسب لمصادره في صفحة «العائد». اتركه فارغاً لإلغاء الصفقة.
+          </p>
         </Card>
         <Card title="أين وُجد" icon="radar">
           <ul className="space-y-1.5 text-sm">

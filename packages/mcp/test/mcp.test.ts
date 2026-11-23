@@ -50,7 +50,9 @@ describe("MCP server over Streamable HTTP", () => {
       "list_leads",
       "list_monitors",
       "score_leads",
+      "set_deal",
       "set_lead_status",
+      "source_performance",
       "start_job",
       "suppress",
       "update_project",
@@ -116,6 +118,12 @@ describe("MCP server over Streamable HTTP", () => {
     );
     const interested = await call("list_leads", { project: "عبر Claude", status: "interested" });
     expect(interested.structuredContent.count).toBe(2);
+    expect(
+      (await call("set_deal", { project: "عبر Claude", username: "user3", value: 400 }))
+        .structuredContent,
+    ).toEqual({ recorded: true });
+    const perf = await call("source_performance", { project: "عبر Claude" });
+    expect(perf.structuredContent.totals).toMatchObject({ revenue: 400, customers: 1 });
   });
 
   it("reports bad input as tool errors, not crashes", async () => {

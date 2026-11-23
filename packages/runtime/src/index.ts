@@ -101,6 +101,9 @@ export async function createRuntime(
 
   let boss = o.boss;
   const ownBoss = !boss;
+  /** Serverless: the queue starts on first use, so page views never wait for it. */
+  let lazyQueue: { started: () => boolean; ready: (init: () => Promise<void>) => void } | null =
+    null;
   if (!boss) {
     // pg-boss needs a session connection: Supabase's session pooler or direct URL, not the transaction pooler.
     boss = new PgBoss({
@@ -112,7 +115,11 @@ export async function createRuntime(
         : {}),
     });
     boss.on("error", (err) => console.error("[pg-boss]", err.message));
-    await boss.start();
+    if (o.serverless) {
+      const lazy = lazyBoss(boss);
+      boss = lazy.boss;
+      lazyQueue = lazy;
+    } else await boss.start();
   }
 
   const scorer =
@@ -204,7 +211,8 @@ export async function createRuntime(
       key: `auto-export:${jobId}`,
     });
   }
-  await scrapers.init();
+  if (lazyQueue) lazyQueue.ready(() => scrapers.init());
+  else await scrapers.init();
   pushStore = scrapers;
   onHealth = (e) => {
     const sent =
@@ -344,10 +352,51 @@ export async function createRuntime(
     },
 
     async close() {
-      if (ownBoss) await boss.stop({ graceful: true, timeout: 10_000 });
+      if (ownBoss && (!lazyQueue || lazyQueue.started()))
+        await boss.stop({ graceful: true, timeout: 10_000 });
       if (ownDb) await ownDb.$client.end();
       await o.onClose?.();
     },
   };
   return runtime;
+}
+
+/**
+ * Wraps pg-boss so it connects and creates its queues only when something
+ * actually queues or takes work. Reading pages then costs one pooled database
+ * connection instead of two plus the queue's start-up queries.
+ */
+export function lazyBoss(raw: PgBoss) {
+  let startP: Promise<unknown> | null = null;
+  let readyP: Promise<void> | null = null;
+  let init: () => Promise<void> = async () => {};
+  const start = () => {
+    startP ??= raw.start();
+    return startP;
+  };
+  const ready = () => {
+    readyP ??= start().then(() => init());
+    return readyP;
+  };
+  const boss = new Proxy(raw, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function" || prop === "on" || prop === "off" || prop === "emit")
+        return value;
+      if (prop === "start") return () => start();
+      // Queue creation runs inside init, so it waits only for the connection.
+      const wait = prop === "createQueue" ? start : ready;
+      return async (...args: unknown[]) => {
+        await wait();
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+  return {
+    boss,
+    started: () => startP !== null,
+    ready: (fn: () => Promise<void>) => {
+      init = fn;
+    },
+  };
 }

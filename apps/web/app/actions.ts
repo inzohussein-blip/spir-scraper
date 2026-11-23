@@ -476,3 +476,21 @@ export async function analyzeCompetitor(_: ActionState, form: FormData): Promise
   revalidatePath("/competitors");
   redirect(`/competitors?u=${username}`);
 }
+
+/** Records (or clears, with an empty value) what a closed deal was worth. */
+export async function saveDeal(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const projectId = str(form, "project");
+  const username = str(form, "username");
+  const raw = str(form, "value").replace(/[,،\s$]/g, "");
+  const value = raw === "" ? null : Number(raw);
+  if (value !== null && (!Number.isFinite(value) || value < 0))
+    return { error: "اكتب رقماً صحيحاً، مثل 500" };
+  const ok = await (await getRuntime()).scrapers.setDeal({ projectId, username, value });
+  if (!ok) return { error: "العميل غير موجود في هذا المشروع" };
+  await audit("lead.deal", { username, value });
+  revalidatePath(`/leads/${username}`);
+  revalidatePath("/leads");
+  revalidatePath("/insights");
+  return { message: value === null ? "أُلغيت الصفقة" : "سُجّلت الصفقة وأصبح عميلاً" };
+}

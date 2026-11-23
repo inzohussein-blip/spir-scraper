@@ -145,6 +145,8 @@ export interface LeadRow {
   sourceCount?: number;
   country?: string | null;
   language?: string | null;
+  /** Value of the closed deal, when recorded. */
+  dealValue?: number | null;
 }
 
 /** Lead statuses in Arabic, for reminders. */
@@ -290,6 +292,15 @@ export function createScrapers(deps: {
     return row;
   }
   const maxLimit = config.maxJobLimit ?? 1000;
+
+  /** Adds what a step cost (estimated from the provider's price per result) to the job. */
+  async function addCost(jobId: string, usd: number) {
+    if (!(usd > 0)) return;
+    await db
+      .update(jobs)
+      .set({ costUsd: sql`${jobs.costUsd} + ${usd.toFixed(4)}::numeric` })
+      .where(eq(jobs.id, jobId));
+  }
 
   async function bump(jobId: string, delta: Record<string, number>) {
     const parts = Object.entries(delta)
@@ -438,6 +449,7 @@ export function createScrapers(deps: {
         const found = await router.listEngagers(source, job.limit);
         usernames = found.usernames;
         await db.update(jobs).set({ provider: found.provider }).where(eq(jobs.id, job.id));
+        await addCost(job.id, router.unitCost(found.provider) * usernames.length);
       }
     } catch (err) {
       await db
@@ -538,6 +550,7 @@ export function createScrapers(deps: {
     }
 
     const delta = { enriched: 0, leads: 0, skipped: 0, failed: 0, cached: 0 };
+    let costUsd = 0;
     const watchHits: string[] = [];
     const changed: string[] = [];
     let deferred: string[] = [];
@@ -574,6 +587,7 @@ export function createScrapers(deps: {
           const fetched = await router.getProfile(username);
           profile = fetched.profile;
           provider = fetched.provider;
+          costUsd += router.unitCost(provider);
           quality = profileQuality(profile);
         } catch (err) {
           if (err instanceof NotFoundError) {
@@ -653,6 +667,7 @@ export function createScrapers(deps: {
     }
 
     await bump(job.id, delta);
+    await addCost(job.id, costUsd);
     await saveRouterState();
     if (deferred.length > 0) {
       const waitSeconds = Math.ceil(router.nextAvailableIn("profile") / 1000) + 5;
@@ -902,6 +917,7 @@ export function createScrapers(deps: {
       followUpAt: lead.followUpAt,
       sources: lead.sources,
       sourceCount: lead.sourceCount,
+      dealValue: lead.dealValue === null ? null : Number(lead.dealValue),
       country: lead.country,
       language: profile.language,
       aiScore: lead.aiScore,
@@ -1232,6 +1248,153 @@ export function createScrapers(deps: {
           text: `الحالة: ${STATUS_AR[input.status] ?? input.status}${input.note ? ` · ${input.note.slice(0, 200)}` : ""}`,
         });
       return updated.length > 0;
+    },
+
+    /**
+     * Records a closed deal: the lead becomes a customer and its value is
+     * credited to every source it was found in (see sourcePerformance).
+     * A null value clears the deal.
+     */
+    async setDeal(input: { projectId: string; username: string; value: number | null; at?: Date }) {
+      const u = input.username.trim().replace(/^@/, "").toLowerCase();
+      const [profile] = await db
+        .select({ id: profiles.igUserId })
+        .from(profiles)
+        .where(eq(profiles.username, u));
+      if (!profile) return false;
+      const value = input.value === null ? null : Math.max(0, Math.round(input.value * 100) / 100);
+      const at = input.at ?? new Date();
+      const updated = await db
+        .update(leads)
+        .set(
+          value === null
+            ? { dealValue: null, dealAt: null }
+            : {
+                dealValue: value.toFixed(2),
+                dealAt: at,
+                status: "customer",
+                statusAt: sql`coalesce(${leads.statusAt}, ${at.toISOString()}::timestamptz)`,
+                followUpAt: null,
+              },
+        )
+        .where(and(eq(leads.projectId, input.projectId), eq(leads.profileId, profile.id)))
+        .returning({ id: leads.id });
+      if (updated[0])
+        await db.insert(leadEvents).values({
+          leadId: updated[0].id,
+          kind: "status",
+          text: value === null ? "أُلغيت الصفقة" : `صفقة بقيمة ${value.toLocaleString("en")}$`,
+        });
+      return updated.length > 0;
+    },
+
+    /**
+     * What each source (competitor followers, post, hashtag, upload) brought:
+     * accounts, contacts, how far they got, deals and their value, cost, and
+     * return. A lead found in several sources counts in each; its deal value
+     * is split evenly between them so totals add up.
+     */
+    async sourcePerformance(projectId: string, opts: { since?: Date } = {}) {
+      const since = opts.since
+        ? sql`and l.created_at >= ${opts.since.toISOString()}::timestamptz`
+        : sql``;
+      const res = await db.execute<{
+        source: string;
+        leads: number;
+        contact: number;
+        reached: number;
+        interested: number;
+        customers: number;
+        revenue: string | null;
+        days_to_close: string | null;
+      }>(sql`
+        select src as source,
+               count(*)::int as leads,
+               count(*) filter (where l.email is not null or l.phone_e164 is not null or l.phone_raw is not null)::int as contact,
+               count(*) filter (where l.status <> 'new')::int as reached,
+               count(*) filter (where l.status in ('interested', 'customer'))::int as interested,
+               count(*) filter (where l.status = 'customer')::int as customers,
+               sum(l.deal_value / greatest(l.source_count, 1)) as revenue,
+               avg(extract(epoch from (l.deal_at - l.created_at)) / 86400) filter (where l.deal_at is not null) as days_to_close
+        from ${leads} l
+        cross join lateral unnest(coalesce(l.sources, '{}'::text[])) as src
+        where l.project_id = ${projectId}::uuid ${since}
+        group by src`);
+      const rows = (Array.isArray(res) ? res : (res as { rows: unknown[] }).rows) as {
+        source: string;
+        leads: number;
+        contact: number;
+        reached: number;
+        interested: number;
+        customers: number;
+        revenue: string | null;
+        days_to_close: string | null;
+      }[];
+      const costs = await db
+        .select({
+          source: jobs.sourceUrl,
+          cost: sql<string>`sum(${jobs.costUsd})`,
+          runs: sql<number>`count(*)::int`,
+        })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.projectId, projectId),
+            opts.since ? gte(jobs.createdAt, opts.since) : undefined,
+          ),
+        )
+        .groupBy(jobs.sourceUrl);
+      const costBy = new Map(
+        costs.map((c) => [c.source, { cost: Number(c.cost ?? 0), runs: c.runs }]),
+      );
+      const out = rows.map((r) => {
+        const revenue = Math.round(Number(r.revenue ?? 0) * 100) / 100;
+        const cost = Math.round((costBy.get(r.source)?.cost ?? 0) * 10000) / 10000;
+        return {
+          source: r.source,
+          runs: costBy.get(r.source)?.runs ?? 0,
+          leads: Number(r.leads),
+          contact: Number(r.contact),
+          reached: Number(r.reached),
+          interested: Number(r.interested),
+          customers: Number(r.customers),
+          revenue,
+          costUsd: cost,
+          /** Revenue per dollar spent; null when nothing was spent. */
+          roi: cost > 0 ? Math.round((revenue / cost) * 10) / 10 : null,
+          /** Share of reached accounts that became customers, in percent. */
+          closeRate:
+            Number(r.reached) > 0
+              ? Math.round((Number(r.customers) / Number(r.reached)) * 1000) / 10
+              : null,
+          costPerCustomer:
+            Number(r.customers) > 0 ? Math.round((cost / Number(r.customers)) * 100) / 100 : null,
+          daysToClose:
+            r.days_to_close === null ? null : Math.round(Number(r.days_to_close) * 10) / 10,
+        };
+      });
+      out.sort((a, b) => b.revenue - a.revenue || b.customers - a.customers || b.leads - a.leads);
+      const total = out.reduce(
+        (t, r) => ({ revenue: t.revenue + r.revenue, costUsd: t.costUsd + r.costUsd }),
+        { revenue: 0, costUsd: 0 },
+      );
+      const [deals] = await db
+        .select({
+          customers: sql<number>`count(*) filter (where ${leads.status} = 'customer')::int`,
+          withValue: sql<number>`count(*) filter (where ${leads.dealValue} is not null)::int`,
+        })
+        .from(leads)
+        .where(eq(leads.projectId, projectId));
+      return {
+        sources: out,
+        totals: {
+          revenue: Math.round(total.revenue * 100) / 100,
+          costUsd: Math.round(total.costUsd * 10000) / 10000,
+          customers: deals?.customers ?? 0,
+          /** Customers whose deal value is recorded; the report is only as good as this. */
+          customersWithValue: deals?.withValue ?? 0,
+        },
+      };
     },
 
     /** Changes many leads at once: status, follow-up date, or both. Returns how many changed. */

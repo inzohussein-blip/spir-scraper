@@ -243,3 +243,69 @@ describe("questions in plain language", () => {
     }
   });
 });
+
+describe("revenue by source", () => {
+  it("records deals, costs jobs and credits revenue to the sources that found each customer", async () => {
+    const lists: Record<string, string[]> = {
+      alpha: ["u1", "u2", "u3"],
+      beta: ["u3", "u4"],
+    };
+    let current = "alpha";
+    const t = await setup([
+      new FakeProvider(
+        "apify",
+        ["profile", "account_followers"],
+        { profile: fakeProfile, engagers: () => lists[current] ?? [] },
+        6000,
+        2.5,
+      ),
+    ]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      for (const name of ["alpha", "beta"]) {
+        current = name;
+        await t.scrapers.startJob({
+          projectId: p.id,
+          source: parseSource(`https://instagram.com/${name}`, "followers"),
+          limit: 10,
+        });
+        await settle(t);
+      }
+      // alpha: 3 discovered + 3 profiles read; beta: 2 discovered + 1 new profile (u3 cached).
+      const jobs = await t.scrapers.listJobs({ projectId: p.id });
+      const cost = (n: string) =>
+        Number(jobs.find((j) => j.sourceUrl.includes(`/${n}/`))?.costUsd ?? 0);
+      expect(cost("alpha")).toBeCloseTo(0.015, 4);
+      expect(cost("beta")).toBeCloseTo(0.0075, 4);
+
+      expect(await t.scrapers.setDeal({ projectId: p.id, username: "@u1", value: 300 })).toBe(true);
+      expect(await t.scrapers.setDeal({ projectId: p.id, username: "u3", value: 1000 })).toBe(true);
+      await t.scrapers.setLeadStatus({ projectId: p.id, username: "u4", status: "contacted" });
+      expect(await t.scrapers.setDeal({ projectId: p.id, username: "ghost", value: 1 })).toBe(
+        false,
+      );
+
+      const r = await t.scrapers.sourcePerformance(p.id);
+      const by = (n: string) => r.sources.find((s) => s.source.includes(`/${n}/`));
+      // u3 was found in both, so its 1000 is split 500/500.
+      expect(by("alpha")).toMatchObject({ leads: 3, customers: 2, revenue: 800, reached: 2 });
+      expect(by("beta")).toMatchObject({ leads: 2, customers: 1, revenue: 500, reached: 2 });
+      expect(by("alpha")?.roi).toBeCloseTo(800 / 0.015, -1);
+      expect(by("beta")?.closeRate).toBe(50);
+      expect(r.totals).toMatchObject({ revenue: 1300, customers: 2, customersWithValue: 2 });
+      expect(r.sources[0]?.source).toContain("/alpha/");
+
+      const lead = (await t.scrapers.listLeads({ projectId: p.id })).find(
+        (l) => l.username === "u1",
+      );
+      expect(lead).toMatchObject({ status: "customer", dealValue: 300 });
+      expect((await t.scrapers.leadDetail(p.id, "u1"))?.events[0]?.text).toContain(
+        "صفقة بقيمة 300",
+      );
+      await t.scrapers.setDeal({ projectId: p.id, username: "u1", value: null });
+      expect((await t.scrapers.sourcePerformance(p.id)).totals.revenue).toBe(1000);
+    } finally {
+      await t.close();
+    }
+  });
+});

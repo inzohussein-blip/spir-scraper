@@ -478,6 +478,59 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "set_deal",
+    {
+      title: "Record a closed deal",
+      description:
+        "Record what a closed deal was worth (deposit, commission... in USD). The lead becomes a customer and the value " +
+        "is credited to the sources that found it (see source_performance). value null clears the deal.",
+      inputSchema: z.object({
+        project: z.string(),
+        username: z.string(),
+        value: z.number().min(0).nullable(),
+      }),
+    },
+    guard(async (a) => {
+      const ok = await rt.scrapers.setDeal({
+        projectId: await projectIdFor(rt, a.project),
+        username: a.username,
+        value: a.value,
+      });
+      return ok ? json({ recorded: true }) : fail(`@${a.username} is not a lead in this project`);
+    }),
+  );
+
+  server.registerTool(
+    "source_performance",
+    {
+      title: "Revenue by source",
+      description:
+        "For each source of a project (a competitor's followers, a post, a hashtag, an upload): accounts found, with " +
+        "contact, reached, interested, customers, revenue (split evenly when an account came from several sources), " +
+        "estimated collection cost, return per dollar, close rate, cost per customer and days to close. Use it to decide " +
+        "which competitors to mine more and which to stop.",
+      inputSchema: z.object({
+        project: z.string(),
+        days: z
+          .number()
+          .int()
+          .min(1)
+          .max(3650)
+          .optional()
+          .describe("Only leads collected in the last N days"),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.sourcePerformance(await projectIdFor(rt, a.project), {
+          ...(a.days ? { since: new Date(Date.now() - a.days * 86_400_000) } : {}),
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
     "list_monitors",
     {
       title: "Competitor monitors",

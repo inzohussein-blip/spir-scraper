@@ -92,6 +92,15 @@ try {
   await page.waitForSelector("li >> text=طلب عرض الأسعار");
   step("lead page: history and notes");
 
+  // A closed deal shows up as revenue for the source that found the lead.
+  await page.fill('input[aria-label="قيمة الصفقة بالدولار"]', "750");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=سُجّلت الصفقة");
+  await page.goto(`${B}/insights`);
+  await page.waitForSelector("text=$750");
+  await page.waitForSelector("text=قائمة ملصقة");
+  step("deal value and revenue by source");
+
   await page.goto(`${B}/leads`);
   const download = page.waitForEvent("download");
   await page.click("text=Excel");

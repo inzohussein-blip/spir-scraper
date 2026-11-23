@@ -162,6 +162,9 @@ export const leads = pgTable(
     statusAt: timestamp("status_at", { withTimezone: true }),
     /** When the owner wants to be reminded to follow up (cleared once reminded). */
     followUpAt: timestamp("follow_up_at", { withTimezone: true }),
+    /** What the deal was worth to the owner (deposit, commission...), set when it closes. */
+    dealValue: numeric("deal_value", { precision: 12, scale: 2 }),
+    dealAt: timestamp("deal_at", { withTimezone: true }),
     /** Every source (competitor, post, hashtag) the account was found in for this project. */
     sources: text("sources").array(),
     /** Number of distinct sources; following several competitors signals interest. */

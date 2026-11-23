@@ -396,6 +396,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                             {FLAGS[f] ?? f}
                           </Badge>
                         ))}
+                        {r.dealValue != null && (
+                          <Badge tone="ok" dot={false}>
+                            صفقة ${r.dealValue.toLocaleString("en")}
+                          </Badge>
+                        )}
                         {(r.sourceCount ?? 1) > 1 && (
                           <Badge tone="ok" dot={false}>
                             عند {r.sourceCount} منافسين
