@@ -3325,16 +3325,21 @@ export function createScrapers(deps: {
 
     /** Everything needed to restore the owner's work, as plain rows (no secrets). */
     async exportBackup() {
-      const [p, l, pr, ev, m, s] = await Promise.all([
+      const [p, l, pr, ev, m, s, pa, be, op, oc, im] = await Promise.all([
         db.select().from(projects),
         db.select().from(leads),
         db.select().from(profiles),
         db.select().from(leadEvents),
         db.select().from(monitors),
         db.select().from(suppression),
+        db.select().from(partners),
+        db.select().from(brokerEvents),
+        db.select().from(ownPosts),
+        db.select().from(ownComments),
+        db.select().from(inboxMessages),
       ]);
       return {
-        version: 1,
+        version: 2,
         createdAt: new Date().toISOString(),
         projects: p,
         leads: l,
@@ -3342,6 +3347,11 @@ export function createScrapers(deps: {
         leadEvents: ev,
         monitors: m,
         suppression: s,
+        partners: pa,
+        brokerEvents: be,
+        ownPosts: op,
+        ownComments: oc,
+        inboxMessages: im,
       };
     },
 

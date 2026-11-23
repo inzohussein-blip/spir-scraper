@@ -1,5 +1,5 @@
 import { escapeHtml } from "@scrapers/runtime";
-import { buildBackup } from "@/lib/backup";
+import { buildBackup, TELEGRAM_MAX_BACKUP_BYTES } from "@/lib/backup";
 import { isCronRequest } from "@/lib/drain";
 import { getRuntime } from "@/lib/runtime";
 
@@ -94,6 +94,11 @@ export async function GET(req: Request) {
       "backup",
       async () => {
         const b = await buildBackup(rt);
+        // Too big for a bot: say so (the maintenance alert carries it) instead of failing quietly.
+        if (b.bytes.byteLength > TELEGRAM_MAX_BACKUP_BYTES)
+          throw new Error(
+            `النسخة ${(b.bytes.byteLength / 1048576).toFixed(0)}MB أكبر من حد تلكرام؛ نزّلها من الإعدادات`,
+          );
         await rt.telegram?.sendDocument(b.name, b.bytes, `نسخة احتياطية أسبوعية · ${b.summary}`);
         return true;
       },

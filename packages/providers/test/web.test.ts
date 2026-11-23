@@ -1,9 +1,12 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import {
   analyzeSite,
   assertPublicUrl,
   isPrivateAddress,
   parseHtml,
+  pinnedFetch,
   readPage,
   robotsAllows,
   safeFetch,
@@ -35,6 +38,55 @@ describe("safe fetching", () => {
       expect(isPrivateAddress(ip), ip).toBe(true);
     for (const ip of ["8.8.8.8", "93.184.216.34", "2606:4700::1111"])
       expect(isPrivateAddress(ip), ip).toBe(false);
+  });
+
+  it("sees IPv4 addresses hidden inside IPv6, whatever the spelling", async () => {
+    for (const ip of [
+      "::ffff:127.0.0.1",
+      "::ffff:7f00:1",
+      "::FFFF:7F00:0001",
+      "0:0:0:0:0:ffff:7f00:1",
+      "::ffff:a9fe:a9fe",
+      "::ffff:169.254.169.254",
+      "::127.0.0.1",
+      "::7f00:1",
+      "::ffff:0:7f00:1",
+      "64:ff9b::7f00:1",
+      "64:ff9b::a9fe:a9fe",
+      "64:ff9b:1::1",
+      "2002:7f00:1::",
+      "2002:a9fe:a9fe::1",
+      "2001::1",
+      "2001:db8::1",
+      "100::1",
+      "fec0::1",
+      "ff02::1",
+      "fe80::1%eth0",
+      "not-an-ip",
+    ])
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    for (const ip of ["::ffff:8.8.8.8", "64:ff9b::808:808", "2002:808:808::1", "2a00:1450::1"])
+      expect(isPrivateAddress(ip), ip).toBe(false);
+    for (const u of [
+      "http://[::ffff:127.0.0.1]/",
+      "http://[::ffff:a9fe:a9fe]/",
+      "http://[64:ff9b::7f00:1]/",
+      "http://[2002:7f00:1::]/",
+      "http://[::127.0.0.1]/",
+    ])
+      await expect(assertPublicUrl(u, publicDns), u).rejects.toThrow(/داخلي/);
+  });
+
+  it("checks the address again when connecting (DNS rebinding)", async () => {
+    const server = createServer((_req, res) => res.end("internal secret"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      // "localhost" resolves to a loopback address at connect time: refused.
+      await expect(pinnedFetch(`http://localhost:${port}/`)).rejects.toThrow(/داخلي/);
+    } finally {
+      server.close();
+    }
   });
 
   it("refuses internal hosts, other schemes, ports and credentials", async () => {

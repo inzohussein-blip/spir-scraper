@@ -1326,3 +1326,37 @@ describe("market index and content plan", () => {
     }
   });
 });
+
+describe("backup", () => {
+  it("includes partners, broker reports and the owner's messages", async () => {
+    const t = await setup([new FakeProvider("worker", ["profile"], { profile: fakeProfile })]);
+    try {
+      await t.scrapers.createPartner({ name: "وكيل", instagram: null });
+      await t.scrapers.ingestBrokerEvents(
+        [
+          {
+            event: "ftd",
+            externalId: "x1",
+            email: "a@b.com",
+            phone: null,
+            amount: 100,
+            currency: "USD",
+            sub: null,
+            at: null,
+          },
+        ],
+        "csv",
+      );
+      await t.scrapers.storeMessage({ id: "m1", threadId: "t", direction: "in", text: "hi" });
+      const b = await t.scrapers.exportBackup();
+      expect(b.version).toBe(2);
+      expect(b.partners).toHaveLength(1);
+      expect(b.brokerEvents).toHaveLength(1);
+      expect(b.inboxMessages).toHaveLength(1);
+      // Contacts from broker reports are kept only as hashes.
+      expect(JSON.stringify(b.brokerEvents)).not.toContain("a@b.com");
+    } finally {
+      await t.close();
+    }
+  });
+});
