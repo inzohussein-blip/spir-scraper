@@ -23,6 +23,16 @@ const RESERVED = new Set([
   "developer",
 ]);
 
+function searchSource(query: string): Extract<Source, { type: "search" }> {
+  const q = query.replace(/\s+/g, " ").trim().slice(0, 100);
+  if (!q) throw new SourceError("Empty search");
+  return {
+    type: "search",
+    query: q,
+    url: `https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(q)}`,
+  };
+}
+
 function followersOf(username: string): Extract<Source, { type: "followers" }> {
   return { type: "followers", username, url: `https://www.instagram.com/${username}/followers/` };
 }
@@ -39,6 +49,8 @@ export function parseSource(
   const s = input.trim();
   if (!s) throw new SourceError("Empty source");
 
+  if (type === "search" && !/^https?:\/\//i.test(s)) return searchSource(s);
+
   if (s.startsWith("#") || (type === "hashtag" && !s.includes("/"))) {
     const tag = s.replace(/^#/, "").toLowerCase();
     if (!/^[\p{L}\p{N}_]{1,100}$/u.test(tag)) throw new SourceError(`Invalid hashtag: ${s}`);
@@ -51,6 +63,8 @@ export function parseSource(
 
   if (!s.includes("/") && !s.includes(".com")) {
     const username = normalizeUsername(s);
+    if (type === "similar" && isValidUsername(username))
+      return { type: "similar", username, url: `https://www.instagram.com/${username}/` };
     if (!isValidUsername(username)) throw new SourceError(`Invalid username: ${s}`);
     return type === "followers"
       ? followersOf(username)
@@ -76,6 +90,17 @@ export function parseSource(
   if (first && (second === "p" || second === "reel") && third) {
     return { type: "post", shortcode: third, url: `https://www.instagram.com/p/${third}/` };
   }
+  if (first === "explore" && second === "search") {
+    const q = url.searchParams.get("q");
+    if (q) return searchSource(q);
+  }
+  if (first === "explore" && second === "locations" && third && /^\d+$/.test(third)) {
+    return {
+      type: "location",
+      locationId: third,
+      url: `https://www.instagram.com/explore/locations/${third}/`,
+    };
+  }
   if (first === "explore" && second === "tags" && third) {
     return parseSource(`#${decodeURIComponent(third)}`);
   }
@@ -84,6 +109,9 @@ export function parseSource(
     // instagram.com/<user>/followers/, or a profile link asked for as followers.
     if (isValidUsername(username) && (second === "followers" || type === "followers")) {
       return followersOf(username);
+    }
+    if (isValidUsername(username) && type === "similar") {
+      return { type: "similar", username, url: `https://www.instagram.com/${username}/` };
     }
     if (isValidUsername(username)) {
       return { type: "profile", username, url: `https://www.instagram.com/${username}/` };

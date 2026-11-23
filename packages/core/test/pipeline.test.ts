@@ -74,6 +74,96 @@ describe("pipeline handlers", () => {
     return t.scrapers.getJob(job.id);
   }
 
+  it("reads uncached accounts in one batch call and skips those it did not return", async () => {
+    const batches: string[][] = [];
+    const apify = new FakeProvider("apify", ["profile"], { profile: fakeProfile }, 6000, 2.5);
+    Object.assign(apify, {
+      getProfiles: async (names: string[]) => {
+        batches.push(names);
+        return names.filter((u) => u !== "private1").map(fakeProfile);
+      },
+    });
+    const t = await setup([apify]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const names = Array.from({ length: 20 }, (_, i) => `user${i + 1}`).concat("private1");
+      const job = await runJob(t, p.id, names);
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(21);
+      expect(apify.calls).toBe(0); // no account was read on its own
+      expect(job.counts).toMatchObject({ discovered: 21, enriched: 20, skipped: 1 });
+      // Cached accounts are not read again.
+      await runJob(t, p.id, ["user1", "user2", "user99"]);
+      expect(batches).toHaveLength(1);
+      expect(apify.calls).toBe(1); // user99 alone: one account is read directly
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("collects a large list in a background run and continues when it ends", async () => {
+    let state: "running" | "done" = "running";
+    const started: { limit: number; url: string | null }[] = [];
+    const apify = new FakeProvider("apify", ["profile", "account_followers"], {
+      profile: fakeProfile,
+    });
+    Object.assign(apify, {
+      startEngagers: async (_s: unknown, limit: number, url: string | null) => {
+        started.push({ limit, url });
+        return { runId: "run-1" };
+      },
+      collectEngagers: async () =>
+        state === "running"
+          ? { status: "running" }
+          : { status: "done", usernames: ["user1", "user2", "user3"] },
+    });
+    const t = await setup([apify]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      const { job } = await t.scrapers.startJob({
+        projectId: p.id,
+        source: parseSource("https://instagram.com/bigcoach", "followers"),
+        limit: 900,
+      });
+      await t.scrapers.drain({ budgetMs: 5_000 });
+      expect(started).toEqual([{ limit: 900, url: null }]);
+      expect((await t.scrapers.getJob(job.id)).status).toBe("running");
+      // Still running: nothing changes.
+      expect(await t.scrapers.collectDiscoveryRuns("run-1")).toBe(0);
+      state = "done";
+      expect(await t.scrapers.collectDiscoveryRuns("run-1")).toBe(1);
+      // A second report of the same run is ignored.
+      expect(await t.scrapers.collectDiscoveryRuns("run-1")).toBe(0);
+      for (let i = 0; i < 10; i++) await t.scrapers.drain({ budgetMs: 5_000 });
+      const done = await t.scrapers.getJob(job.id);
+      expect(done.status).toBe("done");
+      expect(done.counts).toMatchObject({ discovered: 3, enriched: 3 });
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("keeps a free provider first: no batch when it reads one account at a time", async () => {
+    const worker = new FakeProvider("worker", ["profile"], { profile: fakeProfile });
+    const apify = new FakeProvider("apify", ["profile"], { profile: fakeProfile });
+    let batched = 0;
+    Object.assign(apify, {
+      getProfiles: async () => {
+        batched++;
+        return [];
+      },
+    });
+    const t = await setup([worker, apify]);
+    try {
+      const p = await t.scrapers.createProject({ name: "p", owner: "o" });
+      await runJob(t, p.id, ["user1", "user2", "user3"]);
+      expect(batched).toBe(0);
+      expect(worker.calls).toBe(3);
+    } finally {
+      await t.close();
+    }
+  });
+
   it("falls back when a provider is rate limited and counts failures", async () => {
     const limited = new FakeProvider("worker", ["profile"], {
       profile: () => {

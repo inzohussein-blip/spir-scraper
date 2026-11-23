@@ -124,7 +124,15 @@ export class AccountNotFoundError extends Error {
 
 export type ProviderId = "graph" | "apify" | "worker";
 
-export type SourceType = "profile" | "followers" | "post" | "hashtag" | "upload";
+export type SourceType =
+  | "profile"
+  | "followers"
+  | "post"
+  | "hashtag"
+  | "search"
+  | "location"
+  | "similar"
+  | "upload";
 
 export type Source =
   | { type: "profile"; username: string; url: string }
@@ -132,6 +140,12 @@ export type Source =
   | { type: "followers"; username: string; url: string }
   | { type: "post"; shortcode: string; url: string }
   | { type: "hashtag"; tag: string; url: string }
+  /** Accounts Instagram's search finds for words such as «مدرب تداول». */
+  | { type: "search"; query: string; url: string }
+  /** People who posted from a place (an Instagram location page). */
+  | { type: "location"; locationId: string; url: string }
+  /** Accounts Instagram suggests as similar to this one. */
+  | { type: "similar"; username: string; url: string }
   | { type: "upload"; usernames: string[]; url: string };
 
 export type Capability =
@@ -140,7 +154,10 @@ export type Capability =
   | "post_commenters"
   | "hashtag_posters"
   | "account_engagers"
-  | "account_followers";
+  | "account_followers"
+  | "keyword_search"
+  | "location_posters"
+  | "similar_accounts";
 
 export interface Provider {
   readonly id: ProviderId;
@@ -150,6 +167,31 @@ export interface Provider {
   /** Approximate USD cost per 1000 results, shown before a job runs. */
   readonly costPer1k?: number | undefined;
   getProfile(username: string): Promise<RawProfile>;
+  /**
+   * Many profiles in one call (one Apify run instead of one per account).
+   * Accounts that do not exist or are private are simply absent.
+   */
+  getProfiles?(usernames: string[]): Promise<RawProfile[]>;
+  /**
+   * Starts collecting a large list in the background (no request has to stay
+   * open while it runs). `notifyUrl` is called when the run ends, if given.
+   * Only for sources a single run can collect (followers, hashtags).
+   */
+  startEngagers?(
+    source: Exclude<Source, { type: "upload" }>,
+    limit: number,
+    notifyUrl: string | null,
+  ): Promise<{ runId: string } | null>;
+  /** The state of a background run; when done, the usernames it found. */
+  collectEngagers?(
+    runId: string,
+    source: Exclude<Source, { type: "upload" }>,
+    limit: number,
+  ): Promise<
+    | { status: "running" }
+    | { status: "done"; usernames: string[] }
+    | { status: "failed"; error: string }
+  >;
   /** Yields usernames related to the source (commenters, posters, ...). */
   listEngagers?(source: Exclude<Source, { type: "upload" }>, limit: number): AsyncIterable<string>;
 }

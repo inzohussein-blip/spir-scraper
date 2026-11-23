@@ -28,6 +28,10 @@ export const DEFAULT_ACTORS = {
   followers: "apify~instagram-followers-following-scraper",
   /** Google Maps businesses (name, category, phone, website, rating). */
   places: "compass~crawler-google-places",
+  /** Instagram's own search, for accounts matching words. */
+  search: "apify~instagram-search-scraper",
+  /** General Instagram scraper, used for the posts of a location page. */
+  location: "apify~instagram-scraper",
   /** TikTok profiles (author stats come with the latest video). */
   tiktok: "clockworks~tiktok-profile-scraper",
 } as const;
@@ -141,6 +145,9 @@ export class ApifyProvider implements Provider, PlacesSearch, FollowingSource {
     "hashtag_posters",
     "account_engagers",
     "account_followers",
+    "keyword_search",
+    "location_posters",
+    "similar_accounts",
   ]);
   readonly ratePerMinute = 30;
   readonly costPer1k: number;
@@ -283,6 +290,134 @@ export class ApifyProvider implements Provider, PlacesSearch, FollowingSource {
     return mapApifyProfile(item);
   }
 
+  /** The actor and input that collect a source in one run (followers and hashtags only). */
+  private singleRun(source: Exclude<Source, { type: "upload" }>, limit: number) {
+    if (source.type === "followers")
+      return {
+        actor: this.actors.followers,
+        input: { usernames: [source.username], dataToScrape: "followers", resultsLimit: limit },
+      };
+    if (source.type === "hashtag")
+      return { actor: this.actors.hashtag, input: { hashtags: [source.tag], resultsLimit: limit } };
+    if (source.type === "location")
+      return {
+        actor: this.actors.location,
+        input: { directUrls: [source.url], resultsType: "posts", resultsLimit: limit },
+      };
+    return null;
+  }
+
+  /**
+   * Starts a background run (up to an hour) that Apify reports back on when
+   * it ends, so lists of tens of thousands are not cut by a 5-minute request.
+   */
+  async startEngagers(
+    source: Exclude<Source, { type: "upload" }>,
+    limit: number,
+    notifyUrl: string | null,
+  ): Promise<{ runId: string } | null> {
+    const run = this.singleRun(source, limit);
+    if (!run) return null;
+    const remaining = await this.remainingBudgetUsd();
+    if (remaining <= 0.01) throw new BudgetExceededError("Apify monthly credit used up", this.id);
+    const qs = new URLSearchParams({
+      maxItems: String(limit),
+      maxTotalChargeUsd: remaining.toFixed(2),
+      timeout: "3600",
+    });
+    if (notifyUrl)
+      qs.set(
+        "webhooks",
+        Buffer.from(
+          JSON.stringify([
+            {
+              eventTypes: [
+                "ACTOR.RUN.SUCCEEDED",
+                "ACTOR.RUN.FAILED",
+                "ACTOR.RUN.TIMED_OUT",
+                "ACTOR.RUN.ABORTED",
+              ],
+              requestUrl: notifyUrl,
+            },
+          ]),
+        ).toString("base64"),
+      );
+    const res = await this.fetch(`${this.base}/acts/${run.actor}/runs?${qs}`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(run.input),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 402) throw new BudgetExceededError("Apify: payment required", this.id);
+    await ensureOk(res, this.id, `apify start ${run.actor}`);
+    const body = (await res.json()) as { data?: { id?: string } };
+    if (!body.data?.id) throw new ProviderError("Apify did not return a run id", this.id);
+    return { runId: body.data.id };
+  }
+
+  async collectEngagers(
+    runId: string,
+    source: Exclude<Source, { type: "upload" }>,
+    limit: number,
+  ): Promise<
+    | { status: "running" }
+    | { status: "done"; usernames: string[] }
+    | { status: "failed"; error: string }
+  > {
+    const res = await ensureOk(
+      await this.fetch(`${this.base}/actor-runs/${encodeURIComponent(runId)}`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(20_000),
+      }),
+      this.id,
+      "apify run",
+    );
+    const run = (
+      (await res.json()) as {
+        data?: { status?: string; defaultDatasetId?: string; statusMessage?: string };
+      }
+    ).data;
+    const status = run?.status ?? "";
+    if (status === "READY" || status === "RUNNING") return { status: "running" };
+    // A run stopped by its time limit or the credit cap still kept what it found.
+    if (!run?.defaultDatasetId || !["SUCCEEDED", "TIMED-OUT", "ABORTED"].includes(status))
+      return { status: "failed", error: `Apify run ${status}: ${run?.statusMessage ?? ""}`.trim() };
+    const out = new Set<string>();
+    const own = source.type === "followers" ? source.username : null;
+    for (let offset = 0; out.size < limit; offset += 1000) {
+      const page = await ensureOk(
+        await this.fetch(
+          `${this.base}/datasets/${run.defaultDatasetId}/items?clean=true&offset=${offset}&limit=1000`,
+          { headers: this.headers(), signal: AbortSignal.timeout(60_000) },
+        ),
+        this.id,
+        "apify dataset",
+      );
+      const items = (await page.json()) as Item[];
+      for (const u of usernamesFrom(items.filter((i) => !i.error)))
+        if (u !== own && out.size < limit) out.add(u);
+      if (items.length < 1000) break;
+    }
+    return { status: "done", usernames: [...out] };
+  }
+
+  /** Up to 200 profiles in one actor run: far faster and cheaper than one run each. */
+  async getProfiles(usernames: string[]): Promise<RawProfile[]> {
+    const out: RawProfile[] = [];
+    for (let i = 0; i < usernames.length; i += 200) {
+      const chunk = usernames.slice(i, i + 200).map((u) => u.replace(/^@/, ""));
+      const items = await this.run(this.actors.profile, { usernames: chunk }, chunk.length);
+      for (const item of items) {
+        try {
+          out.push(mapApifyProfile(item));
+        } catch {
+          // An item without a username (private or missing account) is skipped.
+        }
+      }
+    }
+    return out;
+  }
+
   async *listEngagers(
     source: Exclude<Source, { type: "upload" }>,
     limit: number,
@@ -302,6 +437,33 @@ export class ApifyProvider implements Provider, PlacesSearch, FollowingSource {
       yield* usernamesFrom(
         await this.run(this.actors.hashtag, { hashtags: [source.tag], resultsLimit: limit }, limit),
       );
+      return;
+    }
+    if (source.type === "location") {
+      yield* usernamesFrom(
+        await this.run(
+          this.actors.location,
+          { directUrls: [source.url], resultsType: "posts", resultsLimit: limit },
+          limit,
+        ),
+      );
+      return;
+    }
+    if (source.type === "search") {
+      // Accounts whose name or username match; Instagram returns a few dozen per search.
+      const items = await this.run(
+        this.actors.search,
+        { search: source.query, searchType: "user", searchLimit: Math.min(limit, 250) },
+        limit,
+      );
+      yield* usernamesFrom(items);
+      return;
+    }
+    if (source.type === "similar") {
+      // The profile page lists accounts Instagram considers related.
+      const [item] = await this.run(this.actors.profile, { usernames: [source.username] }, 1);
+      const related = (item?.relatedProfiles ?? item?.related_profiles ?? []) as Item[];
+      yield* usernamesFrom(related).filter((u) => u !== source.username);
       return;
     }
     let postUrls: string[];

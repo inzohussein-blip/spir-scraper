@@ -238,7 +238,17 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
               schema: z.object({
                 projectId: z.string().uuid(),
                 source: z.string().optional(),
-                sourceType: z.enum(["profile", "followers", "post", "hashtag"]).optional(),
+                sourceType: z
+                  .enum([
+                    "profile",
+                    "followers",
+                    "post",
+                    "hashtag",
+                    "search",
+                    "location",
+                    "similar",
+                  ])
+                  .optional(),
                 usernames: z.array(z.string()).max(5000).optional(),
                 limit: z.number().int().min(1).max(maxLimit).default(100),
               }),

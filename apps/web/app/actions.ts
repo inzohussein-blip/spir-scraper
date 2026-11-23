@@ -123,7 +123,7 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
   let jobId: string;
   try {
     const rt = await getRuntime();
-    const limit = Math.max(1, Math.min(Number(str(form, "limit") || 100), 5000));
+    const limit = Math.max(1, Math.min(Number(str(form, "limit") || 100), 10_000));
     const file = form.get("csv");
     let source: Source;
     if (file instanceof File && file.size > 0) {
@@ -139,14 +139,25 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
       const type = str(form, "type");
       source = parseSource(
         str(form, "source"),
-        type === "hashtag" || type === "post" || type === "profile" || type === "followers"
-          ? type
-          : undefined,
+        (
+          ["hashtag", "post", "profile", "followers", "search", "location", "similar"] as const
+        ).find((t) => t === type),
       );
     } else {
       return { error: "أدخل رابطاً أو ارفع ملف CSV" };
     }
     const cost = rt.scrapers.estimateCost(source, limit);
+    if (cost > 0) {
+      // Stop before a job that the month's remaining credit cannot cover.
+      const usage = await rt.apifyUsage().catch(() => null);
+      const left = usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : null;
+      if (left !== null && cost > left + 0.01) {
+        const fits = Math.floor((limit * left) / cost);
+        return {
+          error: `الرصيد المتبقي $${left.toFixed(2)} لا يكفي ${limit} حساب (≈ $${cost.toFixed(2)}). يكفي تقريباً ${fits} حساب: خفّض الحد.`,
+        };
+      }
+    }
     if (cost > 0 && form.get("accept_cost") !== "on") {
       return {
         error: `التكلفة التقديرية ≈ $${cost.toFixed(2)}. فعّل خيار الموافقة على التكلفة ثم أعد الإرسال.`,

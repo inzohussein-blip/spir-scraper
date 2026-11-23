@@ -19,6 +19,9 @@ const SOURCE_CAPABILITY: Record<Exclude<Source["type"], "upload">, Capability> =
   followers: "account_followers",
   post: "post_commenters",
   hashtag: "hashtag_posters",
+  search: "keyword_search",
+  location: "location_posters",
+  similar: "similar_accounts",
 };
 
 export type ProviderHealthEvent =
@@ -168,6 +171,37 @@ export class ProviderRouter {
     );
   }
 
+  /**
+   * Reads many profiles at once when the first usable provider can (Apify:
+   * one run for the whole batch). Providers are tried in their usual order
+   * and the batch stops at the first one that reads one account at a time,
+   * so a free provider placed first is never skipped in favour of a paid one.
+   * `missing` lists accounts a successful batch did not return (private or
+   * gone): they are not worth paying for again one by one.
+   */
+  async getProfiles(usernames: string[]): Promise<{
+    profiles: Map<string, { profile: RawProfile; provider: ProviderId }>;
+    missing: Set<string>;
+  }> {
+    const profiles = new Map<string, { profile: RawProfile; provider: ProviderId }>();
+    const missing = new Set<string>();
+    if (usernames.length < 2) return { profiles, missing };
+    for (const p of this.available("profile")) {
+      if (!p.getProfiles) break;
+      await this.throttle(p);
+      try {
+        for (const profile of await p.getProfiles(usernames))
+          profiles.set(profile.username.toLowerCase(), { profile, provider: p.id });
+        this.ok(p);
+        for (const u of usernames) if (!profiles.has(u)) missing.add(u);
+        break;
+      } catch (err) {
+        this.rest(p, err);
+      }
+    }
+    return { profiles, missing };
+  }
+
   async listEngagers(
     source: Exclude<Source, { type: "upload" }>,
     limit: number,
@@ -194,6 +228,43 @@ export class ProviderRouter {
       ? errors.join("; ")
       : `no configured provider supports ${source.type} sources; set APIFY_TOKEN or upload a CSV of usernames`;
     throw new NoProviderError(`Discovery failed: ${hint}`);
+  }
+
+  /**
+   * Starts a background collection on the first usable provider that can run
+   * one (null when none can: the caller then collects the usual way).
+   */
+  async startEngagers(
+    source: Exclude<Source, { type: "upload" }>,
+    limit: number,
+    notifyUrl: string | null,
+  ): Promise<{ runId: string; provider: ProviderId } | null> {
+    const cap = SOURCE_CAPABILITY[source.type];
+    for (const p of this.available(cap)) {
+      if (!p.startEngagers) return null;
+      await this.throttle(p);
+      try {
+        const started = await p.startEngagers(source, limit, notifyUrl);
+        if (!started) return null;
+        this.ok(p);
+        return { runId: started.runId, provider: p.id };
+      } catch (err) {
+        this.rest(p, err);
+      }
+    }
+    return null;
+  }
+
+  async collectEngagers(
+    provider: ProviderId,
+    runId: string,
+    source: Exclude<Source, { type: "upload" }>,
+    limit: number,
+  ) {
+    const p = this.providers.find((x) => x.id === provider);
+    if (!p?.collectEngagers)
+      return { status: "failed" as const, error: `${provider} cannot read background runs` };
+    return p.collectEngagers(runId, source, limit);
   }
 
   /** Approximate USD cost of one result from this provider (0 when free or unknown). */

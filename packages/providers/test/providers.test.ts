@@ -146,6 +146,117 @@ describe("ApifyProvider", () => {
     expect(JSON.parse(String(run?.init?.body))).toEqual({ usernames: ["acme"] });
   });
 
+  it("reads many profiles in one run, 200 at a time", async () => {
+    const f = fakeFetch((url, init) => {
+      if (url.includes("/limits")) return limits(5, 0);
+      const names = (JSON.parse(String(init?.body)) as { usernames: string[] }).usernames;
+      return json([...names.filter((n) => n !== "u3").map((username) => ({ username })), {}]);
+    });
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    const names = Array.from({ length: 250 }, (_, i) => `u${i}`);
+    const out = await p.getProfiles(names);
+    expect(out).toHaveLength(249);
+    const runs = f.calls.filter((c) => c.url.includes("run-sync"));
+    expect(runs).toHaveLength(2);
+    expect(JSON.parse(String(runs[0]?.init?.body)).usernames).toHaveLength(200);
+  });
+
+  it("runs a large followers list in the background and reads every page", async () => {
+    const page = (offset: number) =>
+      Array.from({ length: offset === 0 ? 1000 : 300 }, (_, i) => ({ username: `f${offset + i}` }));
+    const f = fakeFetch((url) => {
+      if (url.includes("/limits")) return limits(5, 1);
+      if (url.includes("/acts/") && url.includes("/runs?")) return json({ data: { id: "run9" } });
+      if (url.includes("/actor-runs/run9"))
+        return json({ data: { status: "SUCCEEDED", defaultDatasetId: "ds1" } });
+      const offset = Number(new URL(url).searchParams.get("offset"));
+      return json(page(offset));
+    });
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    const source = {
+      type: "followers",
+      username: "big",
+      url: "https://instagram.com/big/",
+    } as const;
+    await expect(
+      p.startEngagers(source, 5000, "https://app.example/api/apify/webhook/x"),
+    ).resolves.toEqual({
+      runId: "run9",
+    });
+    const start = f.calls.find((c) => c.url.includes("/runs?"));
+    const hooks = JSON.parse(
+      Buffer.from(
+        new URL(start?.url ?? "").searchParams.get("webhooks") ?? "",
+        "base64",
+      ).toString(),
+    );
+    expect(hooks[0].requestUrl).toBe("https://app.example/api/apify/webhook/x");
+    expect(new URL(start?.url ?? "").searchParams.get("maxTotalChargeUsd")).toBe("4.00");
+    const done = await p.collectEngagers("run9", source, 5000);
+    expect(done.status).toBe("done");
+    expect(done.status === "done" && done.usernames.length).toBe(1300);
+    // Comments of a profile's posts need two runs: not started in the background.
+    await expect(
+      p.startEngagers(
+        { type: "profile", username: "x", url: "https://instagram.com/x/" },
+        5000,
+        null,
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("collects keyword search, location posters and similar accounts", async () => {
+    const f = fakeFetch((url, init) => {
+      if (url.includes("/limits")) return limits(5, 0);
+      const body = JSON.parse(String(init?.body));
+      if (url.includes("instagram-search-scraper"))
+        return json([{ username: "Coach1" }, { username: "coach2" }]);
+      if (url.includes("apify~instagram-scraper"))
+        return json([{ ownerUsername: "riyadh_trader" }, { ownerUsername: "fx_ksa" }]);
+      if (body.usernames?.[0] === "gold")
+        return json([
+          { username: "gold", relatedProfiles: [{ username: "gold2" }, { username: "fx3" }] },
+        ]);
+      return json([]);
+    });
+    const p = new ApifyProvider({ token: "t", fetch: f.fn });
+    const all = async (it: AsyncIterable<string>) => {
+      const out: string[] = [];
+      for await (const u of it) out.push(u);
+      return out;
+    };
+    expect(
+      await all(
+        p.listEngagers({ type: "search", query: "مدرب", url: "https://www.instagram.com/" }, 50),
+      ),
+    ).toEqual(["coach1", "coach2"]);
+    const searchRun = f.calls.find((c) => c.url.includes("search-scraper"));
+    expect(JSON.parse(String(searchRun?.init?.body))).toMatchObject({
+      search: "مدرب",
+      searchType: "user",
+    });
+    expect(
+      await all(
+        p.listEngagers(
+          {
+            type: "location",
+            locationId: "1",
+            url: "https://www.instagram.com/explore/locations/1/",
+          },
+          50,
+        ),
+      ),
+    ).toEqual(["riyadh_trader", "fx_ksa"]);
+    expect(
+      await all(
+        p.listEngagers(
+          { type: "similar", username: "gold", url: "https://www.instagram.com/gold/" },
+          50,
+        ),
+      ),
+    ).toEqual(["gold2", "fx3"]);
+  });
+
   it("applies a cap below the account limit, never above it", async () => {
     const budget = (cap: number, limit: number, used: number) =>
       new ApifyProvider({

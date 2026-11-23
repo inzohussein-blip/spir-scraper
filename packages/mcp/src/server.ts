@@ -42,7 +42,7 @@ async function projectIdFor(rt: Runtime, ref: string): Promise<string> {
 
 /** Builds one MCP server instance over a runtime. Register once, serve over stdio or HTTP. */
 export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
-  const maxLimit = opts.maxLimit ?? 1000;
+  const maxLimit = opts.maxLimit ?? 10_000;
   const server = new McpServer(
     { name: "scrapers", version: "1.0.0" },
     { capabilities: { tools: {}, resources: {}, prompts: {} }, instructions: COMPLIANCE },
@@ -66,7 +66,10 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
         "Queue a job that collects public accounts related to an Instagram profile, post or hashtag, " +
         "or a list of usernames. Returns immediately with a job_id; follow progress with get_job. " +
         "source_type 'profile' collects people who comment on the account's recent posts; " +
-        "'followers' collects the account's followers list (Instagram may expose only part of it). " +
+        "'followers' collects the account's followers list (Instagram may expose only part of it); " +
+        "'search' takes words (e.g. «مدرب تداول») and collects matching accounts; 'location' takes an " +
+        "instagram.com/explore/locations/<id>/ link; 'similar' collects accounts Instagram suggests next to one. " +
+        "Large followers, hashtag and location lists run in the background and finish later. " +
         `Profile/followers/post/hashtag sources need the Apify provider; a usernames list always works. ${COMPLIANCE}`,
       inputSchema: z.object({
         source: z.string().optional().describe("Instagram URL, @username or #hashtag"),
@@ -74,7 +77,9 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
           .array(z.string())
           .optional()
           .describe("Explicit usernames to look up instead of a source"),
-        source_type: z.enum(["profile", "followers", "post", "hashtag"]).optional(),
+        source_type: z
+          .enum(["profile", "followers", "post", "hashtag", "search", "location", "similar"])
+          .optional(),
         limit: z.number().int().min(1).max(maxLimit).default(100),
         project: z.string().describe("Project name or id; created if it does not exist"),
       }),
