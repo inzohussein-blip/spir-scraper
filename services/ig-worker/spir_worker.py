@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import platform as pyplatform
+import random
 import socket
 import sys
 import time
@@ -325,6 +326,8 @@ class Worker:
             "ip": self.ip,
             "exits": self.pool.describe(),
             "configVersion": self.config_version,
+            # Takes several accounts per visit: the dashboard is contacted once per batch.
+            "batch": True,
         }
 
     def check_ips(self) -> None:
@@ -382,6 +385,23 @@ class Worker:
             report.update(status="error", message=f"{type(e).__name__}: {e}"[:300])
         return report
 
+    def read_batch(self, decision: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Reads a batch at the dashboard's pace; stops at a refusal and hands the rest back."""
+        items = decision.get("items") or []
+        interval = float(decision.get("intervalSec", 60))
+        jitter = float(decision.get("jitterSec", 0))
+        reports: List[Dict[str, Any]] = []
+        for i, item in enumerate(items):
+            if i > 0:
+                self.sleep(interval + random.uniform(0, max(0.0, jitter)))
+            report = self.read(item)
+            log.info("@%s: %s", item.get("username"), report["status"])
+            reports.append(report)
+            if report["status"] in ("rate_limited", "blocked"):
+                reports += [{"itemId": it["id"], "status": "released"} for it in items[i + 1 :]]
+                break
+        return reports
+
     def run(self, max_steps: Optional[int] = None) -> None:
         decision: Optional[Dict[str, Any]] = None
         steps = 0
@@ -391,6 +411,12 @@ class Worker:
                 if decision is None:
                     decision = self.post("/api/engine/next", {"worker": self.info()})
                 self.apply(decision)
+                if decision.get("action") == "batch":
+                    reports = self.read_batch(decision)
+                    decision = self.post(
+                        "/api/engine/report", {"reports": reports, "worker": self.info()}
+                    )
+                    continue
                 if decision.get("action") == "read":
                     item = decision["item"]
                     report = self.read(item)

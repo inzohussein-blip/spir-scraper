@@ -104,9 +104,12 @@ export async function publicIp(fetchFn: FetchLike): Promise<string | null> {
   }
 }
 
-export type Decision =
-  | { action: "wait"; seconds: number; reason: string; commands?: { type: string }[] }
-  | { action: "read"; item: { id: string; username: string }; commands?: { type: string }[] };
+type Item = { id: string; username: string };
+export type Decision = (
+  | { action: "wait"; seconds: number; reason: string }
+  | { action: "read"; item: Item }
+  | { action: "batch"; items: Item[]; intervalSec: number; jitterSec: number }
+) & { commands?: { type: string }[] };
 
 export interface EngineState {
   enabled: boolean;
@@ -116,8 +119,16 @@ export interface EngineState {
   last: { at: string; text: string } | null;
   readToday: number;
   day: string;
-  /** An account the platform already handed over (in its answer to a report). */
-  pending?: { id: string; username: string } | null;
+  /**
+   * The batch being read: the platform is contacted once per batch (reports
+   * are kept here until then), which keeps its free plans free.
+   */
+  batch?: {
+    items: { id: string; username: string }[];
+    intervalSec: number;
+    jitterSec: number;
+    reports: J[];
+  } | null;
 }
 
 /**
@@ -144,6 +155,7 @@ export async function engineTick(opts: {
     name: "متصفح",
     version: opts.version,
     ip: state.ip,
+    batch: true,
   });
   const post = async (path: string, body: J): Promise<Decision> => {
     const r = await fetchFn(`${base}${path}`, {
@@ -161,32 +173,62 @@ export async function engineTick(opts: {
   };
   if (!state.ip) state.ip = await publicIp(fetchFn);
 
-  let d: Decision;
-  try {
-    d = state.pending
-      ? { action: "read", item: state.pending }
-      : await post("/api/engine/next", { worker: worker() });
-    state.pending = null;
-    if (d.commands?.some((c) => c.type === "check_ip")) state.ip = await publicIp(fetchFn);
-    if (d.action === "read") {
-      const r = await readAnonymously(fetchFn, d.item.username);
-      state.readToday += r.status === "ok" || r.status === "not_found" ? 1 : 0;
-      note(`@${d.item.username}: ${r.status === "ok" ? "قُرئ" : r.status}`);
-      d = await post("/api/engine/report", {
-        itemId: d.item.id,
-        ...r,
-        exitId: "direct",
-        worker: worker(),
-      });
-      if (d.action === "read") state.pending = d.item;
-    } else if (state.last === null || d.reason !== "pace") {
-      note(WAIT_TEXT[d.reason] ?? `انتظار (${d.reason})`);
+  const take = (d: Decision): boolean => {
+    if (d.action === "batch")
+      state.batch = {
+        items: [...d.items],
+        intervalSec: d.intervalSec,
+        jitterSec: d.jitterSec,
+        reports: [],
+      };
+    else if (d.action === "read")
+      state.batch = { items: [d.item], intervalSec: 30, jitterSec: 0, reports: [] };
+    else {
+      if (state.last === null || d.reason !== "pace")
+        note(WAIT_TEXT[d.reason] ?? `انتظار (${d.reason})`);
+      return false;
     }
+    return true;
+  };
+  const pace = () => {
+    const b = state.batch;
+    return b ? b.intervalSec + Math.random() * b.jitterSec : 60;
+  };
+
+  try {
+    if (!state.batch) {
+      const d = await post("/api/engine/next", { worker: worker() });
+      if (d.commands?.some((c) => c.type === "check_ip")) state.ip = await publicIp(fetchFn);
+      if (!take(d)) return { waitSeconds: waitOf(d), state };
+    }
+    const b = state.batch as NonNullable<EngineState["batch"]>;
+    const item = b.items.shift();
+    if (item) {
+      const r = await readAnonymously(fetchFn, item.username);
+      state.readToday += r.status === "ok" || r.status === "not_found" ? 1 : 0;
+      note(`@${item.username}: ${r.status === "ok" ? "قُرئ" : r.status}`);
+      b.reports.push({ itemId: item.id, ...r, exitId: "direct" });
+      if (r.status === "rate_limited" || r.status === "blocked") {
+        // Instagram asked to slow down: hand the rest back unread.
+        b.reports.push(...b.items.map((it) => ({ itemId: it.id, status: "released" })));
+        b.items = [];
+      }
+    }
+    if (b.items.length > 0) return { waitSeconds: Math.max(20, pace()), state };
+    // The batch is done: one visit reports it all and gets what is next.
+    const d = await post("/api/engine/report", { reports: b.reports, worker: worker() });
+    state.batch = null;
+    if (take(d)) return { waitSeconds: Math.max(20, pace()), state };
+    return { waitSeconds: waitOf(d), state };
   } catch (err) {
+    // Reports already made stay in state.batch and are sent on the next try.
     note((err as Error).message);
     return { waitSeconds: 300, state };
   }
-  return { waitSeconds: d.action === "read" ? 30 : Math.max(30, Math.min(d.seconds, 3600)), state };
+}
+
+function waitOf(d: Decision): number {
+  return d.action === "wait" ? Math.max(30, Math.min(d.seconds, 3600)) : 30;
 }
 
 export const WAIT_TEXT: Record<string, string> = {

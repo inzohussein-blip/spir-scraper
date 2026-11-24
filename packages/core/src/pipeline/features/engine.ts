@@ -29,6 +29,13 @@ export interface EngineSettings {
   quietTo: number;
   /** With proxies set, the home program also reads through its own connection. */
   useDirect: boolean;
+  /**
+   * Minutes of reading handed over in one visit (0: one account per visit).
+   * A worker that takes a batch reads it at the set pace and reports it in
+   * one go, so the database and the functions wake up once per batch
+   * instead of twice a minute: what keeps free plans free.
+   */
+  batchMinutes: number;
 }
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
@@ -39,6 +46,7 @@ export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   quietFrom: 2,
   quietTo: 7,
   useDirect: true,
+  batchMinutes: 45,
 };
 
 /** Who is asking: the browser extension or the home program, with what it sees. */
@@ -59,6 +67,8 @@ export interface EngineWorkerInfo {
   }[];
   /** The proxy settings version it already has. */
   configVersion?: string | null;
+  /** It can take several accounts per visit (newer workers). */
+  batch?: boolean;
 }
 
 /** Something the owner asked a worker to do from the dashboard. */
@@ -76,13 +86,26 @@ export interface EngineConfig {
 export type EngineDecision = (
   | { action: "wait"; seconds: number; reason: string }
   | { action: "read"; item: { id: string; username: string } }
-) & { config?: EngineConfig; commands?: EngineCommand[] };
+  | {
+      action: "batch";
+      items: { id: string; username: string }[];
+      /** Wait this long (plus up to jitterSec) between two accounts. */
+      intervalSec: number;
+      jitterSec: number;
+    }
+) & {
+  config?: EngineConfig;
+  commands?: EngineCommand[];
+  /** Accounts were sent to a project by this report (the web layer then runs the queue). */
+  sent?: number;
+};
 
 export type EngineReport =
   | { itemId: string; status: "ok"; profile: RawProfile; exitId?: string | null }
   | {
       itemId: string;
-      status: "not_found" | "rate_limited" | "blocked" | "error";
+      /** released: handed back unread (the batch stopped early). */
+      status: "not_found" | "rate_limited" | "blocked" | "error" | "released";
       message?: string;
       exitId?: string | null;
     };
@@ -223,14 +246,14 @@ export function engineMethods(ctx: FeatureContext) {
     return pending.length;
   }
 
-  async function finishRun(runId: string, reason: string) {
+  async function finishRun(runId: string, reason: string): Promise<number> {
     const [run] = await db
       .update(engineRuns)
       .set({ status: "done", finishedAt: new Date() })
       .where(and(eq(engineRuns.id, runId), eq(engineRuns.status, "active")))
       .returning();
-    if (!run) return;
-    await sendAccepted(runId, true);
+    if (!run) return 0;
+    const sent = await sendAccepted(runId, true);
     await log(runId, "done", reason);
     await notify({
       type: "system",
@@ -240,6 +263,7 @@ export function engineMethods(ctx: FeatureContext) {
       url: `/engine/${run.id}`,
       key: `engine-done:${run.id}`,
     });
+    return sent;
   }
 
   /** Records the worker's visit; false when the owner switched this worker off. */
@@ -310,7 +334,7 @@ export function engineMethods(ctx: FeatureContext) {
   async function next(now = new Date(), worker?: EngineWorkerInfo): Promise<EngineDecision> {
     if (!worker) return decide(now);
     if (!(await seen(worker, now))) return { action: "wait", seconds: 300, reason: "worker_off" };
-    const decision = await decide(now);
+    const decision = await decide(now, worker.batch === true);
     const commands = await takeCommands(worker);
     const extra: { config?: EngineConfig; commands?: EngineCommand[] } = {};
     if (worker.kind === "program") {
@@ -318,18 +342,29 @@ export function engineMethods(ctx: FeatureContext) {
       if (c.version !== worker.configVersion) extra.config = c;
     }
     if (commands.length) extra.commands = commands;
-    if (decision.action === "read")
+    const handed =
+      decision.action === "read" ? 1 : decision.action === "batch" ? decision.items.length : 0;
+    if (handed > 0)
       await db
         .update(engineWorkers)
-        .set({ reads: sql`${engineWorkers.reads} + 1` })
+        .set({ reads: sql`${engineWorkers.reads} + ${handed}` })
         .where(eq(engineWorkers.id, worker.id.slice(0, 64)));
     return { ...decision, ...extra };
   }
 
-  async function decide(now: Date): Promise<EngineDecision> {
+  /** Accounts that fit before the next quiet hours start (checked every 5 minutes). */
+  function fitBeforeQuiet(s: EngineSettings, now: Date, perItemSec: number, n: number): number {
+    for (let t = 0; t <= n * perItemSec; t += 300) {
+      if (inQuietHours(s, localHour(new Date(now.getTime() + t * 1000), timeZone)))
+        return Math.max(1, Math.floor(t / perItemSec));
+    }
+    return n;
+  }
+
+  async function decide(now: Date, batch = false): Promise<EngineDecision> {
     await setValue(WORKER_KEY, { lastSeen: now.toISOString() }, 30 * 86_400_000);
     const s = await settings();
-    if (!s.enabled) return { action: "wait", seconds: 300, reason: "paused" };
+    if (!s.enabled) return { action: "wait", seconds: 1800, reason: "paused" };
     const rest = await getValue<{ until: number; strikes: number }>(REST_KEY);
     if (rest && rest.until > now.getTime())
       return {
@@ -338,9 +373,9 @@ export function engineMethods(ctx: FeatureContext) {
         reason: "resting",
       };
     if (inQuietHours(s, localHour(now, timeZone)))
-      return { action: "wait", seconds: 900, reason: "quiet" };
-    if ((await readLastDay(now)) >= s.dailyCap)
-      return { action: "wait", seconds: 1800, reason: "daily_cap" };
+      return { action: "wait", seconds: 1800, reason: "quiet" };
+    const readDay = await readLastDay(now);
+    if (readDay >= s.dailyCap) return { action: "wait", seconds: 3600, reason: "daily_cap" };
     // The platform keeps the pace, whatever the worker does.
     const last = (await getValue<number>(LAST_KEY)) ?? 0;
     const gap = Math.max(20, s.intervalSec) * 1000;
@@ -369,27 +404,58 @@ export function engineMethods(ctx: FeatureContext) {
       );
     for (const r of stale) await sendAccepted(r.runId, true);
 
-    const [item] = await db
+    // How many accounts this visit hands over: one, or a batch that fills
+    // batchMinutes at the set pace without passing the daily cap or quiet hours.
+    const interval = Math.max(20, s.intervalSec);
+    const perItem = interval + s.jitterSec / 2;
+    let n = 1;
+    if (batch && s.batchMinutes > 0) {
+      n = Math.max(1, Math.min(120, Math.floor((s.batchMinutes * 60) / perItem)));
+      n = Math.min(n, s.dailyCap - readDay);
+      n = fitBeforeQuiet(s, now, perItem, n);
+    }
+    const items = await db
       .select({ id: engineQueue.id, username: engineQueue.username })
       .from(engineQueue)
       .innerJoin(engineRuns, eq(engineRuns.id, engineQueue.runId))
       .where(and(eq(engineRuns.status, "active"), eq(engineQueue.status, "queued")))
       .orderBy(desc(engineQueue.priority), asc(engineQueue.depth), asc(engineQueue.id))
-      .limit(1);
-    if (!item) return { action: "wait", seconds: 300, reason: "idle" };
+      .limit(n);
+    // Nothing to read: come back in an hour (the database can sleep meanwhile).
+    if (items.length === 0) return { action: "wait", seconds: 3600, reason: "idle" };
+    const span = (items.length - 1) * perItem * 1000;
     await db
       .update(engineQueue)
       .set({
         status: "leased",
-        leasedUntil: new Date(now.getTime() + LEASE_MS),
+        leasedUntil: new Date(now.getTime() + span + LEASE_MS + 20 * 60_000),
         attempts: sql`${engineQueue.attempts} + 1`,
       })
-      .where(eq(engineQueue.id, item.id));
-    await setValue(LAST_KEY, now.getTime(), 7 * 86_400_000);
-    return { action: "read", item };
+      .where(
+        inArray(
+          engineQueue.id,
+          items.map((i) => i.id),
+        ),
+      );
+    // The next visit is due once this batch has been read at the set pace.
+    await setValue(LAST_KEY, now.getTime() + span, 7 * 86_400_000);
+    if (!batch) return { action: "read", item: items[0] as { id: string; username: string } };
+    return { action: "batch", items, intervalSec: interval, jitterSec: s.jitterSec };
   }
 
-  async function report(r: EngineReport, now = new Date()) {
+  /** Stores one report; returns how many accounts it sent to a project. */
+  async function report(r: EngineReport, now = new Date()): Promise<number> {
+    if (r.status === "released") {
+      await db
+        .update(engineQueue)
+        .set({
+          status: "queued",
+          leasedUntil: null,
+          attempts: sql`greatest(${engineQueue.attempts} - 1, 0)`,
+        })
+        .where(and(eq(engineQueue.id, r.itemId), eq(engineQueue.status, "leased")));
+      return 0;
+    }
     if (r.exitId && r.exitId !== "direct") {
       const refused = r.status === "rate_limited" || r.status === "blocked";
       await db
@@ -408,9 +474,10 @@ export function engineMethods(ctx: FeatureContext) {
         .where(sql`${engineProxies.id}::text = ${r.exitId}`);
     }
     const [item] = await db.select().from(engineQueue).where(eq(engineQueue.id, r.itemId));
-    if (!item) return;
+    if (!item) return 0;
     const [run] = await db.select().from(engineRuns).where(eq(engineRuns.id, item.runId));
-    if (!run) return;
+    if (!run) return 0;
+    let sent = 0;
 
     if (r.status === "rate_limited" || r.status === "blocked") {
       const prev = await getValue<{ until: number; strikes: number }>(REST_KEY);
@@ -438,7 +505,7 @@ export function engineMethods(ctx: FeatureContext) {
         url: "/engine",
         key: `engine-rest:${now.toISOString().slice(0, 13)}`,
       });
-      return;
+      return sent;
     }
     if (r.status === "error") {
       const failed = item.attempts >= 3;
@@ -514,19 +581,19 @@ export function engineMethods(ctx: FeatureContext) {
               setWhere: eq(engineQueue.status, "queued"),
             });
       }
-      if (accepted) await sendAccepted(run.id);
+      if (accepted) sent += await sendAccepted(run.id);
     }
 
     const [updated] = await db.select().from(engineRuns).where(eq(engineRuns.id, run.id));
     if ((updated?.counts.read ?? 0) >= run.maxAccounts) {
-      await finishRun(run.id, `بلغ الحد (${run.maxAccounts} حساب).`);
-      return;
+      return sent + (await finishRun(run.id, `بلغ الحد (${run.maxAccounts} حساب).`));
     }
     const [left] = await db
       .select({ n: sql<number>`count(*)::int` })
       .from(engineQueue)
       .where(and(eq(engineQueue.runId, run.id), inArray(engineQueue.status, ["queued", "leased"])));
-    if (Number(left?.n ?? 0) === 0) await finishRun(run.id, "لم يبق حسابات في الطابور.");
+    if (Number(left?.n ?? 0) === 0) sent += await finishRun(run.id, "لم يبق حسابات في الطابور.");
+    return sent;
   }
 
   return {
@@ -711,9 +778,16 @@ export function engineMethods(ctx: FeatureContext) {
     engineNext: next,
 
     /** The home worker reports one account; the answer is what to do next. */
-    async engineReport(r: EngineReport, now = new Date(), worker?: EngineWorkerInfo) {
-      await report(r, now);
-      return next(now, worker);
+    /** One report, or a whole batch in order; the answer is what to do next. */
+    async engineReport(
+      r: EngineReport | EngineReport[],
+      now = new Date(),
+      worker?: EngineWorkerInfo,
+    ): Promise<EngineDecision> {
+      let sent = 0;
+      for (const one of Array.isArray(r) ? r : [r]) sent += await report(one, now);
+      const decision = await next(now, worker);
+      return sent > 0 ? { ...decision, sent } : decision;
     },
 
     // ---- workers and proxies (the «العامل المنزلي» page) ----

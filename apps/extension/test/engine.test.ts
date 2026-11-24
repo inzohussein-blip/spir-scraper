@@ -86,26 +86,86 @@ describe("engine mode", () => {
       "/api/engine/report",
     ]);
     expect(calls[0]?.body?.worker).toMatchObject({ id: "ext-1", kind: "extension", ip: "9.9.9.9" });
-    expect(calls[2]?.body).toMatchObject({ itemId: "q1", status: "ok", exitId: "direct" });
+    expect((calls[2]?.body?.reports as unknown[])[0]).toMatchObject({
+      itemId: "q1",
+      status: "ok",
+      exitId: "direct",
+    });
   });
 
-  it("keeps an account handed over in a report answer for the next visit, and backs off on errors", async () => {
-    const fetchFn = async (url: string) => {
-      if (url.endsWith("/api/engine/next"))
-        return json({ action: "read", item: { id: "q1", username: "a" } });
-      if (url.endsWith("/api/engine/report"))
-        return json({ action: "read", item: { id: "q2", username: "b" } });
+  it("reads a batch one account per visit and reports it all at the end", async () => {
+    const posts: { path: string; body: Record<string, unknown> }[] = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.startsWith("/api/engine"))
+        posts.push({ path, body: JSON.parse(String(init?.body)) });
+      if (path === "/api/engine/next")
+        return json({
+          action: "batch",
+          intervalSec: 60,
+          jitterSec: 0,
+          items: [
+            { id: "q1", username: "a" },
+            { id: "q2", username: "b" },
+            { id: "q3", username: "c" },
+          ],
+        });
+      if (path === "/api/engine/report")
+        return json({ action: "wait", seconds: 1800, reason: "pace" });
+      if (url.includes("username=b")) return json({}, 429);
       return json({ data: { user: { ...USER, username: "a" } } });
     };
-    const first = await engineTick({
+    const run = (st: EngineState) =>
+      engineTick({ platformUrl: "https://x.app", key: "k", state: st, version: "1", fetchFn });
+    const first = await run(state());
+    expect(first.waitSeconds).toBe(60);
+    expect(posts.map((p) => p.path)).toEqual(["/api/engine/next"]);
+    expect(posts[0]?.body.worker).toMatchObject({ batch: true });
+    // b is refused: c is handed back and the batch is reported in one visit.
+    const second = await run(first.state);
+    expect(second.waitSeconds).toBe(1800);
+    expect(posts.map((p) => p.path)).toEqual(["/api/engine/next", "/api/engine/report"]);
+    const reports = posts[1]?.body.reports as { itemId: string; status: string }[];
+    expect(reports.map((r) => r.status)).toEqual(["ok", "rate_limited", "released"]);
+    expect(second.state.batch).toBeNull();
+  });
+
+  it("keeps the reports when the platform cannot be reached, and explains a refused key", async () => {
+    let up = false;
+    const fetchFn = async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/api/engine/report")
+        return up ? json({ action: "wait", seconds: 600, reason: "idle" }) : json({}, 503);
+      return json({ data: { user: USER } });
+    };
+    const st: EngineState = {
+      ...state(),
+      batch: {
+        items: [{ id: "q1", username: "coach" }],
+        intervalSec: 60,
+        jitterSec: 0,
+        reports: [],
+      },
+    };
+    const failed = await engineTick({
       platformUrl: "https://x.app",
       key: "k",
-      state: state(),
+      state: st,
       version: "1",
       fetchFn,
     });
-    expect(first.state.pending).toEqual({ id: "q2", username: "b" });
-    expect(first.waitSeconds).toBe(30);
+    expect(failed.waitSeconds).toBe(300);
+    expect(failed.state.batch?.reports).toHaveLength(1);
+    up = true;
+    const sent = await engineTick({
+      platformUrl: "https://x.app",
+      key: "k",
+      state: failed.state,
+      version: "1",
+      fetchFn,
+    });
+    expect(sent.waitSeconds).toBe(600);
+    expect(sent.state.batch).toBeNull();
     const refused = await engineTick({
       platformUrl: "https://x.app",
       key: "bad",

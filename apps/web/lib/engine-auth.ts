@@ -46,12 +46,14 @@ export function workerInfo(v: unknown): EngineWorkerInfo | undefined {
     version: str(w.version, 30),
     ip: str(w.ip, 64),
     configVersion: str(w.configVersion, 40),
+    batch: w.batch === true,
     ...(exits ? { exits } : {}),
   };
 }
 
 /** Proxy addresses go to the program decrypted, over the authenticated HTTPS answer only. */
-export function forWorker(d: EngineDecision) {
+export function forWorker(full: EngineDecision) {
+  const { sent: _sent, ...d } = full;
   if (!d.config) return d;
   return {
     ...d,
