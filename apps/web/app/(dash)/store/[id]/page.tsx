@@ -97,6 +97,16 @@ export default async function StoreTool({ params }: { params: Promise<{ id: stri
         </div>
       </div>
 
+      {tool.details && tool.details.length > 0 && (
+        <Card title="كيف تعمل" icon="sparkles">
+          <ul className="list-disc space-y-1.5 ps-5 text-sm text-fg-2">
+            {tool.details.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       {missing.length > 0 && (
         <Notice tone="warn">
           تحتاج هذه الأداة: {missing.join("، ")}. أضفه في Vercel (Settings ← Environment Variables)

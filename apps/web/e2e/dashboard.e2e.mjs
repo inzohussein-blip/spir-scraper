@@ -387,6 +387,14 @@ try {
   // «المتجر»: tools by platform, a tool's page, a run and its results.
   await page.goto(`${B}/store`);
   await page.waitForSelector('[data-tool="fb-ads"]');
+  // The two Instagram page tools are pinned first, with their explanation.
+  assert.deepEqual(
+    await page
+      .locator("[data-pinned]")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-pinned"))),
+    ["ig-commenters", "ig-followers"],
+  );
+  assert.ok(await page.locator("text=ابدأ من هنا").isVisible());
   assert.ok(await page.locator('nav[aria-label="الأدوات"] >> text=التشغيلات').isVisible());
   await page.click('nav[aria-label="التصنيفات"] >> a:has-text("يوتيوب")');
   await page.waitForURL(/\/store\?c=youtube/);

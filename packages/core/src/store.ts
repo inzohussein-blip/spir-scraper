@@ -51,6 +51,10 @@ export interface StoreTool {
   run: StoreRun;
   /** Shown first in the store. */
   featured?: boolean;
+  /** Pinned at the very top of the store with its explanation («ابدأ من هنا»). */
+  pinned?: boolean;
+  /** A fuller explanation: when to use it, what comes out, what it costs. */
+  details?: string[];
   /** For a tool run: an example of what to type. */
   example?: string;
 }
@@ -67,6 +71,15 @@ export const STORE_TOOLS: StoreTool[] = [
     needs: [],
     run: { kind: "job", sourceType: "profile" },
     featured: true,
+    pinned: true,
+    details: [
+      "ضع رابط صفحة إنستقرام (منافس، مدرب، وسيط) فتجمع من يعلّقون على منشوراتها.",
+      "الأفضل غالباً: أشخاص متفاعلون فعلاً، ونسبة المهتمين بينهم أعلى من المتابعين.",
+      "لكل حساب: الاسم، والبايو، والمتابعون، والدولة واللغة، والتقييم، والإيميل والهاتف والموقع إن كانت ظاهرة للعامة.",
+      "الإيميل والرقم يظهران غالباً للحسابات التجارية والمدربين والشركات؛ الحسابات الشخصية العادية غالباً بلا وسيلة تواصل ظاهرة.",
+      "القراءة مجانية عبر محرك Spir إن كان جهازك متصلاً، وإلا من رصيد Apify (حوالي 1.60 دولار لكل 1000 حساب). المقروء خلال 30 يوماً لا يُدفع مرة أخرى.",
+      "بعد الانتهاء: صفحة العملاء ← فلتر «له إيميل» أو «له هاتف» ← تصدير Excel.",
+    ],
   },
   {
     id: "ig-followers",
@@ -78,6 +91,14 @@ export const STORE_TOOLS: StoreTool[] = [
     needs: ["apify"],
     run: { kind: "job", sourceType: "followers" },
     featured: true,
+    pinned: true,
+    details: [
+      "ضع رابط صفحة إنستقرام فتجمع قائمة متابعيها، والأقرب لعملائك أولاً.",
+      "استعملها حين تريد عدداً أكبر من المعلّقين (آلاف الحسابات).",
+      "لكل حساب نفس البيانات: الاسم، والبايو، والمتابعون، والتقييم، والإيميل والهاتف والموقع إن كانت ظاهرة للعامة.",
+      "جمع القائمة من Apify (حوالي 1.15 دولار لكل 1000 متابع)، والقراءة مجانية بالمحرك أو من رصيد Apify.",
+      "بعد الانتهاء: صفحة العملاء ← فلتر «له إيميل» أو «له هاتف» ← تصدير Excel.",
+    ],
   },
   {
     id: "ig-post",

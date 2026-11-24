@@ -22,7 +22,9 @@ export default async function Store({
       (!c || t.category === c) &&
       (!needle || `${t.name} ${t.summary} ${t.output}`.toLowerCase().includes(needle)),
   );
-  const featured = !c && !needle ? STORE_TOOLS.filter((t) => t.featured) : [];
+  const home = !c && !needle;
+  const pinned = home ? STORE_TOOLS.filter((t) => t.pinned) : [];
+  const featured = home ? STORE_TOOLS.filter((t) => t.featured && !t.pinned) : [];
   const counts = new Map<string, number>();
   for (const t of STORE_TOOLS) counts.set(t.category, (counts.get(t.category) ?? 0) + 1);
   const withQ = (base: string) =>
@@ -92,6 +94,50 @@ export default async function Store({
           chip(k, STORE_CATEGORIES[k], counts.get(k) ?? 0),
         )}
       </nav>
+
+      {pinned.length > 0 && (
+        <section className="space-y-3" aria-label="ابدأ من هنا">
+          <div>
+            <h2 className="text-[15px] font-semibold">ابدأ من هنا: عملاء صفحة إنستقرام</h2>
+            <p className="text-sm text-muted">
+              ضع رابط أي صفحة إنستقرام فتستخلص عملاءها مع إيميلاتهم وأرقامهم الظاهرة للعامة.
+            </p>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {pinned.map((t) => (
+              <div
+                key={t.id}
+                className="card flex flex-col gap-3 border-accent/40 p-5"
+                data-pinned={t.id}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="grid size-10 shrink-0 place-items-center rounded-[10px] bg-accent-soft text-accent">
+                    <Icon name={TOOL_ICON[t.category]} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-bold">{t.name}</div>
+                    <div className="text-xs text-muted">{t.summary}</div>
+                  </div>
+                </div>
+                <ul className="list-disc space-y-1 ps-5 text-sm text-fg-2">
+                  {(t.details ?? []).map((d) => (
+                    <li key={d}>{d}</li>
+                  ))}
+                </ul>
+                <div className="mt-auto flex flex-wrap items-center gap-2">
+                  <Link
+                    href={`/store/${t.id}`}
+                    className="rounded-[10px] border border-accent bg-accent px-4 py-2 text-sm font-medium text-accent-text"
+                  >
+                    استعمل الأداة
+                  </Link>
+                  <Badge tone="ok">{priceLabel(t)}</Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {featured.length > 0 && (
         <section className="space-y-3">
