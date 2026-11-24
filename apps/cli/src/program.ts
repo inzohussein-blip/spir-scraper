@@ -1,13 +1,17 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { confirm, isCancel } from "@clack/prompts";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   type LeadFilters,
   type LeadRow,
+  parseBackup,
   parseSource,
   parseUsernameCsv,
+  readBackupFile,
   type Source,
   type SuppressionKind,
+  sealBackup,
   uploadSource,
 } from "@scrapers/core";
 import { buildMcpServer } from "@scrapers/mcp";
@@ -569,6 +573,44 @@ export function buildProgram(makeContext: ContextFactory, io: Io = consoleIo): C
       const c = await context();
       for (const [kind, value] of entries) await c.scrapers.suppress(kind, value, o.reason);
       io.log(`${pc.green("✓")} suppressed ${entries.map(([k]) => k).join(", ")}`);
+    });
+
+  const backup = program.command("backup").description("save or restore a copy of all your work");
+  backup
+    .command("export <file>")
+    .description("write a backup (.json.gz; add --encrypt for the .enc format Telegram gets)")
+    .option("--encrypt", "encrypt with AUTH_SECRET")
+    .action(async (file: string, o: { encrypt?: boolean }) => {
+      const data = await (await context()).scrapers.exportBackup();
+      let bytes: Uint8Array = new Uint8Array(gzipSync(Buffer.from(JSON.stringify(data))));
+      if (o.encrypt) bytes = sealBackup(bytes, process.env.AUTH_SECRET ?? "");
+      writeFileSync(file, bytes);
+      io.log(
+        `${pc.green("✓")} ${file}: ${data.projects.length} projects, ${data.leads.length} leads, ${data.leadEvents.length} notes`,
+      );
+    });
+  backup
+    .command("restore <file>")
+    .description(
+      "add what is missing from a backup (.enc, .json.gz or .json); nothing is deleted or changed",
+    )
+    .option("-y, --yes", "restore without asking")
+    .action(async (file: string, o: { yes?: boolean }) => {
+      if (!existsSync(file)) throw new InvalidArgumentError(`no such file: ${file}`);
+      const data = parseBackup(
+        readBackupFile(new Uint8Array(readFileSync(file)), process.env.AUTH_SECRET ?? ""),
+      );
+      io.log(
+        `Backup from ${data.createdAt.slice(0, 10)}: ${data.projects.length} projects, ${data.leads.length} leads.`,
+      );
+      if (!o.yes && !(await io.confirm("Add what is missing to this platform?"))) {
+        io.log("Nothing restored.");
+        return;
+      }
+      const r = await (await context()).scrapers.importBackup(data);
+      for (const [table, v] of Object.entries(r))
+        if (v.inBackup > 0) io.log(`  ${table}: ${v.added} added of ${v.inBackup}`);
+      io.log(`${pc.green("✓")} restored`);
     });
 
   program

@@ -1,3 +1,4 @@
+export * from "./backup-file.js";
 export * from "./broker.js";
 export * from "./compliance.js";
 export * from "./extract/index.js";
@@ -6,6 +7,12 @@ export * from "./learn/model.js";
 export * from "./market.js";
 export * from "./normalize.js";
 export * from "./notify.js";
+export {
+  BACKUP_VERSION,
+  type BackupData,
+  parseBackup,
+  type RestoreResult,
+} from "./pipeline/features/backup.js";
 export {
   DEFAULT_ENGINE_SETTINGS,
   type EngineCommand,

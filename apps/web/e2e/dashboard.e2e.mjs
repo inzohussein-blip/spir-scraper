@@ -166,7 +166,21 @@ try {
   });
   assert.equal(junk.status(), 400);
   assert.match(await junk.text(), /تعذّر فك التشفير/);
-  step("backup download and follow-up calendar feed");
+  // Restoring the copy just downloaded adds nothing (merge) and says so.
+  await page.setInputFiles('input[aria-label="ملف النسخة للاستعادة"]', {
+    name: "spir-backup.json.gz",
+    mimeType: "application/gzip",
+    buffer: gz,
+  });
+  await page.check('input[name="confirm"]');
+  await page.click('button:has-text("استعادة")');
+  await page.waitForSelector("text=تمت الاستعادة: أُضيف 0 مشروع");
+  // A restore without the confirmation box is refused.
+  const unconfirmed = await page.request.post(`${B}/api/backup/restore`, {
+    multipart: { file: { name: "b.json.gz", mimeType: "application/gzip", buffer: gz } },
+  });
+  assert.equal(unconfirmed.status(), 400);
+  step("backup download, restore and follow-up calendar feed");
 
   await page.goto(`${B}/competitors`);
   await page.fill('input[aria-label="حساب المنافس"]', "@rival7");

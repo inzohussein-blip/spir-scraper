@@ -1,6 +1,7 @@
 import { competitorSnapshots, profileSnapshots, profiles as profilesTable } from "@scrapers/db";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { parseBackup } from "../src/pipeline/features/backup.js";
 import { parseSource, uploadSource } from "../src/source.js";
 import { AccountNotFoundError } from "../src/types.js";
 import { FakeProvider, FakeScorer, fakeProfile, setup } from "./helpers.js";
@@ -1349,7 +1350,7 @@ describe("backup", () => {
       );
       await t.scrapers.storeMessage({ id: "m1", threadId: "t", direction: "in", text: "hi" });
       const b = await t.scrapers.exportBackup();
-      expect(b.version).toBe(2);
+      expect(b.version).toBe(3);
       expect(b.partners).toHaveLength(1);
       expect(b.brokerEvents).toHaveLength(1);
       expect(b.inboxMessages).toHaveLength(1);
@@ -1358,5 +1359,73 @@ describe("backup", () => {
     } finally {
       await t.close();
     }
+  });
+
+  it("restores into an empty platform by merging, and twice changes nothing", async () => {
+    const mk = () =>
+      setup([
+        new FakeProvider("apify", ["profile", "account_followers"], {
+          profile: fakeProfile,
+          engagers: () => ["user1", "user2"],
+        }),
+      ]);
+    const a = await mk();
+    let json: string;
+    try {
+      const p = await a.scrapers.createProject({ name: "p", owner: "o" });
+      await a.scrapers.startJob({
+        projectId: p.id,
+        source: parseSource("https://instagram.com/first", "followers"),
+        limit: 10,
+      });
+      await settle(a);
+      const [lead] = await a.scrapers.listLeads({ projectId: p.id });
+      if (!lead) throw new Error("no lead");
+      await a.scrapers.addLeadNote({
+        projectId: p.id,
+        username: lead.username,
+        text: "اتصل الأحد",
+      });
+      json = JSON.stringify(await a.scrapers.exportBackup());
+    } finally {
+      await a.close();
+    }
+
+    const b = await mk();
+    try {
+      const data = parseBackup(json);
+      const r = await b.scrapers.importBackup(data);
+      expect(r.projects.added).toBe(1);
+      expect(r.leads).toEqual({ inBackup: 2, added: 2 });
+      expect(r.leadEvents.added).toBeGreaterThanOrEqual(1);
+      const [p] = await b.scrapers.listProjects();
+      expect((await b.scrapers.listLeads({ projectId: p?.id ?? "" })).length).toBe(2);
+      // Restoring again adds nothing and changes nothing.
+      const again = await b.scrapers.importBackup(data);
+      expect(Object.values(again).every((x) => x.added === 0)).toBe(true);
+
+      // An older backup (version 2: no jobs or people) still restores its leads.
+      const old = JSON.parse(json) as Record<string, unknown>;
+      old.version = 2;
+      delete old.jobs;
+      delete old.people;
+      delete old.accounts;
+      const c = await mk();
+      try {
+        const r2 = await c.scrapers.importBackup(parseBackup(JSON.stringify(old)));
+        expect(r2.leads.added).toBe(2);
+        expect(r2.jobs.added).toBe(1);
+      } finally {
+        await c.close();
+      }
+    } finally {
+      await b.close();
+    }
+  });
+
+  it("refuses files that are not a backup of this platform", () => {
+    expect(() => parseBackup("not json")).toThrow();
+    expect(() => parseBackup(JSON.stringify({ hello: 1 }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ version: 99, projects: [] }))).toThrow(/أحدث/);
   });
 });
