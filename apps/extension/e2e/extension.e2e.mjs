@@ -191,6 +191,9 @@ const server = http.createServer(async (req, res) => {
     return send(200, { projects: [{ id: "11111111-1111-4111-8111-111111111111", name: "تجربة" }] });
   if (req.url === "/api/v1/projects/11111111-1111-4111-8111-111111111111")
     return send(200, { id: "1", name: "تجربة", aiCriteria: "وسطاء تداول في الخليج" });
+  // The badge downloads the project's leads once and looks profiles up locally.
+  if (req.url === "/api/v1/projects/11111111-1111-4111-8111-111111111111/lead-index")
+    return send(200, { entries: [["known", "interested", 72]], at: new Date().toISOString() });
   if (req.url?.startsWith("/api/v1/leads?")) {
     const q = new URL(req.url, origin).searchParams.get("q");
     return send(200, {

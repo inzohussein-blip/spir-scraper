@@ -61,6 +61,14 @@ export class Platform {
     return { name: r.name, aiCriteria: r.aiCriteria ?? null };
   }
 
+  /** Every lead of the project as [username, status, score] (downloaded once a day for the badge). */
+  async leadIndex(projectId: string): Promise<[string, string, number | null][]> {
+    const r = await this.call<{ entries: [string, string, number | null][] }>(
+      `/projects/${encodeURIComponent(projectId)}/lead-index`,
+    );
+    return r.entries;
+  }
+
   /** The account's lead in this project (CRM status and score), or null. */
   async lead(
     projectId: string,

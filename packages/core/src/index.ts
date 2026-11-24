@@ -19,6 +19,15 @@ export {
   keywordHits,
   restMinutes,
 } from "./pipeline/features/engine.js";
+export { type SaverMeter, type SaverState, widerQuiet } from "./pipeline/features/saver.js";
+export {
+  awakeMinutes,
+  DEFAULT_USAGE_LIMITS,
+  monthFraction,
+  USAGE_LABELS,
+  type UsageCategory,
+  type UsageLimits,
+} from "./pipeline/features/usage.js";
 export * from "./pipeline/router.js";
 export * from "./pipeline/service.js";
 export * from "./scoring.js";

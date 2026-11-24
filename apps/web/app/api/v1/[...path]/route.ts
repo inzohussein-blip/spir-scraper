@@ -1,5 +1,6 @@
 import { createApi } from "@scrapers/api";
 import { scheduleDrain } from "@/lib/drain";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 
 export const runtime = "nodejs";
@@ -9,6 +10,7 @@ const api = createApi(getRuntime, { onJobStarted: () => scheduleDrain({ force: t
 
 /** Mounted at /api: strip the prefix so the Hono app sees /v1/... */
 function handle(req: Request) {
+  meter("api");
   const url = new URL(req.url);
   url.pathname = url.pathname.replace(/^\/api/, "");
   return api.fetch(new Request(url, req));

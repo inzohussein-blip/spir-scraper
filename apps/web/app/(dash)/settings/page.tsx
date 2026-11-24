@@ -154,10 +154,32 @@ export default async function Settings() {
             </a>
             <Badge tone={status.telegram ? "ok" : "warn"}>
               {status.telegram
-                ? "النسخة الأسبوعية تصل على تلكرام"
+                ? "النسخة الأسبوعية تصل على تلكرام مشفّرة"
                 : "اربط تلكرام لتصلك نسخة أسبوعية"}
             </Badge>
           </div>
+          <form
+            action="/api/backup/decrypt"
+            method="post"
+            encType="multipart/form-data"
+            className="flex flex-wrap items-center gap-2 text-sm"
+          >
+            <span>فك تشفير نسخة من تلكرام (.enc):</span>
+            <input
+              type="file"
+              name="file"
+              accept=".enc"
+              aria-label="نسخة مشفّرة"
+              required
+              className="text-sm"
+            />
+            <button
+              type="submit"
+              className="rounded-lg border border-line px-3 py-1.5 hover:bg-bg-2"
+            >
+              فك التشفير
+            </button>
+          </form>
           <Field
             label="تقويم المتابعات"
             hint="في Google Calendar: الإعدادات ← إضافة تقويم ← من رابط، والصق هذا الرابط. لا تشاركه: من يملكه يرى أسماء من تتابعهم."

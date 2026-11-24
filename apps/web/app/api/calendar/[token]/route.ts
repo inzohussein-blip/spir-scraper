@@ -1,6 +1,7 @@
 import { calendarToken } from "@/lib/backup";
 import { appOrigin } from "@/lib/env";
 import { followUpCalendar } from "@/lib/ics";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 import { STATUS_LABELS } from "@/lib/status";
 import { safeEqual } from "@/lib/tokens";
@@ -15,6 +16,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const { token } = await ctx.params;
   if (!process.env.AUTH_SECRET || !safeEqual(token.replace(/\.ics$/, ""), calendarToken()))
     return new Response("not found", { status: 404 });
+  meter("public");
   const rt = await getRuntime();
   const rows = await rt.scrapers.upcomingFollowUps();
   const body = followUpCalendar(

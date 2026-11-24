@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { metaVerifyToken } from "@/lib/backup";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 import { safeEqual } from "@/lib/tokens";
 
@@ -43,6 +44,7 @@ export async function POST(req: Request) {
   if (!secret || !safeEqual(signature, expected))
     return new Response("unauthorized", { status: 401 });
   const body = JSON.parse(raw || "{}") as { entry?: Entry[] };
+  meter("webhooks");
   const rt = await getRuntime();
   const own = process.env.IG_BUSINESS_ACCOUNT_ID;
   for (const entry of body.entry ?? []) {

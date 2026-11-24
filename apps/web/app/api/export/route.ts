@@ -1,4 +1,5 @@
 import { hasSession } from "@/lib/auth";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 
 export const runtime = "nodejs";
@@ -11,6 +12,7 @@ export async function GET(req: Request) {
   const format = q.get("format") === "csv" ? "csv" : "xlsx";
   const projectId = q.get("project");
   if (!projectId) return new Response("project is required", { status: 400 });
+  meter("dashboard");
   const r = await (await getRuntime()).exportLeads({
     projectId,
     format,

@@ -914,6 +914,7 @@ export async function saveEngineSettings(_: ActionState, form: FormData): Promis
   const current = await rt.scrapers.engineSettings();
   const saved = await rt.scrapers.saveEngineSettings({
     enabled: form.get("enabled") === "on",
+    adaptive: form.get("adaptive") === "on",
     intervalSec: num("interval", current.intervalSec),
     jitterSec: num("jitter", current.jitterSec),
     dailyCap: num("daily_cap", current.dailyCap),
@@ -1037,4 +1038,32 @@ export async function setEngineUseDirect(useDirect: boolean) {
   await requireSession();
   await (await getRuntime()).scrapers.saveEngineSettings({ useDirect });
   revalidatePath("/workers");
+}
+
+/** The free-plan limits the «الاستهلاك» page and its alerts compare against. */
+export async function saveUsageLimits(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const n = (k: string) => Number(str(form, k));
+  await (await getRuntime()).scrapers.saveUsageLimits({
+    dbHours: n("db_hours"),
+    dbStorageMb: n("db_storage_mb"),
+    requests: n("requests"),
+    apifyUsd: n("apify_usd"),
+  });
+  revalidatePath("/usage");
+  return { message: "حُفظت الحدود" };
+}
+
+/** Ends automatic saving now and restores what it changed. */
+export async function undoSaver() {
+  await requireSession();
+  await (await getRuntime()).scrapers.undoSaver();
+  revalidatePath("/usage");
+  revalidatePath("/engine");
+}
+
+export async function setSaverAuto(auto: boolean) {
+  await requireSession();
+  await (await getRuntime()).scrapers.setSaverAuto(auto);
+  revalidatePath("/usage");
 }

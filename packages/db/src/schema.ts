@@ -3,12 +3,14 @@ import {
   boolean,
   char,
   check,
+  date,
   index,
   integer,
   jsonb,
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -721,3 +723,32 @@ export const engineProxies = pgTable("engine_proxies", {
 
 export type EngineWorker = typeof engineWorkers.$inferSelect;
 export type EngineProxy = typeof engineProxies.$inferSelect;
+
+/**
+ * What woke the platform each day, by kind (dashboard, engine, Telegram...),
+ * for the «الاستهلاك» page: free plans count every wake-up.
+ */
+export const usageDaily = pgTable(
+  "usage_daily",
+  {
+    day: date("day").notNull(),
+    category: text("category").notNull(),
+    requests: integer("requests").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.day, t.category] })],
+);
+
+/**
+ * The 5-minute slots of each day in which anything touched the database.
+ * The database sleeps after a few idle minutes, so these slots estimate its
+ * awake time when the provider's own figure is not available.
+ */
+export const usageSlots = pgTable(
+  "usage_slots",
+  {
+    day: date("day").notNull(),
+    /** 0..287: minutes since midnight UTC divided by 5. */
+    slot: smallint("slot").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.day, t.slot] })],
+);

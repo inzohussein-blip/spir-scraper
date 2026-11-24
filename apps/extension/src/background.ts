@@ -1,4 +1,5 @@
 import { type EngineState, engineTick } from "./engine.js";
+import { fromEntries, type LeadIndex, lookup, needsRefresh, withSaved } from "./lead-index.js";
 import type { BadgeAnswer, BadgeRequest } from "./page/badge.js";
 import { Platform } from "./platform.js";
 import { loadSettings } from "./settings.js";
@@ -6,9 +7,16 @@ import { loadSettings } from "./settings.js";
 /** The toolbar button opens the side panel; everything else runs there. */
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
-/** Lookups are cached briefly so moving between profiles stays light on the platform. */
-const cache = new Map<string, { at: number; answer: BadgeAnswer }>();
-const CACHE_MS = 5 * 60_000;
+const INDEX_KEY = "leadIndex";
+
+/** The project's leads on this computer, downloaded at most once a day. */
+async function leadIndex(platform: Platform, projectId: string): Promise<LeadIndex> {
+  const saved = (await chrome.storage.local.get(INDEX_KEY))[INDEX_KEY] as LeadIndex | undefined;
+  if (saved && !needsRefresh(saved, projectId)) return saved;
+  const idx = fromEntries(projectId, await platform.leadIndex(projectId));
+  await chrome.storage.local.set({ [INDEX_KEY]: idx });
+  return idx;
+}
 
 async function answer(req: BadgeRequest): Promise<BadgeAnswer> {
   const s = await loadSettings();
@@ -17,18 +25,13 @@ async function answer(req: BadgeRequest): Promise<BadgeAnswer> {
   if (!platform.configured || !s.projectId) return { ok: true, enabled: false, lead: null };
   if (req.kind === "lead_save") {
     await platform.save(s.projectId, [req.username]);
-    cache.delete(req.username);
+    const idx = await leadIndex(platform, s.projectId);
+    await chrome.storage.local.set({ [INDEX_KEY]: withSaved(idx, req.username) });
     return { ok: true, enabled: true, lead: { status: "new", aiScore: null } };
   }
-  const hit = cache.get(req.username);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.answer;
-  const res: BadgeAnswer = {
-    ok: true,
-    enabled: true,
-    lead: await platform.lead(s.projectId, req.username),
-  };
-  cache.set(req.username, { at: Date.now(), answer: res });
-  return res;
+  // Answered here: visiting a profile no longer costs a request to the platform.
+  const idx = await leadIndex(platform, s.projectId);
+  return { ok: true, enabled: true, lead: lookup(idx, req.username) };
 }
 
 chrome.runtime.onMessage.addListener((req: BadgeRequest, sender, reply) => {

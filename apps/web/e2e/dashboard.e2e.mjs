@@ -158,6 +158,14 @@ try {
   const ics = await (await fetch(calendarUrl.replace(/^https?:\/\/[^/]+/, B))).text();
   assert.match(ics, /^BEGIN:VCALENDAR/);
   assert.equal((await fetch(`${B}/api/calendar/wrong.ics`)).status, 404);
+  // A file that is not an encrypted backup of this platform is refused with a reason.
+  const junk = await page.request.post(`${B}/api/backup/decrypt`, {
+    multipart: {
+      file: { name: "x.enc", mimeType: "application/octet-stream", buffer: Buffer.from("nope") },
+    },
+  });
+  assert.equal(junk.status(), 400);
+  assert.match(await junk.text(), /تعذّر فك التشفير/);
   step("backup download and follow-up calendar feed");
 
   await page.goto(`${B}/competitors`);
@@ -304,6 +312,18 @@ try {
   const py = await (await fetch(`${B}/downloads/spir-worker.py`)).text();
   assert.match(py, /Spir home worker/);
   step("home worker page: devices, encrypted proxy, change IP, program download");
+
+  // Usage: every page visit and engine call above was counted by source.
+  await page.goto(`${B}/usage`);
+  await page.waitForSelector("text=ساعات تشغيل قاعدة البيانات");
+  await page.waitForSelector("text=حجم قاعدة البيانات");
+  await page.waitForSelector("text=من يوقظ المنصة");
+  await page.waitForSelector("text=اللوحة");
+  await page.waitForSelector("text=محرك Spir");
+  await page.fill('input[name="db_hours"]', "150");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=حُفظت الحدود");
+  step("usage page: meters, requests by source, plan limits");
 
   // Shared from another app (Android share sheet → /share).
   await page.goto(

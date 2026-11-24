@@ -1,6 +1,7 @@
 import { handleCallback, handleCommand, handleLink } from "@scrapers/runtime";
 import { scheduleDrain } from "@/lib/drain";
 import { appOrigin } from "@/lib/env";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 import { telegramWebhookSecret } from "@/lib/telegram";
 import { safeEqual } from "@/lib/tokens";
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
   if (!process.env.AUTH_SECRET || !safeEqual(secret, telegramWebhookSecret())) {
     return new Response("unauthorized", { status: 401 });
   }
+  meter("telegram");
   const rt = await getRuntime();
   const update = (await req.json().catch(() => ({}))) as Update;
   const cb = update.callback_query;

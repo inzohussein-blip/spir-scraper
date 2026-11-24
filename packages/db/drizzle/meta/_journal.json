@@ -134,6 +134,13 @@
       "when": 1795500625142,
       "tag": "0018_talented_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795516041069,
+      "tag": "0019_chief_spirit",
+      "breakpoints": true
     }
   ]
 }

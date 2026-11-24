@@ -1,7 +1,9 @@
 import { escapeHtml } from "@scrapers/runtime";
-import { buildBackup, TELEGRAM_MAX_BACKUP_BYTES } from "@/lib/backup";
+import { buildBackup, sealBackup, TELEGRAM_MAX_BACKUP_BYTES } from "@/lib/backup";
 import { isCronRequest } from "@/lib/drain";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
+import { level, meterLine, usageAlerts } from "@/lib/usage";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -14,6 +16,7 @@ export const maxDuration = 300;
  */
 export async function GET(req: Request) {
   if (!isCronRequest(req)) return new Response("unauthorized", { status: 401 });
+  meter("cron");
   const rt = await getRuntime();
   const failed: string[] = [];
   async function step<T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -63,12 +66,33 @@ export async function GET(req: Request) {
     },
     false,
   );
+  // Free-plan usage: alerts at 70% and 90%, or when heading past a limit.
+  const usage = await step("usage", () => usageAlerts(rt), null);
+  // Automatic saving when a meter is heading past its limit (undone on request or next month).
+  const saver = await step(
+    "saver",
+    async () =>
+      !!(await rt.scrapers.applySaver(
+        (usage?.meters ?? []).filter((m) => level(m) === "bad").map((m) => m.key),
+      )),
+    false,
+  );
+  // The engine's pace adapts to how often Instagram asked for rests.
+  const pace = await step("pace", () => rt.scrapers.tuneEnginePace(), null);
   // The morning message with buttons (yesterday, the engine, who to contact, decisions).
   const ops = await step(
     "ops",
     async () => {
       const m = await rt.scrapers.dailyOps();
-      if (m && rt.telegram) await rt.telegram.sendText(m.html, m.buttons);
+      if (m && rt.telegram) {
+        const worst = (usage?.meters ?? []).filter((x) => level(x) !== "ok");
+        const line = worst.length
+          ? `\n\n⚠️ <b>الاستهلاك</b>\n${worst.map((x) => `• ${escapeHtml(meterLine(x))}`).join("\n")}`
+          : usage
+            ? "\n\n✅ الاستهلاك ضمن الخطط المجانية."
+            : "";
+        await rt.telegram.sendText(m.html + line, m.buttons);
+      }
       return !!m;
     },
     false,
@@ -109,7 +133,12 @@ export async function GET(req: Request) {
           throw new Error(
             `النسخة ${(b.bytes.byteLength / 1048576).toFixed(0)}MB أكبر من حد تلكرام؛ نزّلها من الإعدادات`,
           );
-        await rt.telegram?.sendDocument(b.name, b.bytes, `نسخة احتياطية أسبوعية · ${b.summary}`);
+        // Encrypted: the chat keeps a copy of personal data. Settings → «فك تشفير نسخة» opens it.
+        await rt.telegram?.sendDocument(
+          `${b.name}.enc`,
+          sealBackup(b.bytes),
+          `نسخة احتياطية أسبوعية مشفّرة · ${b.summary}\nافتحها من الإعدادات ← فك تشفير نسخة.`,
+        );
         return true;
       },
       false,
@@ -139,6 +168,9 @@ export async function GET(req: Request) {
     accountsRead,
     placesRead,
     sites,
+    usage: usage?.sent ?? null,
+    saver,
+    pace,
     ops,
     own,
     market,

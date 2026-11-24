@@ -163,7 +163,11 @@ export async function createRuntime(
   const scorer =
     o.scorer === null
       ? undefined
-      : (o.scorer ?? (env.ANTHROPIC_API_KEY ? new AnthropicScorer() : undefined));
+      : (o.scorer ??
+        (env.ANTHROPIC_API_KEY
+          ? // Above 20 leads, scoring goes through the Message Batches API (half the price).
+            new AnthropicScorer({ batchThreshold: Number(env.AI_BATCH_ABOVE ?? 20) })
+          : undefined));
 
   const telegram =
     env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
@@ -228,7 +232,9 @@ export async function createRuntime(
     config: {
       suppressionPepper: env.SUPPRESSION_PEPPER,
       maxJobLimit: Number(env.MAX_JOB_LIMIT ?? 10_000),
-      backgroundAbove: Number(env.BACKGROUND_RUN_ABOVE ?? 300),
+      // With a public address for Apify's report, every list runs in the background
+      // (no function waits for Apify); without one, only large lists do.
+      backgroundAbove: Number(env.BACKGROUND_RUN_ABOVE ?? (apifyNotifyUrl(env) ? 0 : 300)),
       discoveryNotifyUrl: apifyNotifyUrl(env),
       defaultRetentionDays: Number(env.DEFAULT_RETENTION_DAYS ?? 90),
       profileCacheDays: Number(env.PROFILE_CACHE_DAYS ?? 30),

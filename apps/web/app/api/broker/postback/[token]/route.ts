@@ -1,5 +1,6 @@
 import { parseBrokerEvent } from "@scrapers/core";
 import { brokerToken } from "@/lib/backup";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 import { safeEqual } from "@/lib/tokens";
 
@@ -27,6 +28,7 @@ async function handle(req: Request, token: string) {
   }
   const event = parseBrokerEvent(params);
   if (!event) return Response.json({ ok: false, error: "unknown event" }, { status: 400 });
+  meter("webhooks");
   const r = await (await getRuntime()).scrapers.ingestBrokerEvents([event], "postback");
   return Response.json({ ok: true, ...r });
 }
