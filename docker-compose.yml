@@ -27,5 +27,17 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
+  # Spir engine: reads accounts slowly and reports to the dashboard (outbound only, no port).
+  # Start it with: docker compose --profile engine up -d ig-engine
+  ig-engine:
+    build: ./services/ig-worker
+    command: ["ig-engine"]
+    profiles: ["engine"]
+    restart: unless-stopped
+    environment:
+      PLATFORM_URL: ${PLATFORM_URL:?set PLATFORM_URL in .env}
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}
+      PROXY_URLS: ${PROXY_URLS:-}
+
 volumes:
   pgdata:

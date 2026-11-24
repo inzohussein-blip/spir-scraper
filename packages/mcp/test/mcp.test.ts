@@ -81,6 +81,8 @@ describe("MCP server over Streamable HTTP", () => {
         "send_dm",
         "content_plan",
         "market_index",
+        "spir_engine",
+        "spir_engine_start",
       ].sort(),
     );
     const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();

@@ -32,3 +32,4 @@ testpaths = ["tests"]
 
 [project.scripts]
 ig-worker = "ig_worker.main:run"
+ig-engine = "ig_worker.engine:main"
