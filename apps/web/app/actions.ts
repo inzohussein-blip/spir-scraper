@@ -885,3 +885,64 @@ export async function makeContentPlan(_: ActionState, form: FormData): Promise<A
     return fail(err);
   }
 }
+
+const lines = (v: string) =>
+  v
+    .split(/[\n,،]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/** Speed, daily cap and quiet hours of the Spir engine. */
+export async function saveEngineSettings(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const num = (k: string, d: number) => {
+    const n = Number(str(form, k));
+    return Number.isFinite(n) && str(form, k) !== "" ? n : d;
+  };
+  const rt = await getRuntime();
+  const current = await rt.scrapers.engineSettings();
+  const saved = await rt.scrapers.saveEngineSettings({
+    enabled: form.get("enabled") === "on",
+    intervalSec: num("interval", current.intervalSec),
+    jitterSec: num("jitter", current.jitterSec),
+    dailyCap: num("daily_cap", current.dailyCap),
+    quietFrom: num("quiet_from", current.quietFrom),
+    quietTo: num("quiet_to", current.quietTo),
+  });
+  await audit("engine.settings", saved);
+  revalidatePath("/engine");
+  return {
+    message: saved.enabled
+      ? `حُفظ: حساب كل ${saved.intervalSec} ثانية تقريباً، وحتى ${saved.dailyCap} يومياً.`
+      : "حُفظ: المحرك متوقف.",
+  };
+}
+
+/** A new engine run: a crawl from seed accounts, or a slow read of a list (depth 0). */
+export async function createEngineRun(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const mode = str(form, "mode");
+  try {
+    const run = await (await getRuntime()).scrapers.createEngineRun({
+      name: str(form, "name"),
+      projectId: str(form, "project"),
+      seeds: lines(str(form, "seeds")),
+      keywords: lines(str(form, "keywords")),
+      maxDepth: mode === "list" ? 0 : Number(str(form, "depth") || 2),
+      maxAccounts: Number(str(form, "max") || 500),
+      minFollowers: Number(str(form, "min_followers") || 0),
+    });
+    await audit("engine.run", { id: run.id, seeds: run.seeds.length });
+    revalidatePath("/engine");
+    return { message: `بدأ «${run.name}». يقرأ المحرك حساباً كل دقيقة تقريباً من جهازك في البيت.` };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function setEngineRunStatus(id: string, status: "active" | "paused" | "stopped") {
+  await requireSession();
+  await (await getRuntime()).scrapers.setEngineRunStatus(id, status);
+  revalidatePath("/engine");
+  revalidatePath(`/engine/${id}`);
+}

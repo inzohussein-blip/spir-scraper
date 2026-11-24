@@ -91,6 +91,7 @@ import {
 } from "../types.js";
 import { brokerMethods } from "./features/broker.js";
 import type { FeatureContext } from "./features/context.js";
+import { engineMethods } from "./features/engine.js";
 import { marketMethods } from "./features/market.js";
 import { ownMethods } from "./features/own.js";
 import { NoProviderError, type ProviderRouter } from "./router.js";
@@ -1442,6 +1443,8 @@ export function createScrapers(deps: {
     getValue,
     setValue,
     refreshDealFromBroker,
+    saveProfile,
+    timeZone: config.timeZone ?? "Asia/Baghdad",
     self: () => api,
   };
 
@@ -3024,6 +3027,8 @@ export function createScrapers(deps: {
     },
 
     ...marketMethods(featureCtx),
+
+    ...engineMethods(featureCtx),
 
     /** Friday summary (idea from the Spir bot's weekly post): sent once per week. */
     async weeklySummary(now = new Date()) {

@@ -120,6 +120,13 @@
       "when": 1795466705611,
       "tag": "0016_dizzy_power_man",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795467782264,
+      "tag": "0017_flippant_captain_midlands",
+      "breakpoints": true
     }
   ]
 }
