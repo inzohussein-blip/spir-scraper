@@ -25,7 +25,12 @@ const LABELS: Record<keyof ReturnType<typeof integrationStatus>, [string, string
   cron: ["المهام الخلفية", "CRON_SECRET"],
 };
 
-export default async function Settings() {
+export default async function Settings({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
   const rt = await getRuntime();
   const [keys, twoFa, health, apify] = await Promise.all([
     rt.scrapers.listApiKeys(),
@@ -179,6 +184,45 @@ export default async function Settings() {
             >
               فك التشفير
             </button>
+          </form>
+          <form
+            action="/api/backup/restore"
+            method="post"
+            encType="multipart/form-data"
+            className="space-y-2 rounded-lg border border-line p-3 text-sm"
+          >
+            <div className="font-medium">استعادة نسخة</div>
+            <p className="text-muted text-xs">
+              تقبل .enc (من تلكرام) أو .json.gz (التحميل). تضيف ما ينقص فقط: لا تحذف شيئاً ولا تغيّر
+              ما هو موجود، فيمكن تكرارها بأمان. الحد هنا 4.5 ميغابايت؛ الأكبر يُستعاد من جهازك بالأمر{" "}
+              <code className="ltr">scrapers backup restore الملف</code>.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="file"
+                name="file"
+                accept=".enc,.gz,.json"
+                aria-label="ملف النسخة للاستعادة"
+                required
+                className="text-sm"
+              />
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" name="confirm" value="yes" required />
+                أفهم أنها تضيف البيانات إلى المنصة
+              </label>
+              <button
+                type="submit"
+                className="rounded-lg border border-line px-3 py-1.5 hover:bg-bg-2"
+              >
+                استعادة
+              </button>
+            </div>
+            {sp.restored === "1" && (
+              <p role="status" className="text-ok">
+                تمت الاستعادة: أُضيف {String(sp.projects ?? 0)} مشروع و{String(sp.leads ?? 0)} عميل و
+                {String(sp.notes ?? 0)} ملاحظة.
+              </p>
+            )}
           </form>
           <Field
             label="تقويم المتابعات"

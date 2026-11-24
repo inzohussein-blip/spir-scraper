@@ -208,6 +208,14 @@ export class ApifyProvider implements Provider, PlacesSearch, FollowingSource {
     return Array.isArray(items) ? (items as Item[]).filter((i) => !i.error) : [];
   }
 
+  /**
+   * Runs any Apify Store Actor and returns its results (the store's tool
+   * runs). The run's total charge is capped at this month's remaining credit.
+   */
+  async runActor(actor: string, input: object, maxItems: number): Promise<Item[]> {
+    return this.run(actor, input, maxItems);
+  }
+
   /** A TikTok account's public profile: name, bio, followers, likes and videos. */
   async tiktokProfile(handle: string): Promise<RemoteAccount> {
     const items = await this.run(

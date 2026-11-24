@@ -71,7 +71,7 @@
 | `CRON_SECRET` | ✅ | `openssl rand -hex 32`، و Vercel يرسله تلقائياً مع مهام cron |
 | `TELEGRAM_BOT_TOKEN` و `TELEGRAM_CHAT_ID` | مستحسن | الإشعارات على تلكرام، وكود الدخول بخطوتين |
 | `VAPID_PUBLIC_KEY` و `VAPID_PRIVATE_KEY` | اختياري | إشعارات المتصفح والموبايل. تُولَّد بـ `pnpm scrapers push-keys` |
-| `YOUTUBE_API_KEY` | | قراءة قنوات يوتيوب لعملائك (الاسم، والوصف، والمشتركون، والفيديوهات). مجاني: Google Cloud Console ← مشروع جديد ← APIs & Services ← فعّل **YouTube Data API v3** ← Credentials ← Create API key. الحصة المجانية 10 آلاف قراءة يومياً |
+| `YOUTUBE_API_KEY` | | قراءة قنوات يوتيوب لعملائك (الاسم، والوصف، والمشتركون، والفيديوهات)، وأداة «تعليقات يوتيوب» في المتجر (100 تعليق = قراءة واحدة). مجاني: Google Cloud Console ← مشروع جديد ← APIs & Services ← فعّل **YouTube Data API v3** ← Credentials ← Create API key. الحصة المجانية 10 آلاف قراءة يومياً |
 | `PROFILE_CACHE_DAYS` | | إعادة استخدام الملف المجلوب خلال هذه الأيام (افتراضياً 30). يوفّر رصيد Apify لأن المنافسين يتشاركون كثيراً من المتابعين |
 | `WEEKLY_SUMMARY_DAY` و `TIME_ZONE` | | يوم الملخص الأسبوعي (5 = الجمعة) والمنطقة الزمنية (افتراضياً Asia/Baghdad) |
 | `MCP_RATE_PER_MINUTE` | | حد طلبات MCP في الدقيقة (افتراضياً 120) |

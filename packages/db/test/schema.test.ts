@@ -101,6 +101,8 @@ describe("migrations", () => {
       "push_subscriptions",
       "site_watches",
       "suppression",
+      "tool_items",
+      "tool_runs",
       "usage_daily",
       "usage_slots",
     ]);

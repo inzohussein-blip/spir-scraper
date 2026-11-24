@@ -1,6 +1,7 @@
 import "server-only";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { openBackup as openWith, readBackupFile, sealBackup as sealWith } from "@scrapers/core";
 import type { Runtime } from "@scrapers/runtime";
 
 /** Telegram bots can send files up to 50 MB; keep a margin. */
@@ -45,36 +46,22 @@ export function metaVerifyToken(): string {
     .slice(0, 32);
 }
 
-/** Marks an encrypted backup file (format version 1). */
-const SEALED_MAGIC = Buffer.from("SPIRBK1\n");
-
-function backupKey(): Buffer {
-  return createHash("sha256")
-    .update(`backup:${process.env.AUTH_SECRET ?? ""}`)
-    .digest();
-}
+const secret = () => process.env.AUTH_SECRET ?? "";
 
 /**
  * Encrypts a backup (AES-256-GCM, key from AUTH_SECRET) before it leaves the
  * platform, e.g. to Telegram. Open it in Settings → «فك تشفير نسخة».
  */
 export function sealBackup(bytes: Uint8Array): Uint8Array {
-  const iv = randomBytes(12);
-  const c = createCipheriv("aes-256-gcm", backupKey(), iv);
-  const body = Buffer.concat([c.update(bytes), c.final()]);
-  return new Uint8Array(Buffer.concat([SEALED_MAGIC, iv, c.getAuthTag(), body]));
+  return sealWith(bytes, secret());
 }
 
 /** The gzipped backup back, or null when the file is not one of ours or AUTH_SECRET changed. */
 export function openBackup(sealed: Uint8Array): Uint8Array | null {
-  const buf = Buffer.from(sealed);
-  if (!buf.subarray(0, SEALED_MAGIC.length).equals(SEALED_MAGIC)) return null;
-  const at = SEALED_MAGIC.length;
-  try {
-    const d = createDecipheriv("aes-256-gcm", backupKey(), buf.subarray(at, at + 12));
-    d.setAuthTag(buf.subarray(at + 12, at + 28));
-    return new Uint8Array(Buffer.concat([d.update(buf.subarray(at + 28)), d.final()]));
-  } catch {
-    return null;
-  }
+  return openWith(sealed, secret());
+}
+
+/** The backup's JSON text from an .enc, .json.gz or .json file (throws a message for the owner). */
+export function readBackup(bytes: Uint8Array): string {
+  return readBackupFile(bytes, secret());
 }

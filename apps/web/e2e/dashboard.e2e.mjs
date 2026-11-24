@@ -166,7 +166,21 @@ try {
   });
   assert.equal(junk.status(), 400);
   assert.match(await junk.text(), /تعذّر فك التشفير/);
-  step("backup download and follow-up calendar feed");
+  // Restoring the copy just downloaded adds nothing (merge) and says so.
+  await page.setInputFiles('input[aria-label="ملف النسخة للاستعادة"]', {
+    name: "spir-backup.json.gz",
+    mimeType: "application/gzip",
+    buffer: gz,
+  });
+  await page.check('input[name="confirm"]');
+  await page.click('button:has-text("استعادة")');
+  await page.waitForSelector("text=تمت الاستعادة: أُضيف 0 مشروع");
+  // A restore without the confirmation box is refused.
+  const unconfirmed = await page.request.post(`${B}/api/backup/restore`, {
+    multipart: { file: { name: "b.json.gz", mimeType: "application/gzip", buffer: gz } },
+  });
+  assert.equal(unconfirmed.status(), 400);
+  step("backup download, restore and follow-up calendar feed");
 
   await page.goto(`${B}/competitors`);
   await page.fill('input[aria-label="حساب المنافس"]', "@rival7");
@@ -369,6 +383,43 @@ try {
   await page.keyboard.press("Enter");
   await page.waitForURL(/\/leads\?project=/);
   step("Ctrl+K palette");
+
+  // «المتجر»: tools by platform, a tool's page, a run and its results.
+  await page.goto(`${B}/store`);
+  await page.waitForSelector('[data-tool="fb-ads"]');
+  // The two Instagram page tools are pinned first, with their explanation.
+  assert.deepEqual(
+    await page
+      .locator("[data-pinned]")
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-pinned"))),
+    ["ig-commenters", "ig-followers"],
+  );
+  assert.ok(await page.locator("text=ابدأ من هنا").isVisible());
+  assert.ok(await page.locator('nav[aria-label="الأدوات"] >> text=التشغيلات').isVisible());
+  await page.click('nav[aria-label="التصنيفات"] >> a:has-text("يوتيوب")');
+  await page.waitForURL(/\/store\?c=youtube/);
+  assert.equal(await page.locator("[data-tool]").count(), 1);
+  await page.click('[data-tool="youtube-comments"]');
+  await page.waitForURL(/\/store\/youtube-comments$/);
+  // No YOUTUBE_API_KEY here: the page says so, and a run fails with the reason.
+  await page.waitForSelector("text=تحتاج هذه الأداة");
+  await page.fill('input[name="query"]', "https://youtu.be/dQw4w9WgXcQ");
+  await page.click('button:has-text("ابدأ التشغيل")');
+  await page.waitForURL(/\/runs\/[0-9a-f-]{36}$/);
+  await page.waitForSelector("text=YOUTUBE_API_KEY");
+  const runUrl = page.url();
+  const runCsv = await page.request.get(`${runUrl.replace("/runs/", "/api/runs/")}/csv`);
+  assert.equal(runCsv.status(), 200);
+  assert.match(await runCsv.text(), /"id","flagged"/);
+  await page.goto(`${B}/runs`);
+  await page.waitForSelector("text=تعليقات يوتيوب");
+  assert.ok(await page.locator("text=جمع عملاء").isVisible());
+  // A collection tool opens the job form with its source type set.
+  await page.goto(`${B}/store/ig-followers`);
+  assert.equal(await page.inputValue('input[name="type"]'), "followers");
+  await page.goto(`${B}/schedules`);
+  await page.waitForSelector("text=التشغيلات المجدولة");
+  step("store, tool page, run results, runs list and schedules");
 
   const mobile = await browser.newContext({ ...devices["iPhone 13"] });
   await mobile.addCookies(await ctx.cookies());

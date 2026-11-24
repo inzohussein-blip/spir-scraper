@@ -3,6 +3,7 @@ import { AnthropicScorer } from "@scrapers/ai";
 import {
   type Connector,
   createScrapers,
+  type DataTools,
   type FollowingSource,
   type LeadFilters,
   type NotificationSink,
@@ -32,6 +33,7 @@ import {
   type PageReading,
   providersFromEnv,
   readPage,
+  toolsFromEnv,
 } from "@scrapers/providers";
 import { PgBoss } from "pg-boss";
 import { WebPushSink } from "./push.js";
@@ -99,6 +101,8 @@ export interface RuntimeOverrides {
   providers?: Provider[];
   /** Readers for other platforms; defaults to the ones configured in the environment. */
   connectors?: Connector[];
+  /** Services for the store's tool runs (defaults to Apify and YouTube from the environment). */
+  tools?: DataTools;
   /** Web page reader for watched competitor sites; defaults to the safe reader. */
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
   /** The owner's own account; defaults to the Graph API when IG_BUSINESS_ACCOUNT_ID and IG_GRAPH_TOKEN are set. */
@@ -227,6 +231,7 @@ export async function createRuntime(
       return {
         ...(o.places ? { places: o.places } : apify ? { places: apify } : {}),
         ...(o.following ? { following: o.following } : apify ? { following: apify } : {}),
+        tools: o.tools ?? toolsFromEnv(env, apify),
       };
     })(),
     config: {

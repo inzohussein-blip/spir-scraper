@@ -1,4 +1,4 @@
-import type { AnyDb } from "@scrapers/db";
+import type { AnyDb, jobs, monitors, projects, siteWatches } from "@scrapers/db";
 import type { NotificationInput } from "../../notify.js";
 import type { Scorer } from "../../scoring.js";
 import type { Connector, OwnAccount, PlacesSearch, RawProfile, Source } from "../../types.js";
@@ -68,4 +68,23 @@ export interface FeatureSelf {
       revenue: number;
     }[]
   >;
+}
+
+/**
+ * The service methods the core feature modules call on each other, typed
+ * here so the modules do not depend on the whole service's (inferred) type.
+ */
+export interface CoreSelf {
+  getProject(projectId: string): Promise<typeof projects.$inferSelect | null>;
+  getJob(jobId: string): Promise<typeof jobs.$inferSelect & { progress: number }>;
+  audit(entry: {
+    actor: string;
+    action: string;
+    detail?: Record<string, unknown>;
+    ip?: string | null;
+  }): Promise<unknown>;
+  listMonitors(projectId?: string): Promise<(typeof monitors.$inferSelect)[]>;
+  listSiteWatches(): Promise<(typeof siteWatches.$inferSelect)[]>;
+  /** True when a Spir engine device reported recently. */
+  engineOnline(now?: Date): Promise<boolean>;
 }

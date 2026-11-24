@@ -214,4 +214,15 @@ describe("scrapers CLI", () => {
     expect(doctor).toContain("database reachable");
     expect(doctor).toContain("run with --live");
   });
+
+  it("exports a backup and restores it (asking first; twice adds nothing)", async () => {
+    process.env.AUTH_SECRET = "cli-secret";
+    const file = join(dir, "backup.enc");
+    expect((await cli(["backup", "export", file, "--encrypt"])).out).toMatch(/projects/);
+    expect(readFileSync(file).subarray(0, 7).toString()).toBe("SPIRBK1");
+    expect((await cli(["backup", "restore", file])).out).toMatch(/Nothing restored/);
+    const again = await cli(["backup", "restore", file, "--yes"]);
+    expect(again.out).toMatch(/projects: 0 added of \d+/);
+    expect(again.out).toMatch(/restored/);
+  });
 });

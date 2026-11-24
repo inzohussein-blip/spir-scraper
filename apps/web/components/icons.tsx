@@ -28,6 +28,11 @@ const PATHS = {
   check: "M20 6 9 17l-5-5",
   arrow: "M15 18l-6-6 6-6",
   chart: "M3 3v18h18M7 16v-5M12 16V8M17 16v-8",
+  store: "M3 9l1.5-5h15L21 9M3 9h18M3 9v11a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9M9 21v-6h6v6",
+  play: "M6 4l14 8-14 8z",
+  database:
+    "M12 8c4.97 0 9-1.34 9-3s-4.03-3-9-3-9 1.34-9 3 4.03 3 9 3zM3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
 } as const;
 
 export type IconName = keyof typeof PATHS;
