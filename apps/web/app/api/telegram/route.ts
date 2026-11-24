@@ -38,6 +38,7 @@ export async function POST(req: Request) {
     scrapers: rt.scrapers,
     links: { ...rt.scrapers, readPage: rt.readPage },
     plans: rt.scrapers,
+    ops: rt.scrapers,
     owner: rt.owner,
     appUrl: appOrigin(req),
     onJobStarted: () =>

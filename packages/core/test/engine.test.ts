@@ -260,3 +260,121 @@ describe("Spir engine workers and proxies", () => {
     }
   });
 });
+
+describe("Spir engine batches (one visit per batch, for free plans)", () => {
+  it("hands over a batch within the cap and quiet hours, and takes its reports in one go", async () => {
+    const t = await setup([]);
+    try {
+      const s = t.scrapers;
+      // 12:00 UTC is 15:00 in Baghdad; quiet hours start at 15:05 local.
+      await s.saveEngineSettings({
+        intervalSec: 60,
+        jitterSec: 0,
+        batchMinutes: 10,
+        dailyCap: 100,
+        quietFrom: 0,
+        quietTo: 0,
+      });
+      const p = await s.createProject({ name: "p", owner: "o" });
+      const seeds = Array.from({ length: 30 }, (_, i) => `acc${i}`);
+      await s.createEngineRun({ name: "r", projectId: p.id, seeds, maxDepth: 0, maxAccounts: 100 });
+      const w = { id: "pc-1", kind: "program" as const, batch: true, configVersion: null };
+      const now = new Date("2030-01-01T12:00:00Z");
+
+      const d = await s.engineNext(now, w);
+      expect(d.action).toBe("batch");
+      const items = d.action === "batch" ? d.items : [];
+      expect(items).toHaveLength(10);
+      expect(d).toMatchObject({ intervalSec: 60, jitterSec: 0 });
+      // Asking again during the batch: wait until it is read.
+      const early = await s.engineNext(new Date(now.getTime() + 60_000), w);
+      expect(early).toMatchObject({ action: "wait", reason: "pace" });
+      expect((early as { seconds: number }).seconds).toBeGreaterThan(8 * 60);
+
+      // Five read, then Instagram refused, and the rest handed back.
+      const reports = items.map((it, i) =>
+        i < 5
+          ? ({ itemId: it.id, status: "not_found" } as const)
+          : i === 5
+            ? ({ itemId: it.id, status: "rate_limited", message: "429" } as const)
+            : ({ itemId: it.id, status: "released" } as const),
+      );
+      const after = await s.engineReport(reports, new Date(now.getTime() + 6 * 60_000), w);
+      expect(after).toMatchObject({ action: "wait", reason: "resting" });
+      const detail = await s.engineRun((await s.listEngineRuns())[0]?.id as string);
+      expect(detail?.queue).toMatchObject({ done: 5, queued: 25 });
+
+      // The cap limits a batch, and so do quiet hours.
+      await s.clearEngineRest();
+      await s.saveEngineSettings({ dailyCap: 8 });
+      const later = new Date(now.getTime() + 3 * 3600_000);
+      const capped = await s.engineNext(later, w);
+      expect(capped.action === "batch" && capped.items.length).toBe(3);
+      // Quiet hours from 20:00 Baghdad (17:00 UTC): five minutes before, a short batch only.
+      await s.saveEngineSettings({ dailyCap: 100, quietFrom: 20, quietTo: 21 });
+      const short = await s.engineNext(new Date("2030-01-01T16:55:00Z"), { ...w, id: "pc-2" });
+      expect(short.action).toBe("batch");
+      expect(short.action === "batch" ? short.items.length : 0).toBeLessThanOrEqual(5);
+      // An older worker that cannot take batches still gets one account.
+      await s.saveEngineSettings({ quietFrom: 0, quietTo: 0 });
+      const single = await s.engineNext(new Date("2030-01-02T12:00:00Z"), {
+        id: "old",
+        kind: "program",
+      });
+      expect(single.action).toBe("read");
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe("the engine reads ordinary jobs for free", () => {
+  it("sends uncached accounts of a job to the engine and the cached ones straight to leads", async () => {
+    const paid = new FakeProvider(
+      "apify",
+      ["profile"],
+      {
+        profile: () => {
+          throw new Error("paid read");
+        },
+      },
+      6000,
+      2.5,
+    );
+    const t = await setup([paid]);
+    try {
+      const s = t.scrapers;
+      const p = await s.createProject({ name: "p", owner: "o" });
+      // No device yet: auto reads through the providers.
+      expect(await s.engineOnline()).toBe(false);
+      const auto = await s.startJob({
+        projectId: p.id,
+        source: { type: "upload", usernames: ["x1"], url: "list" },
+        limit: 5,
+        readVia: "auto",
+      });
+      expect(auto.readVia).toBe("providers");
+      // A device checks in: auto now reads through the engine, and costs nothing.
+      await s.engineNext(new Date(), { id: "pc", kind: "program" });
+      expect(await s.engineOnline()).toBe(true);
+      const { job, readVia, estimatedCostUsd } = await s.startJob({
+        projectId: p.id,
+        source: { type: "upload", usernames: ["u1", "u2", "u3"], url: "list" },
+        limit: 10,
+        readVia: "auto",
+      });
+      expect(readVia).toBe("engine");
+      expect(estimatedCostUsd).toBe(0);
+      await s.handlers.discover({ jobId: job.id, usernames: ["u1", "u2", "u3"] });
+      const done = await s.getJob(job.id);
+      expect(done.counts).toMatchObject({ viaEngine: 3, discovered: 0 });
+      expect(done.status).toBe("done");
+      const runs = await s.listEngineRuns();
+      expect(runs[0]).toMatchObject({ maxDepth: 0, maxAccounts: 3 });
+      expect(runs[0]?.seeds.sort()).toEqual(["u1", "u2", "u3"]);
+      expect(paid.calls).toBe(0);
+    } finally {
+      await t.close();
+    }
+  });
+});

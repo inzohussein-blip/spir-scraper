@@ -16,6 +16,7 @@ export default async function NewJob({
   const status = integrationStatus();
   // What this month's remaining Apify credit can still collect and read.
   const usage = status.apify ? await rt.apifyUsage().catch(() => null) : null;
+  const engineOnline = await rt.scrapers.engineOnline();
   const remaining = usage ? Math.max(0, usage.allowedUsd - usage.usedUsd) : null;
   const perAccount =
     rt.scrapers.estimateCost(
@@ -96,6 +97,20 @@ export default async function NewJob({
           </Field>
         </fieldset>
 
+        <Field
+          label="طريقة القراءة"
+          hint={
+            engineOnline
+              ? "جهاز المحرك متصل الآن: «تلقائي» يقرأ عبره مجاناً."
+              : "لا يوجد جهاز محرك متصل: «تلقائي» يقرأ عبر Apify."
+          }
+        >
+          <Select name="read_via" defaultValue="auto">
+            <option value="auto">تلقائي: المحرك إن كان جهاز متصلاً، وإلا Apify</option>
+            <option value="engine">محرك Spir: مجاني وأبطأ (حساب كل دقيقة تقريباً)</option>
+            <option value="providers">Apify: أسرع ويُخصم من الرصيد</option>
+          </Select>
+        </Field>
         <Field label="الحد الأقصى للحسابات">
           <Input name="limit" type="number" min={1} max={10000} defaultValue={100} />
         </Field>

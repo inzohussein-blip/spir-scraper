@@ -10,17 +10,18 @@ export default async function EngineRunPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ only?: string }>;
+  searchParams: Promise<{ only?: string; sort?: string }>;
 }) {
   const { id } = await params;
-  const { only } = await searchParams;
+  const { only, sort } = await searchParams;
+  const best = sort === "best";
   const rt = await getRuntime();
   const detail = await rt.scrapers.engineRun(id);
   if (!detail) notFound();
   const { run, queue, next } = detail;
   const acceptedOnly = only === "accepted";
   const [rows, events] = await Promise.all([
-    rt.scrapers.engineDataset(id, { acceptedOnly, limit: 300 }),
+    rt.scrapers.engineDataset(id, { acceptedOnly, limit: 300, sort: best ? "best" : "recent" }),
     rt.scrapers.engineEvents(20, id),
   ]);
 
@@ -75,6 +76,13 @@ export default async function EngineRunPage({
           >
             المقبولون فقط
           </Link>
+          <span className="text-muted">·</span>
+          <Link
+            href={`/engine/${id}?${acceptedOnly ? "only=accepted&" : ""}sort=${best ? "recent" : "best"}`}
+            className="text-accent hover:underline"
+          >
+            {best ? "الأحدث أولاً" : "الأفضل أولاً (احتمال الإغلاق ثم التقييم)"}
+          </Link>
         </div>
         {rows.length === 0 ? (
           <p className="text-sm text-muted">لم يُقرأ شيء بعد.</p>
@@ -83,11 +91,13 @@ export default async function EngineRunPage({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-line text-[12.5px] text-muted">
-                  {["الحساب", "متابعون", "البايو", "وُجد عبر", "النتيجة", "متى"].map((h) => (
-                    <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
-                      {h}
-                    </th>
-                  ))}
+                  {["الحساب", "متابعون", "احتمال", "البايو", "وُجد عبر", "النتيجة", "متى"].map(
+                    (h) => (
+                      <th key={h} className="px-2 py-2 text-start font-medium first:ps-0">
+                        {h}
+                      </th>
+                    ),
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -105,6 +115,13 @@ export default async function EngineRunPage({
                       {r.fullName && <div className="text-xs text-muted">{r.fullName}</div>}
                     </td>
                     <td className="px-2 tabular-nums">{fmtNum(r.followers)}</td>
+                    <td className="px-2 tabular-nums">
+                      {r.winProb !== null
+                        ? `${r.winProb}%`
+                        : r.aiScore !== null
+                          ? `تقييم ${r.aiScore}`
+                          : "—"}
+                    </td>
                     <td className="max-w-xs px-2 text-xs text-fg-2">
                       <span className="line-clamp-2">{r.bio}</span>
                     </td>

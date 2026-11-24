@@ -207,3 +207,43 @@ def test_stable_worker_id(tmp_path):
     f = tmp_path / "id.json"
     first = sw.worker_id(f)
     assert first.startswith("pc-") and sw.worker_id(f) == first
+
+
+def test_reads_a_batch_at_the_pace_and_hands_back_the_rest_after_a_refusal():
+    sent = []
+    decisions = [
+        {
+            "action": "batch",
+            "intervalSec": 60,
+            "jitterSec": 0,
+            "items": [
+                {"id": "q1", "username": "a"},
+                {"id": "q2", "username": "b"},
+                {"id": "q3", "username": "c"},
+                {"id": "q4", "username": "d"},
+            ],
+        },
+        {"action": "wait", "seconds": 1800, "reason": "resting"},
+    ]
+
+    def post(path, body):
+        sent.append((path, body))
+        return decisions.pop(0)
+
+    slept = []
+    w = sw.Worker(post, "pc", "n", sleep=slept.append)
+
+    def answer(req):
+        if "username=c" in req.full_url:
+            raise http_error(429)
+        return Res({"data": {"user": {**USER, "username": "x"}}})
+
+    for e in w.pool.exits:
+        e.open = opener(answer)
+    w.run(max_steps=2)
+    assert sent[0][1]["worker"]["batch"] is True
+    path, body = sent[1]
+    assert path == "/api/engine/report"
+    assert [r["status"] for r in body["reports"]] == ["ok", "ok", "rate_limited", "released"]
+    # One wait between accounts (two of them), then the dashboard's wait.
+    assert slept == [60.0, 60.0, 1800.0]

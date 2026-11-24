@@ -63,6 +63,16 @@ export async function GET(req: Request) {
     },
     false,
   );
+  // The morning message with buttons (yesterday, the engine, who to contact, decisions).
+  const ops = await step(
+    "ops",
+    async () => {
+      const m = await rt.scrapers.dailyOps();
+      if (m && rt.telegram) await rt.telegram.sendText(m.html, m.buttons);
+      return !!m;
+    },
+    false,
+  );
   const weekly = await step("weekly", () => rt.scrapers.weeklySummary(), null);
   // The weekly analyst: a plan per project, applied only when the owner approves it.
   const plans = weekly
@@ -129,6 +139,7 @@ export async function GET(req: Request) {
     accountsRead,
     placesRead,
     sites,
+    ops,
     own,
     market,
     weeklySent: !!weekly,

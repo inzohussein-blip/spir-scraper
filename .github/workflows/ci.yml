@@ -3,7 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
+    # Documentation-only changes do not need the full suite (free Actions minutes).
+    paths-ignore: ["**/*.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+
+# A newer push to the same pull request cancels the run still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NEXT_TELEMETRY_DISABLED: "1"

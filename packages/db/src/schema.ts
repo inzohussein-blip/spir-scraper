@@ -66,6 +66,8 @@ export const projects = pgTable("projects", {
 
 export type JobCounts = {
   discovered?: number;
+  /** Accounts handed to the Spir engine to read for free (their leads arrive from it). */
+  viaEngine?: number;
   enriched?: number;
   leads?: number;
   /** Suppressed, private or missing accounts. */

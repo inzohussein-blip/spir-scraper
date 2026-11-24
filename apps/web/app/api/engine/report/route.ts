@@ -6,7 +6,7 @@ import { getRuntime } from "@/lib/runtime";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const STATUSES = new Set(["ok", "not_found", "rate_limited", "blocked", "error"]);
+const STATUSES = new Set(["ok", "not_found", "rate_limited", "blocked", "error", "released"]);
 
 /** Checks the shape of a profile the worker read (it is stored as is). */
 function asProfile(v: unknown): RawProfile | null {
@@ -22,30 +22,46 @@ function asProfile(v: unknown): RawProfile | null {
 }
 
 /** The home worker reports one account it read; the answer is what to do next. */
+/** One report as the worker sent it, checked field by field (null when malformed). */
+function parseReport(body: Record<string, unknown>): EngineReport | null {
+  const itemId = typeof body.itemId === "string" ? body.itemId : null;
+  const status = typeof body.status === "string" ? body.status : null;
+  if (!itemId || !status || !STATUSES.has(status)) return null;
+  const exitId = typeof body.exitId === "string" ? body.exitId.slice(0, 64) : null;
+  if (status === "ok") {
+    const profile = asProfile(body.profile);
+    return profile ? { itemId, status, profile, exitId } : null;
+  }
+  return {
+    itemId,
+    status: status as "not_found" | "rate_limited" | "blocked" | "error" | "released",
+    exitId,
+    ...(typeof body.message === "string" ? { message: body.message.slice(0, 300) } : {}),
+  };
+}
+
+/**
+ * A worker reports what it read: one account, or a whole batch as
+ * { reports: [...] }. The answer is what to do next.
+ */
 export async function POST(req: Request) {
   if (!(await isEngineWorker(req))) return new Response("not found", { status: 404 });
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-  const itemId = typeof body?.itemId === "string" ? body.itemId : null;
-  const status = typeof body?.status === "string" ? body.status : null;
-  if (!itemId || !status || !STATUSES.has(status))
+  if (!body) return Response.json({ error: "bad report" }, { status: 400 });
+  const raw = Array.isArray(body.reports) ? body.reports.slice(0, 200) : [body];
+  const reports = raw
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+    .map(parseReport);
+  if (reports.length === 0 || reports.some((r) => r === null))
     return Response.json({ error: "bad report" }, { status: 400 });
-  const exitId = typeof body?.exitId === "string" ? body.exitId.slice(0, 64) : null;
-  let report: EngineReport;
-  if (status === "ok") {
-    const profile = asProfile(body?.profile);
-    if (!profile) return Response.json({ error: "bad profile" }, { status: 400 });
-    report = { itemId, status, profile, exitId };
-  } else {
-    report = {
-      itemId,
-      status: status as "not_found" | "rate_limited" | "blocked" | "error",
-      exitId,
-      ...(typeof body?.message === "string" ? { message: body.message.slice(0, 300) } : {}),
-    };
-  }
   const rt = await getRuntime();
-  const decision = await rt.scrapers.engineReport(report, new Date(), workerInfo(body?.worker));
-  // Accepted accounts may have become a project job: read them now.
-  scheduleDrain({ origin: new URL(req.url).origin, force: true, routeMaxSeconds: maxDuration });
+  const decision = await rt.scrapers.engineReport(
+    reports as EngineReport[],
+    new Date(),
+    workerInfo(body.worker),
+  );
+  // Accounts went to a project: read them now (otherwise nothing wakes up for nothing).
+  if (decision.sent)
+    scheduleDrain({ origin: new URL(req.url).origin, force: true, routeMaxSeconds: maxDuration });
   return Response.json(forWorker(decision));
 }

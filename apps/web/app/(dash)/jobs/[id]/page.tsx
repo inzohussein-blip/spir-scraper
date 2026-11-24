@@ -125,6 +125,15 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       >
         <div className="space-y-4">
           <Progress value={job.progress} />
+          {c.viaEngine ? (
+            <p className="rounded-lg bg-accent-soft px-3 py-2 text-sm">
+              {fmtNum(c.viaEngine)} حساب تُقرأ مجاناً عبر محرك Spir، حساباً كل دقيقة تقريباً، وتصل
+              للعملاء على دفعات.{" "}
+              <a href="/engine" className="font-medium text-accent hover:underline">
+                تابعها في صفحة المحرك
+              </a>
+            </p>
+          ) : null}
           <Flow
             steps={[
               {

@@ -147,7 +147,12 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
     } else {
       return { error: "أدخل رابطاً أو ارفع ملف CSV" };
     }
-    const cost = rt.scrapers.estimateCost(source, limit);
+    const choice = str(form, "read_via");
+    const readVia = choice === "engine" || choice === "providers" ? choice : "auto";
+    // Reading through the engine is free; only discovery (if any) still uses Apify.
+    const viaEngine =
+      readVia === "engine" || (readVia === "auto" && (await rt.scrapers.engineOnline()));
+    const cost = rt.scrapers.estimateCost(source, limit, { enrich: !viaEngine });
     if (cost > 0) {
       // Stop before a job that the month's remaining credit cannot cover.
       const usage = await rt.apifyUsage().catch(() => null);
@@ -164,7 +169,12 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
         error: `التكلفة التقديرية ≈ $${cost.toFixed(2)}. فعّل خيار الموافقة على التكلفة ثم أعد الإرسال.`,
       };
     }
-    const { job } = await rt.scrapers.startJob({ projectId: str(form, "project"), source, limit });
+    const { job } = await rt.scrapers.startJob({
+      projectId: str(form, "project"),
+      source,
+      limit,
+      readVia,
+    });
     jobId = job.id;
     await audit("job.start", { jobId, source: source.url, limit });
   } catch (err) {
@@ -907,6 +917,7 @@ export async function saveEngineSettings(_: ActionState, form: FormData): Promis
     intervalSec: num("interval", current.intervalSec),
     jitterSec: num("jitter", current.jitterSec),
     dailyCap: num("daily_cap", current.dailyCap),
+    batchMinutes: num("batch_minutes", current.batchMinutes),
     quietFrom: num("quiet_from", current.quietFrom),
     quietTo: num("quiet_to", current.quietTo),
   });
