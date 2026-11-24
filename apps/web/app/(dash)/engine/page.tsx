@@ -185,6 +185,18 @@ export default async function EnginePage() {
             <Field label="حد يومي">
               <Input name="daily_cap" type="number" min={1} max={5000} defaultValue={s.dailyCap} />
             </Field>
+            <Field
+              label="دقائق الدفعة"
+              hint="الجهاز يأخذ ما يكفي هذه المدة في اتصال واحد. الأطول يوفّر الخطط المجانية (قاعدة البيانات تنام بين الاتصالات). 0: حساب كل اتصال."
+            >
+              <Input
+                name="batch_minutes"
+                type="number"
+                min={0}
+                max={240}
+                defaultValue={s.batchMinutes}
+              />
+            </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="راحة من الساعة">
                 <Input

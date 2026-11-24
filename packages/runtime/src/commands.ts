@@ -13,6 +13,8 @@ import { escapeHtml } from "./telegram.js";
 
 /** What the Telegram commands need from the runtime. */
 export interface CommandContext {
+  /** The daily operations manager's buttons (ops:contacts, ops:analyze:x, ops:pause:id, ops:engine:on|off). */
+  ops?: { opsAction(data: string, appUrl?: string): Promise<string> };
   scrapers: {
     listProjects(): Promise<{ id: string; name: string }[]>;
     createProject(input: { name: string; owner: string }): Promise<{ id: string; name: string }>;
@@ -171,6 +173,10 @@ export async function handleCallback(
   data: string,
   state: { project?: string } = {},
 ): Promise<string> {
+  if (data.startsWith("ops:")) {
+    if (!ctx.ops) return "غير متاح هنا";
+    return ctx.ops.opsAction(data, ctx.appUrl);
+  }
   const plan = /^plan:([a-f0-9]{12})$/.exec(data);
   if (plan?.[1]) {
     if (!ctx.plans) return "الخطط غير متاحة هنا";

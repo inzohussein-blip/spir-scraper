@@ -86,7 +86,7 @@ describe("engine mode", () => {
       "/api/engine/report",
     ]);
     expect(calls[0]?.body?.worker).toMatchObject({ id: "ext-1", kind: "extension", ip: "9.9.9.9" });
-    expect((calls[2]?.body?.reports as unknown[])[0]).toMatchObject({
+    expect((calls[2]?.body?.reports as unknown[] | undefined)?.[0]).toMatchObject({
       itemId: "q1",
       status: "ok",
       exitId: "direct",

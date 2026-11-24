@@ -327,3 +327,54 @@ describe("Spir engine batches (one visit per batch, for free plans)", () => {
     }
   });
 });
+
+describe("the engine reads ordinary jobs for free", () => {
+  it("sends uncached accounts of a job to the engine and the cached ones straight to leads", async () => {
+    const paid = new FakeProvider(
+      "apify",
+      ["profile"],
+      {
+        profile: () => {
+          throw new Error("paid read");
+        },
+      },
+      6000,
+      2.5,
+    );
+    const t = await setup([paid]);
+    try {
+      const s = t.scrapers;
+      const p = await s.createProject({ name: "p", owner: "o" });
+      // No device yet: auto reads through the providers.
+      expect(await s.engineOnline()).toBe(false);
+      const auto = await s.startJob({
+        projectId: p.id,
+        source: { type: "upload", usernames: ["x1"], url: "list" },
+        limit: 5,
+        readVia: "auto",
+      });
+      expect(auto.readVia).toBe("providers");
+      // A device checks in: auto now reads through the engine, and costs nothing.
+      await s.engineNext(new Date(), { id: "pc", kind: "program" });
+      expect(await s.engineOnline()).toBe(true);
+      const { job, readVia, estimatedCostUsd } = await s.startJob({
+        projectId: p.id,
+        source: { type: "upload", usernames: ["u1", "u2", "u3"], url: "list" },
+        limit: 10,
+        readVia: "auto",
+      });
+      expect(readVia).toBe("engine");
+      expect(estimatedCostUsd).toBe(0);
+      await s.handlers.discover({ jobId: job.id, usernames: ["u1", "u2", "u3"] });
+      const done = await s.getJob(job.id);
+      expect(done.counts).toMatchObject({ viaEngine: 3, discovered: 0 });
+      expect(done.status).toBe("done");
+      const runs = await s.listEngineRuns();
+      expect(runs[0]).toMatchObject({ maxDepth: 0, maxAccounts: 3 });
+      expect(runs[0]?.seeds.sort()).toEqual(["u1", "u2", "u3"]);
+      expect(paid.calls).toBe(0);
+    } finally {
+      await t.close();
+    }
+  });
+});

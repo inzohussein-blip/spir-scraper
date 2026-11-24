@@ -5,6 +5,7 @@ import {
   engineQueue,
   engineRuns,
   engineWorkers,
+  leads,
   profiles,
 } from "@scrapers/db";
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
@@ -606,6 +607,7 @@ export function engineMethods(ctx: FeatureContext) {
       s.dailyCap = Math.max(1, Math.min(5000, Math.round(s.dailyCap)));
       s.quietFrom = Math.max(0, Math.min(23, Math.round(s.quietFrom)));
       s.quietTo = Math.max(0, Math.min(23, Math.round(s.quietTo)));
+      s.batchMinutes = Math.max(0, Math.min(240, Math.round(s.batchMinutes)));
       await setValue(SETTINGS_KEY, s, 10 * YEAR);
       return s;
     },
@@ -718,8 +720,19 @@ export function engineMethods(ctx: FeatureContext) {
       };
     },
 
-    /** The accounts a run has read (newest first), like an Apify dataset. */
-    async engineDataset(runId: string, opts: { acceptedOnly?: boolean; limit?: number } = {}) {
+    /**
+     * The accounts a run has read, like an Apify dataset: newest first, or
+     * best first (the project's model and AI score, then followers).
+     */
+    async engineDataset(
+      runId: string,
+      opts: { acceptedOnly?: boolean; limit?: number; sort?: "recent" | "best" } = {},
+    ) {
+      const [run] = await db
+        .select({ projectId: engineRuns.projectId })
+        .from(engineRuns)
+        .where(eq(engineRuns.id, runId));
+      if (!run) return [];
       return db
         .select({
           username: engineQueue.username,
@@ -735,9 +748,16 @@ export function engineMethods(ctx: FeatureContext) {
           isBusiness: profiles.isBusiness,
           businessEmail: profiles.businessEmail,
           externalUrl: profiles.externalUrl,
+          winProb: leads.winProb,
+          aiScore: leads.aiScore,
+          leadStatus: leads.status,
         })
         .from(engineQueue)
         .leftJoin(profiles, eq(profiles.username, engineQueue.username))
+        .leftJoin(
+          leads,
+          and(eq(leads.profileId, profiles.igUserId), eq(leads.projectId, run.projectId)),
+        )
         .where(
           and(
             eq(engineQueue.runId, runId),
@@ -745,7 +765,15 @@ export function engineMethods(ctx: FeatureContext) {
             ...(opts.acceptedOnly ? [eq(engineQueue.accepted, true)] : []),
           ),
         )
-        .orderBy(desc(engineQueue.readAt))
+        .orderBy(
+          ...(opts.sort === "best"
+            ? [
+                sql`${leads.winProb} desc nulls last`,
+                sql`${leads.aiScore} desc nulls last`,
+                sql`${engineQueue.followers} desc nulls last`,
+              ]
+            : [desc(engineQueue.readAt)]),
+        )
         .limit(Math.min(opts.limit ?? 200, 50_000));
     },
 
@@ -788,6 +816,22 @@ export function engineMethods(ctx: FeatureContext) {
       for (const one of Array.isArray(r) ? r : [r]) sent += await report(one, now);
       const decision = await next(now, worker);
       return sent > 0 ? { ...decision, sent } : decision;
+    },
+
+    /** A device asked for work in the last hour and the engine is switched on. */
+    async engineOnline(now = new Date()) {
+      if (!(await settings()).enabled) return false;
+      const [w] = await db
+        .select({ id: engineWorkers.id })
+        .from(engineWorkers)
+        .where(
+          and(
+            eq(engineWorkers.disabled, false),
+            gte(engineWorkers.lastSeen, new Date(now.getTime() - 3600_000)),
+          ),
+        )
+        .limit(1);
+      return !!w;
     },
 
     // ---- workers and proxies (the «العامل المنزلي» page) ----

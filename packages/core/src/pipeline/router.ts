@@ -273,13 +273,14 @@ export class ProviderRouter {
   }
 
   /** Rough USD cost of a job, shown before it runs. */
-  estimateCost(source: Source, limit: number): number {
+  estimateCost(source: Source, limit: number, opts: { enrich?: boolean } = {}): number {
     let usd = 0;
     if (source.type !== "upload") {
       const p = this.available(SOURCE_CAPABILITY[source.type])[0];
       usd += ((p?.costPer1k ?? 0) * limit) / 1000;
     }
-    const enrich = this.available("profile")[0];
+    // Reading through the Spir engine is free.
+    const enrich = opts.enrich === false ? undefined : this.available("profile")[0];
     usd += ((enrich?.costPer1k ?? 0) * limit) / 1000;
     return Math.round(usd * 100) / 100;
   }

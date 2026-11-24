@@ -7,6 +7,8 @@ import {
   brokerEvents,
   competitorSnapshots,
   counters,
+  engineEvents,
+  engineRuns,
   ephemeral,
   inboxMessages,
   jobs,
@@ -17,6 +19,7 @@ import {
   notifications,
   ownComments,
   ownPosts,
+  partnerClicks,
   partners,
   people,
   places,
@@ -93,6 +96,7 @@ import { brokerMethods } from "./features/broker.js";
 import type { FeatureContext } from "./features/context.js";
 import { engineMethods } from "./features/engine.js";
 import { marketMethods } from "./features/market.js";
+import { opsMethods } from "./features/ops.js";
 import { ownMethods } from "./features/own.js";
 import { NoProviderError, type ProviderRouter } from "./router.js";
 
@@ -614,9 +618,43 @@ export function createScrapers(deps: {
       usernames = usernames.filter((u) => !have.has(u));
     }
 
+    // Read by the Spir engine (free, slower): accounts already in the cache are
+    // read here at no cost, the rest go to an engine run for this project.
+    let viaEngine = 0;
+    if (usernames.length > 0 && (await getValue<string>(`job-read:${job.id}`)) === "engine") {
+      const fresh =
+        cacheDays > 0
+          ? await db
+              .select({ username: profiles.username })
+              .from(profiles)
+              .where(
+                and(
+                  inArray(profiles.username, usernames),
+                  gte(profiles.fetchedAt, new Date(Date.now() - cacheDays * 86_400_000)),
+                ),
+              )
+          : [];
+      const cached = new Set(fresh.map((f) => f.username));
+      const toEngine = usernames.filter((u) => !cached.has(u));
+      if (toEngine.length > 0) {
+        const label = await jobLabel(job.id);
+        await api.createEngineRun({
+          name: `مهمة: ${label?.project ?? ""} ${job.sourceUrl}`.slice(0, 80),
+          projectId: job.projectId,
+          seeds: toEngine,
+          maxDepth: 0,
+          maxAccounts: toEngine.length,
+        });
+        viaEngine = toEngine.length;
+        usernames = usernames.filter((u) => cached.has(u));
+      }
+    }
+
     await db
       .update(jobs)
-      .set({ counts: { discovered: usernames.length } })
+      .set({
+        counts: { discovered: usernames.length, ...(viaEngine ? { viaEngine } : {}) },
+      })
       .where(eq(jobs.id, job.id));
     if (usernames.length === 0) {
       await finishIfComplete(job.id);
@@ -967,10 +1005,18 @@ export function createScrapers(deps: {
       );
     await db.delete(ephemeral).where(lt(ephemeral.expiresAt, now));
     await db.delete(counters).where(lt(counters.expiresAt, now));
-    // A year of history is enough to read growth.
+    // Free database plans are small: keep what is still useful, drop the rest.
+    const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000);
+    await db.delete(profileSnapshots).where(lt(profileSnapshots.at, daysAgo(180)));
+    await db.delete(competitorSnapshots).where(lt(competitorSnapshots.at, daysAgo(365)));
+    await db.delete(notifications).where(lt(notifications.at, daysAgo(60)));
+    await db.delete(auditLog).where(lt(auditLog.at, daysAgo(180)));
+    await db.delete(partnerClicks).where(lt(partnerClicks.at, daysAgo(365)));
+    await db.delete(engineEvents).where(lt(engineEvents.at, daysAgo(30)));
+    // Finished engine runs (and their queues) after 90 days; their leads stay in the projects.
     await db
-      .delete(profileSnapshots)
-      .where(lt(profileSnapshots.at, new Date(now.getTime() - 365 * 86_400_000)));
+      .delete(engineRuns)
+      .where(and(isNotNull(engineRuns.finishedAt), lt(engineRuns.finishedAt, daysAgo(90))));
     await collectPendingScores();
   }
 
@@ -1500,11 +1546,21 @@ export function createScrapers(deps: {
       return db.select().from(projects).orderBy(desc(projects.createdAt));
     },
 
-    estimateCost(source: Source, limit: number) {
-      return router.estimateCost(source, Math.min(limit, maxLimit));
+    estimateCost(source: Source, limit: number, opts: { enrich?: boolean } = {}) {
+      return router.estimateCost(source, Math.min(limit, maxLimit), opts);
     },
 
-    async startJob(input: { projectId: string; source: Source; limit: number }) {
+    async startJob(input: {
+      projectId: string;
+      source: Source;
+      limit: number;
+      /**
+       * Who reads the accounts: Apify and the other providers (fast, paid),
+       * the Spir engine (free, slower), or auto: the engine when a device has
+       * been in touch in the last hour.
+       */
+      readVia?: "auto" | "providers" | "engine";
+    }) {
       const limit = Math.min(Math.max(1, Math.floor(input.limit)), maxLimit);
       const [job] = await db
         .insert(jobs)
@@ -1517,11 +1573,22 @@ export function createScrapers(deps: {
         })
         .returning();
       if (!job) throw new Error("Job insert returned nothing");
+      const via =
+        input.readVia === "engine"
+          ? "engine"
+          : input.readVia === "auto" && (await api.engineOnline())
+            ? "engine"
+            : "providers";
+      if (via === "engine") await setValue(`job-read:${job.id}`, "engine", 30 * 86_400_000);
       const payload: DiscoverPayload = { jobId: job.id };
       if (input.source.type === "upload")
         payload.usernames = input.source.usernames.slice(0, limit);
       await boss.send(QUEUES.discover, payload);
-      return { job, estimatedCostUsd: router.estimateCost(input.source, limit) };
+      return {
+        job,
+        readVia: via,
+        estimatedCostUsd: router.estimateCost(input.source, limit, { enrich: via !== "engine" }),
+      };
     },
 
     async getJob(jobId: string) {
@@ -3029,6 +3096,8 @@ export function createScrapers(deps: {
     ...marketMethods(featureCtx),
 
     ...engineMethods(featureCtx),
+
+    ...opsMethods(featureCtx),
 
     /** Friday summary (idea from the Spir bot's weekly post): sent once per week. */
     async weeklySummary(now = new Date()) {
