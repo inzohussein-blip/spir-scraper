@@ -859,6 +859,64 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "spir_engine",
+    {
+      title: "Spir engine status and runs",
+      description:
+        "The Spir engine reads public accounts slowly from the owner's home connection, free: a crawl from seed " +
+        "accounts that follows the accounts they mention while they stay on topic, or a slow read of a list. " +
+        "Returns its state (running, resting, quiet hours, daily cap, no worker), speed settings and recent runs; " +
+        "with run, that run's counts and the accounts it read.",
+      inputSchema: z.object({ run: z.string().optional().describe("Run id for its details") }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) => {
+      if (a.run) {
+        const detail = await rt.scrapers.engineRun(a.run);
+        if (!detail) return fail("Run not found");
+        return json({ ...detail, dataset: await rt.scrapers.engineDataset(a.run, { limit: 100 }) });
+      }
+      return json({
+        status: await rt.scrapers.engineStatus(),
+        runs: await rt.scrapers.listEngineRuns(20),
+      });
+    }),
+  );
+
+  server.registerTool(
+    "spir_engine_start",
+    {
+      title: "Start a Spir engine run",
+      description:
+        "Starts a slow, free run on the owner's home connection. depth 0 reads the seeds only; 1 also the " +
+        "accounts they mention; 2 one step further. keywords keep the crawl on topic (an account is accepted and " +
+        "followed only if a keyword is in its name, bio, category or captions). Accepted accounts go to the project " +
+        `as leads. ${COMPLIANCE}`,
+      inputSchema: z.object({
+        project: z.string().describe("Project name or id; created if it does not exist"),
+        name: z.string().max(80),
+        seeds: z.array(z.string()).min(1).max(5000),
+        keywords: z.array(z.string()).max(30).optional(),
+        depth: z.number().int().min(0).max(5).default(2),
+        max_accounts: z.number().int().min(1).max(50_000).default(500),
+        min_followers: z.number().int().min(0).default(0),
+      }),
+    },
+    guard(async (a) => {
+      const run = await rt.scrapers.createEngineRun({
+        name: a.name,
+        projectId: await projectIdFor(rt, a.project),
+        seeds: a.seeds,
+        ...(a.keywords ? { keywords: a.keywords } : {}),
+        maxDepth: a.depth,
+        maxAccounts: a.max_accounts,
+        minFollowers: a.min_followers,
+      });
+      return json({ run_id: run.id, status: await rt.scrapers.engineStatus() });
+    }),
+  );
+
+  server.registerTool(
     "train_model",
     {
       title: "Train the project's own model",

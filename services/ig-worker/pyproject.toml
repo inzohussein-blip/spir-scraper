@@ -23,6 +23,8 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# The standalone worker runs on any Python 3.9+.
+per-file-target-version = { "spir_worker.py" = "py39" }
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
@@ -32,3 +34,7 @@ testpaths = ["tests"]
 
 [project.scripts]
 ig-worker = "ig_worker.main:run"
+
+[tool.ruff.lint.per-file-ignores]
+# Runs on any Python 3.9+, so it keeps the older typing style.
+"spir_worker.py" = ["UP"]

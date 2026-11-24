@@ -1,7 +1,7 @@
 import type { AnyDb } from "@scrapers/db";
 import type { NotificationInput } from "../../notify.js";
 import type { Scorer } from "../../scoring.js";
-import type { OwnAccount, Source } from "../../types.js";
+import type { OwnAccount, RawProfile, Source } from "../../types.js";
 
 /**
  * What a feature module needs from the service: the database, shared helpers
@@ -17,6 +17,14 @@ export interface FeatureContext {
   getValue<T>(key: string): Promise<T | null>;
   setValue(key: string, value: unknown, ttlMs: number): Promise<void>;
   refreshDealFromBroker(leadId: string): Promise<unknown>;
+  /** Stores a fetched profile (cache, snapshot, change list). */
+  saveProfile(
+    p: RawProfile,
+    fetchedBy: "graph" | "apify" | "worker",
+    quality: { engagementRate: number | null; flags: string[] },
+  ): Promise<string[]>;
+  /** The owner's time zone, e.g. Asia/Baghdad. */
+  timeZone: string;
   self(): FeatureSelf;
 }
 

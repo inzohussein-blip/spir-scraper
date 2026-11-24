@@ -27,5 +27,22 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
+  # Spir engine: reads accounts slowly and reports to the dashboard (outbound only, no port).
+  # The same program also runs without Docker: python spir_worker.py (see docs/HOME-WORKER.md).
+  # Start it with: docker compose --profile engine up -d ig-engine
+  ig-engine:
+    build: ./services/ig-worker
+    command: ["python", "/app/spir_worker.py"]
+    profiles: ["engine"]
+    restart: unless-stopped
+    environment:
+      PLATFORM_URL: ${PLATFORM_URL:?set PLATFORM_URL in .env}
+      SPIR_KEY: ${SPIR_KEY:-}
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:-}
+      PROXY_URLS: ${PROXY_URLS:-}
+    volumes:
+      - spir-engine:/home/worker
+
 volumes:
   pgdata:
+  spir-engine:

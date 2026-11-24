@@ -163,6 +163,10 @@ def test_profile_to_dict_reads_city_whatsapp_and_recent_posts():
                         "node": {
                             "edge_liked_by": {"count": 10},
                             "edge_media_to_comment": {"count": 2},
+                            "shortcode": "ABC",
+                            "edge_media_to_caption": {
+                                "edges": [{"node": {"text": "مع @gold.academy"}}]
+                            },
                         }
                     },
                     {"node": {"edge_media_preview_like": {"count": 7}}},
@@ -173,7 +177,15 @@ def test_profile_to_dict_reads_city_whatsapp_and_recent_posts():
     )
     assert d["city"] == "Baghdad"
     assert d["businessWhatsapp"] == "+9647701234567"
-    assert d["recentPosts"] == [{"likes": 10, "comments": 2}, {"likes": 7, "comments": None}]
+    assert d["recentPosts"] == [
+        {
+            "likes": 10,
+            "comments": 2,
+            "caption": "مع @gold.academy",
+            "url": "https://www.instagram.com/p/ABC/",
+        },
+        {"likes": 7, "comments": None, "caption": None, "url": None},
+    ]
 
 
 def test_city_tolerates_bad_json():

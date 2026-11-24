@@ -67,7 +67,7 @@ def _count(d: Any, *keys: str) -> int | None:
 
 
 def _recent_posts(node: dict[str, Any]) -> list[dict[str, int | None]] | None:
-    """Likes and comments of the up to 12 posts that come with the profile page."""
+    """Likes, comments and captions of the up to 12 posts that come with the profile page."""
     edges = (node.get("edge_owner_to_timeline_media") or {}).get("edges")
     if not isinstance(edges, list):
         return None
@@ -76,10 +76,20 @@ def _recent_posts(node: dict[str, Any]) -> list[dict[str, int | None]] | None:
         n = e.get("node") if isinstance(e, dict) else None
         if not isinstance(n, dict):
             continue
+        caption_edges = (n.get("edge_media_to_caption") or {}).get("edges") or []
+        first = (
+            caption_edges[0].get("node", {})
+            if caption_edges and isinstance(caption_edges[0], dict)
+            else {}
+        )
+        shortcode = _str(n.get("shortcode"))
         posts.append(
             {
                 "likes": _count(n, "edge_liked_by", "edge_media_preview_like"),
                 "comments": _count(n, "edge_media_to_comment"),
+                # The engine follows accounts mentioned in captions.
+                "caption": (_str(first.get("text")) or "")[:500] or None,
+                "url": f"https://www.instagram.com/p/{shortcode}/" if shortcode else None,
             }
         )
     return posts

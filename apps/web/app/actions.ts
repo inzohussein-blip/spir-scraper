@@ -27,6 +27,7 @@ import {
 import { scheduleDrain } from "@/lib/drain";
 import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
+import { proxyLabel, seal } from "@/lib/secretbox";
 import { telegramWebhookSecret } from "@/lib/telegram";
 import { safeNext } from "@/lib/tokens";
 
@@ -884,4 +885,145 @@ export async function makeContentPlan(_: ActionState, form: FormData): Promise<A
   } catch (err) {
     return fail(err);
   }
+}
+
+const lines = (v: string) =>
+  v
+    .split(/[\n,،]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/** Speed, daily cap and quiet hours of the Spir engine. */
+export async function saveEngineSettings(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const num = (k: string, d: number) => {
+    const n = Number(str(form, k));
+    return Number.isFinite(n) && str(form, k) !== "" ? n : d;
+  };
+  const rt = await getRuntime();
+  const current = await rt.scrapers.engineSettings();
+  const saved = await rt.scrapers.saveEngineSettings({
+    enabled: form.get("enabled") === "on",
+    intervalSec: num("interval", current.intervalSec),
+    jitterSec: num("jitter", current.jitterSec),
+    dailyCap: num("daily_cap", current.dailyCap),
+    quietFrom: num("quiet_from", current.quietFrom),
+    quietTo: num("quiet_to", current.quietTo),
+  });
+  await audit("engine.settings", saved);
+  revalidatePath("/engine");
+  return {
+    message: saved.enabled
+      ? `حُفظ: حساب كل ${saved.intervalSec} ثانية تقريباً، وحتى ${saved.dailyCap} يومياً.`
+      : "حُفظ: المحرك متوقف.",
+  };
+}
+
+/** A new engine run: a crawl from seed accounts, or a slow read of a list (depth 0). */
+export async function createEngineRun(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const mode = str(form, "mode");
+  try {
+    const run = await (await getRuntime()).scrapers.createEngineRun({
+      name: str(form, "name"),
+      projectId: str(form, "project"),
+      seeds: lines(str(form, "seeds")),
+      keywords: lines(str(form, "keywords")),
+      maxDepth: mode === "list" ? 0 : Number(str(form, "depth") || 2),
+      maxAccounts: Number(str(form, "max") || 500),
+      minFollowers: Number(str(form, "min_followers") || 0),
+    });
+    await audit("engine.run", { id: run.id, seeds: run.seeds.length });
+    revalidatePath("/engine");
+    return { message: `بدأ «${run.name}». يقرأ المحرك حساباً كل دقيقة تقريباً من جهازك في البيت.` };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function setEngineRunStatus(id: string, status: "active" | "paused" | "stopped") {
+  await requireSession();
+  await (await getRuntime()).scrapers.setEngineRunStatus(id, status);
+  revalidatePath("/engine");
+  revalidatePath(`/engine/${id}`);
+}
+
+// ---- «العامل المنزلي»: devices and proxies of the Spir engine ----
+
+/** Adds a proxy for the home program; its address and change-IP link are stored encrypted. */
+export async function addEngineProxy(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const url = str(form, "url");
+  const rotate = str(form, "rotate_url");
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { error: "اكتب عنوان البروكسي كاملاً، مثل http://user:pass@host:port" };
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port)
+    return {
+      error:
+        "البروكسي يجب أن يبدأ بـ http:// أو https:// وفيه رقم المنفذ (SOCKS غير مدعوم في البرنامج)",
+    };
+  if (rotate && !/^https?:\/\//.test(rotate))
+    return { error: "رابط تغيير الـ IP يجب أن يبدأ بـ https://" };
+  const label = str(form, "label") || proxyLabel(url);
+  await (await getRuntime()).scrapers.addEngineProxy({
+    label,
+    urlEnc: seal(url),
+    rotateUrlEnc: rotate ? seal(rotate) : null,
+  });
+  await audit("engine.proxy.add", { label });
+  revalidatePath("/workers");
+  return { message: `أُضيف ${label}. يصل للبرنامج في زيارته التالية (خلال دقائق).` };
+}
+
+export async function updateEngineProxy(
+  id: string,
+  change: "enable" | "disable" | "rest" | "clear" | "delete" | "rotate",
+) {
+  await requireSession();
+  const rt = await getRuntime();
+  if (change === "delete") await rt.scrapers.deleteEngineProxy(id);
+  else if (change === "rotate")
+    await rt.scrapers.queueEngineCommand({ type: "rotate", proxyId: id });
+  else
+    await rt.scrapers.updateEngineProxy(id, {
+      ...(change === "enable" ? { enabled: true } : {}),
+      ...(change === "disable" ? { enabled: false } : {}),
+      ...(change === "rest" ? { rest: true } : {}),
+      ...(change === "clear" ? { clearError: true } : {}),
+    });
+  await audit("engine.proxy", { id, change });
+  revalidatePath("/workers");
+}
+
+export async function engineWorkerAction(id: string, change: "enable" | "disable" | "delete") {
+  await requireSession();
+  const rt = await getRuntime();
+  if (change === "delete") await rt.scrapers.deleteEngineWorker(id);
+  else await rt.scrapers.setEngineWorkerDisabled(id, change === "disable");
+  revalidatePath("/workers");
+}
+
+/** Every device checks its public address (and each proxy's) on its next visit. */
+export async function checkEngineIps() {
+  await requireSession();
+  await (await getRuntime()).scrapers.queueEngineCommand({ type: "check_ip" });
+  revalidatePath("/workers");
+}
+
+/** Ends the engine's rest now (after changing the network, the IP or a proxy). */
+export async function resumeEngine() {
+  await requireSession();
+  await (await getRuntime()).scrapers.clearEngineRest();
+  revalidatePath("/workers");
+  revalidatePath("/engine");
+}
+
+export async function setEngineUseDirect(useDirect: boolean) {
+  await requireSession();
+  await (await getRuntime()).scrapers.saveEngineSettings({ useDirect });
+  revalidatePath("/workers");
 }

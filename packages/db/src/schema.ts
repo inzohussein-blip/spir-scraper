@@ -590,3 +590,132 @@ export type Partner = typeof partners.$inferSelect;
 export type BrokerEvent = typeof brokerEvents.$inferSelect;
 export type OwnPost = typeof ownPosts.$inferSelect;
 export type InboxMessage = typeof inboxMessages.$inferSelect;
+
+/**
+ * Spir engine runs: a slow crawl that reads public accounts one at a time
+ * from the owner's home connection (seeds, then the accounts they mention),
+ * or a slow read of a list. Speed and quiet hours are set in the engine page.
+ */
+export const engineRuns = pgTable("engine_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  /** active, paused, done or stopped. */
+  status: text("status").notNull().default("active"),
+  seeds: text("seeds").array().notNull(),
+  /** Words that make an account relevant (in its name, bio, category or captions); empty: all. */
+  keywords: text("keywords").array(),
+  /** 0 reads the seeds only; 1 also the accounts they mention; and so on. */
+  maxDepth: integer("max_depth").notNull().default(2),
+  maxAccounts: integer("max_accounts").notNull().default(500),
+  minFollowers: integer("min_followers").notNull().default(0),
+  counts: jsonb("counts")
+    .$type<{ read?: number; accepted?: number; skipped?: number; failed?: number }>()
+    .notNull()
+    .default({}),
+  createdAt: createdAt(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const engineQueue = pgTable(
+  "engine_queue",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => engineRuns.id, { onDelete: "cascade" }),
+    username: text("username").notNull(),
+    depth: integer("depth").notNull().default(0),
+    /** Higher is read first: mentioned by relevant accounts, by several of them, in a bio. */
+    priority: integer("priority").notNull().default(0),
+    /** Who mentioned it first. */
+    referrer: text("referrer"),
+    /** queued, leased, done or failed. */
+    status: text("status").notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    leasedUntil: timestamp("leased_until", { withTimezone: true }),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    /** Passed the run's filters and was sent to the project. */
+    accepted: boolean("accepted"),
+    /** Why it was skipped, or what it is (short). */
+    note: text("note"),
+    followers: integer("followers"),
+    /** The project job it was sent with (accounts are sent in groups). */
+    jobId: uuid("job_id"),
+  },
+  (t) => [
+    unique("engine_queue_run_user_uq").on(t.runId, t.username),
+    index("engine_queue_next_idx").on(t.status, t.priority.desc()),
+    index("engine_queue_read_idx").on(t.readAt),
+  ],
+);
+
+/** What the engine did that the owner may want to know (starts, rests, finishes). */
+export const engineEvents = pgTable(
+  "engine_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id"),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    kind: text("kind").notNull(),
+    text: text("text").notNull(),
+  },
+  (t) => [index("engine_events_at_idx").on(t.at.desc())],
+);
+
+export type EngineRun = typeof engineRuns.$inferSelect;
+export type EngineQueueItem = typeof engineQueue.$inferSelect;
+
+/** Machines that read for the Spir engine: the browser extension or the home program. */
+export const engineWorkers = pgTable("engine_workers", {
+  /** Chosen by the worker itself and kept between restarts. */
+  id: text("id").primaryKey(),
+  /** extension or program. */
+  kind: text("kind").notNull(),
+  name: text("name"),
+  version: text("version"),
+  /** The public address it last reported. */
+  ip: text("ip"),
+  /** Its exits (direct and proxies) as it last saw them. */
+  exits:
+    jsonb("exits").$type<
+      {
+        id: string;
+        label: string;
+        ok: boolean;
+        restingUntil?: string | null;
+        ip?: string | null;
+        error?: string | null;
+      }[]
+    >(),
+  disabled: boolean("disabled").notNull().default(false),
+  reads: integer("reads").notNull().default(0),
+  lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: createdAt(),
+});
+
+/**
+ * Proxies the home program reads through, managed from the dashboard. The
+ * address (with its password) and the optional "change IP" link are stored
+ * encrypted with a key derived from AUTH_SECRET.
+ */
+export const engineProxies = pgTable("engine_proxies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** host:port only, for display. */
+  label: text("label").notNull(),
+  urlEnc: text("url_enc").notNull(),
+  rotateUrlEnc: text("rotate_url_enc"),
+  enabled: boolean("enabled").notNull().default(true),
+  reads: integer("reads").notNull().default(0),
+  failures: integer("failures").notNull().default(0),
+  lastError: text("last_error"),
+  lastIp: text("last_ip"),
+  restingUntil: timestamp("resting_until", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type EngineWorker = typeof engineWorkers.$inferSelect;
+export type EngineProxy = typeof engineProxies.$inferSelect;

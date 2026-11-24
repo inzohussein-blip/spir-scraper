@@ -7,6 +7,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
+COPY spir_worker.py ./
 RUN uv sync --locked --no-dev
 
 RUN useradd --system --uid 10001 worker

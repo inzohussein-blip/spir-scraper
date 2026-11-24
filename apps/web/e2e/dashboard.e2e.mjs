@@ -227,6 +227,84 @@ try {
   await page.waitForSelector("text=نمو المنافسين");
   step("content plan and market index");
 
+  // Spir engine: a run created in the dashboard, read by a "home worker" through the API.
+  await page.goto(`${B}/engine`);
+  await page.waitForSelector("text=لا يوجد جهاز متصل");
+  await page.fill('input[name="quiet_from"]', "0");
+  await page.fill('input[name="quiet_to"]', "0");
+  await page.fill('input[name="interval"]', "20");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=حُفظ: حساب كل 20 ثانية");
+  await page.fill('input[name="name"]', "زحف التجربة");
+  await page.fill('textarea[name="seeds"]', "@seed_e2e");
+  await page.fill('input[name="keywords"]', "تداول");
+  await page.click('button:has-text("ابدأ التشغيل")');
+  await page.waitForSelector("text=بدأ «زحف التجربة»");
+  const secret = process.env.WORKER_SHARED_SECRET ?? "e2e";
+  const engine = (path, body) =>
+    fetch(`${B}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-worker-secret": secret },
+      body: JSON.stringify(body),
+    }).then((r) => r.json());
+  assert.equal((await fetch(`${B}/api/engine/next`, { method: "POST" })).status, 404);
+  const job = await engine("/api/engine/next", {});
+  assert.equal(job.action, "read");
+  assert.equal(job.item.username, "seed_e2e");
+  const after = await engine("/api/engine/report", {
+    itemId: job.item.id,
+    status: "ok",
+    profile: {
+      igUserId: "e2e-seed",
+      username: "seed_e2e",
+      fullName: "Seed",
+      bio: "مدرب تداول مع @coach_e2e",
+      followers: 5000,
+      isBusiness: true,
+      isVerified: false,
+    },
+  });
+  assert.equal(after.action, "wait");
+  await page.goto(`${B}/engine`);
+  await page.click("text=زحف التجربة");
+  await page.waitForSelector("text=@seed_e2e");
+  await page.waitForSelector("text=@coach_e2e");
+  const csv = await (
+    await page.request.get(page.url().replace(/\/engine\/([^/?]+).*/, "/api/engine/runs/$1/csv"))
+  ).text();
+  assert.match(csv, /seed_e2e,yes/);
+  step("Spir engine: run, worker read and report, dataset and CSV");
+
+  // «العامل المنزلي»: a proxy added in the dashboard reaches the program (decrypted), never the page.
+  await page.goto(`${B}/workers`);
+  await page.fill('input[name="url"]', "http://user:pw-secret@proxy.example:8000");
+  await page.fill('input[name="rotate_url"]', "https://rot.example/change?key=k");
+  await page.click('button:has-text("أضف البروكسي")');
+  await page.waitForSelector("text=أُضيف proxy.example:8000");
+  await page.goto(`${B}/workers`);
+  assert.ok(
+    !((await page.textContent("body")) ?? "").includes("pw-secret"),
+    "the password never shows",
+  );
+  const program = { id: "pc-e2e", kind: "program", name: "جهاز التجربة", ip: "5.6.7.8" };
+  const first = await engine("/api/engine/next", { worker: program });
+  assert.equal(first.config.proxies[0].url, "http://user:pw-secret@proxy.example:8000");
+  assert.equal(first.config.proxies[0].rotateUrl, "https://rot.example/change?key=k");
+  await page.goto(`${B}/workers`);
+  await page.waitForSelector("text=جهاز التجربة");
+  await page.waitForSelector("text=5.6.7.8");
+  await page.click('button:has-text("غيّر IP")');
+  await page.waitForLoadState("networkidle");
+  const again = await engine("/api/engine/next", {
+    worker: { ...program, configVersion: first.config.version },
+  });
+  assert.equal(again.config, undefined);
+  assert.equal(again.commands?.[0]?.type, "rotate");
+  // The program file is offered for download.
+  const py = await (await fetch(`${B}/downloads/spir-worker.py`)).text();
+  assert.match(py, /Spir home worker/);
+  step("home worker page: devices, encrypted proxy, change IP, program download");
+
   // Shared from another app (Android share sheet → /share).
   await page.goto(
     `${B}/share?text=${encodeURIComponent("شوف https://www.instagram.com/user40/ 👌")}`,

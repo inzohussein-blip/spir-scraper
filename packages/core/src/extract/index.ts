@@ -14,6 +14,7 @@ export * from "./intent.js";
 export * from "./language.js";
 export * from "./linkpages.js";
 export * from "./links.js";
+export * from "./mentions.js";
 export * from "./mx.js";
 export * from "./pagediff.js";
 export * from "./phones.js";
