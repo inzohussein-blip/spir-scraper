@@ -1038,3 +1038,17 @@ export async function setEngineUseDirect(useDirect: boolean) {
   await (await getRuntime()).scrapers.saveEngineSettings({ useDirect });
   revalidatePath("/workers");
 }
+
+/** The free-plan limits the «الاستهلاك» page and its alerts compare against. */
+export async function saveUsageLimits(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const n = (k: string) => Number(str(form, k));
+  await (await getRuntime()).scrapers.saveUsageLimits({
+    dbHours: n("db_hours"),
+    dbStorageMb: n("db_storage_mb"),
+    requests: n("requests"),
+    apifyUsd: n("apify_usd"),
+  });
+  revalidatePath("/usage");
+  return { message: "حُفظت الحدود" };
+}

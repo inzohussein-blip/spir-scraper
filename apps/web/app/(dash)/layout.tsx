@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { logout } from "@/app/actions";
 import { Shell } from "@/components/shell";
 import { requireSession } from "@/lib/auth";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashLayout({ children }: { children: ReactNode }) {
   await requireSession();
+  meter("dashboard");
   const rt = await getRuntime();
   const [unread, projects, jobs] = await Promise.all([
     rt.scrapers.unreadNotifications(),

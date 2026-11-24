@@ -29,6 +29,8 @@ import {
   pushSubscriptions,
   siteWatches,
   suppression,
+  usageDaily,
+  usageSlots,
 } from "@scrapers/db";
 import {
   and,
@@ -98,6 +100,7 @@ import { engineMethods } from "./features/engine.js";
 import { marketMethods } from "./features/market.js";
 import { opsMethods } from "./features/ops.js";
 import { ownMethods } from "./features/own.js";
+import { usageMethods } from "./features/usage.js";
 import { NoProviderError, type ProviderRouter } from "./router.js";
 
 export const QUEUES = {
@@ -1013,6 +1016,9 @@ export function createScrapers(deps: {
     await db.delete(auditLog).where(lt(auditLog.at, daysAgo(180)));
     await db.delete(partnerClicks).where(lt(partnerClicks.at, daysAgo(365)));
     await db.delete(engineEvents).where(lt(engineEvents.at, daysAgo(30)));
+    // Usage: slots for two months (the page shows this month), daily counts for a year.
+    await db.delete(usageSlots).where(lt(usageSlots.day, daysAgo(62).toISOString().slice(0, 10)));
+    await db.delete(usageDaily).where(lt(usageDaily.day, daysAgo(400).toISOString().slice(0, 10)));
     // Finished engine runs (and their queues) after 90 days; their leads stay in the projects.
     await db
       .delete(engineRuns)
@@ -3098,6 +3104,8 @@ export function createScrapers(deps: {
     ...engineMethods(featureCtx),
 
     ...opsMethods(featureCtx),
+
+    ...usageMethods(featureCtx),
 
     /** Friday summary (idea from the Spir bot's weekly post): sent once per week. */
     async weeklySummary(now = new Date()) {

@@ -1,5 +1,6 @@
 import { apifyWebhookToken } from "@scrapers/runtime";
 import { scheduleDrain } from "@/lib/drain";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 import { safeEqual } from "@/lib/tokens";
 
@@ -21,6 +22,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   };
   const runId = body.resource?.id ?? body.eventData?.actorRunId;
   if (!runId) return Response.json({ ok: false }, { status: 400 });
+  meter("webhooks");
   const rt = await getRuntime();
   const finished = await rt.scrapers.collectDiscoveryRuns(runId);
   // The accounts found are now queued: start reading them.

@@ -305,6 +305,18 @@ try {
   assert.match(py, /Spir home worker/);
   step("home worker page: devices, encrypted proxy, change IP, program download");
 
+  // Usage: every page visit and engine call above was counted by source.
+  await page.goto(`${B}/usage`);
+  await page.waitForSelector("text=ساعات تشغيل قاعدة البيانات");
+  await page.waitForSelector("text=حجم قاعدة البيانات");
+  await page.waitForSelector("text=من يوقظ المنصة");
+  await page.waitForSelector("text=اللوحة");
+  await page.waitForSelector("text=محرك Spir");
+  await page.fill('input[name="db_hours"]', "150");
+  await page.click('button:has-text("حفظ")');
+  await page.waitForSelector("text=حُفظت الحدود");
+  step("usage page: meters, requests by source, plan limits");
+
   // Shared from another app (Android share sheet → /share).
   await page.goto(
     `${B}/share?text=${encodeURIComponent("شوف https://www.instagram.com/user40/ 👌")}`,

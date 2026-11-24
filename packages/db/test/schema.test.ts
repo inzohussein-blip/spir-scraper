@@ -101,6 +101,8 @@ describe("migrations", () => {
       "push_subscriptions",
       "site_watches",
       "suppression",
+      "usage_daily",
+      "usage_slots",
     ]);
     expect(rows.every((r) => r.relrowsecurity)).toBe(true);
   });

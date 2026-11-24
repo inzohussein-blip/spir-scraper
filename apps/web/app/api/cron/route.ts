@@ -1,7 +1,9 @@
 import { escapeHtml } from "@scrapers/runtime";
 import { buildBackup, TELEGRAM_MAX_BACKUP_BYTES } from "@/lib/backup";
 import { isCronRequest } from "@/lib/drain";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
+import { level, meterLine, usageAlerts } from "@/lib/usage";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -14,6 +16,7 @@ export const maxDuration = 300;
  */
 export async function GET(req: Request) {
   if (!isCronRequest(req)) return new Response("unauthorized", { status: 401 });
+  meter("cron");
   const rt = await getRuntime();
   const failed: string[] = [];
   async function step<T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -63,12 +66,22 @@ export async function GET(req: Request) {
     },
     false,
   );
+  // Free-plan usage: alerts at 70% and 90%, or when heading past a limit.
+  const usage = await step("usage", () => usageAlerts(rt), null);
   // The morning message with buttons (yesterday, the engine, who to contact, decisions).
   const ops = await step(
     "ops",
     async () => {
       const m = await rt.scrapers.dailyOps();
-      if (m && rt.telegram) await rt.telegram.sendText(m.html, m.buttons);
+      if (m && rt.telegram) {
+        const worst = (usage?.meters ?? []).filter((x) => level(x) !== "ok");
+        const line = worst.length
+          ? `\n\n⚠️ <b>الاستهلاك</b>\n${worst.map((x) => `• ${escapeHtml(meterLine(x))}`).join("\n")}`
+          : usage
+            ? "\n\n✅ الاستهلاك ضمن الخطط المجانية."
+            : "";
+        await rt.telegram.sendText(m.html + line, m.buttons);
+      }
       return !!m;
     },
     false,
@@ -139,6 +152,7 @@ export async function GET(req: Request) {
     accountsRead,
     placesRead,
     sites,
+    usage: usage?.sent ?? null,
     ops,
     own,
     market,

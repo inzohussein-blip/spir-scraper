@@ -1,3 +1,4 @@
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 
 export const runtime = "nodejs";
@@ -9,6 +10,7 @@ export const runtime = "nodejs";
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ code: string }> }) {
   const { code } = await ctx.params;
+  meter("public");
   const rt = await getRuntime();
   const partner = await rt.scrapers.partnerByCode(code);
   const settings = await rt.scrapers.getValue<{ signupUrl?: string; subParam?: string }>(

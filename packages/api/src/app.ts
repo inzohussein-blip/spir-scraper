@@ -225,6 +225,38 @@ export function createApi(getRuntime: () => Promise<Runtime>, opts: ApiOptions =
 
   app.openapi(
     createRoute({
+      method: "get",
+      path: "/v1/projects/{id}/lead-index",
+      summary: "Every lead of a project as [username, status, score]",
+      description:
+        "A compact list the browser extension downloads once a day, so the badge on Instagram " +
+        "profiles is answered on the owner's computer instead of one request per profile.",
+      security: [{ bearer: [] }],
+      request: { params: z.object({ id: z.string().uuid() }) },
+      responses: {
+        200: jsonOf(
+          z.object({
+            entries: z.array(z.tuple([z.string(), z.string(), z.number().int().nullable()])),
+            at: z.string(),
+          }),
+        ),
+        ...errors,
+      },
+    }),
+    async (c) => {
+      const entries = await (await getRuntime()).scrapers.leadIndex(c.req.valid("param").id);
+      return c.json(
+        {
+          entries: entries.map((e) => [e[0], e[1], e[2]] as [string, string, number | null]),
+          at: new Date().toISOString(),
+        },
+        200,
+      );
+    },
+  );
+
+  app.openapi(
+    createRoute({
       method: "post",
       path: "/v1/jobs",
       security: [{ bearer: [] }],

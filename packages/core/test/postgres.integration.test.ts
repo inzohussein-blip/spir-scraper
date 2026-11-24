@@ -136,6 +136,12 @@ describe.skipIf(!url)("on real Postgres", () => {
     expect((await scrapers.contentPlan((p as { id: string }).id)).days).toHaveLength(7);
     await scrapers.storeMessage({ id: "pg-dm", threadId: "t1", direction: "in", text: "بكم؟" });
     expect((await scrapers.listThreads())[0]).toMatchObject({ threadId: "t1", unread: 1 });
+    // Usage: counts and database size with the production driver.
+    await scrapers.recordUsage("dashboard");
+    const usage = await scrapers.usageReport();
+    expect(usage.requests).toBeGreaterThan(0);
+    expect(usage.storageBytes).toBeGreaterThan(0);
+    expect(usage.tables.length).toBeGreaterThan(0);
     await scrapers.audit({ actor: "anon", action: "login.failed", ip: "9.9.9.9" });
     expect(await scrapers.failedLogins("9.9.9.9")).toMatchObject({ ip: 1 });
     await scrapers.handlers.retention();

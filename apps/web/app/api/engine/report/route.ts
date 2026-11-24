@@ -1,6 +1,7 @@
 import type { EngineReport, RawProfile } from "@scrapers/core";
 import { scheduleDrain } from "@/lib/drain";
 import { forWorker, isEngineWorker, workerInfo } from "@/lib/engine-auth";
+import { meter } from "@/lib/meter";
 import { getRuntime } from "@/lib/runtime";
 
 export const runtime = "nodejs";
@@ -54,6 +55,7 @@ export async function POST(req: Request) {
     .map(parseReport);
   if (reports.length === 0 || reports.some((r) => r === null))
     return Response.json({ error: "bad report" }, { status: 400 });
+  meter("engine");
   const rt = await getRuntime();
   const decision = await rt.scrapers.engineReport(
     reports as EngineReport[],
