@@ -275,6 +275,36 @@ try {
   assert.match(csv, /seed_e2e,yes/);
   step("Spir engine: run, worker read and report, dataset and CSV");
 
+  // «العامل المنزلي»: a proxy added in the dashboard reaches the program (decrypted), never the page.
+  await page.goto(`${B}/workers`);
+  await page.fill('input[name="url"]', "http://user:pw-secret@proxy.example:8000");
+  await page.fill('input[name="rotate_url"]', "https://rot.example/change?key=k");
+  await page.click('button:has-text("أضف البروكسي")');
+  await page.waitForSelector("text=أُضيف proxy.example:8000");
+  await page.goto(`${B}/workers`);
+  assert.ok(
+    !((await page.textContent("body")) ?? "").includes("pw-secret"),
+    "the password never shows",
+  );
+  const program = { id: "pc-e2e", kind: "program", name: "جهاز التجربة", ip: "5.6.7.8" };
+  const first = await engine("/api/engine/next", { worker: program });
+  assert.equal(first.config.proxies[0].url, "http://user:pw-secret@proxy.example:8000");
+  assert.equal(first.config.proxies[0].rotateUrl, "https://rot.example/change?key=k");
+  await page.goto(`${B}/workers`);
+  await page.waitForSelector("text=جهاز التجربة");
+  await page.waitForSelector("text=5.6.7.8");
+  await page.click('button:has-text("غيّر IP")');
+  await page.waitForLoadState("networkidle");
+  const again = await engine("/api/engine/next", {
+    worker: { ...program, configVersion: first.config.version },
+  });
+  assert.equal(again.config, undefined);
+  assert.equal(again.commands?.[0]?.type, "rotate");
+  // The program file is offered for download.
+  const py = await (await fetch(`${B}/downloads/spir-worker.py`)).text();
+  assert.match(py, /Spir home worker/);
+  step("home worker page: devices, encrypted proxy, change IP, program download");
+
   // Shared from another app (Android share sheet → /share).
   await page.goto(
     `${B}/share?text=${encodeURIComponent("شوف https://www.instagram.com/user40/ 👌")}`,

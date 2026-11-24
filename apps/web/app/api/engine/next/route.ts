@@ -8,5 +8,7 @@ export async function POST(req: Request) {
   if (!(await isEngineWorker(req))) return new Response("not found", { status: 404 });
   const body = (await req.json().catch(() => ({}))) as { worker?: unknown };
   const rt = await getRuntime();
-  return Response.json(forWorker(await rt.scrapers.engineNext(new Date(), workerInfo(body.worker))));
+  return Response.json(
+    forWorker(await rt.scrapers.engineNext(new Date(), workerInfo(body.worker))),
+  );
 }

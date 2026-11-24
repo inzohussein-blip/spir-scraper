@@ -14,7 +14,6 @@ import {
   Select,
   Textarea,
 } from "@/components/ui";
-import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 
 export const metadata = { title: "محرك Spir" };
@@ -66,9 +65,11 @@ export default async function EnginePage() {
 
       {status.state === "no_worker" && (
         <Notice tone="info">
-          لم يتصل جهاز البيت بعد. شغّل العامل المنزلي بأمر المحرك (الشرح في docs/HOME-WORKER.md، قسم
-          «محرك Spir»)، مع <span className="ltr font-mono">PLATFORM_URL={appOrigin()}</span> ونفس{" "}
-          <span className="ltr font-mono">WORKER_SHARED_SECRET</span> الموجود في Vercel.
+          لم يتصل أي جهاز بعد. شغّل المحرك من إضافة المتصفح أو من البرنامج المنزلي: الخطوات في صفحة{" "}
+          <Link href="/workers" className="underline">
+            العامل المنزلي
+          </Link>
+          .
         </Notice>
       )}
 

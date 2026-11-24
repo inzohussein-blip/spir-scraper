@@ -27,6 +27,7 @@ import {
 import { scheduleDrain } from "@/lib/drain";
 import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
+import { proxyLabel, seal } from "@/lib/secretbox";
 import { telegramWebhookSecret } from "@/lib/telegram";
 import { safeNext } from "@/lib/tokens";
 
@@ -945,4 +946,84 @@ export async function setEngineRunStatus(id: string, status: "active" | "paused"
   await (await getRuntime()).scrapers.setEngineRunStatus(id, status);
   revalidatePath("/engine");
   revalidatePath(`/engine/${id}`);
+}
+
+// ---- «العامل المنزلي»: devices and proxies of the Spir engine ----
+
+/** Adds a proxy for the home program; its address and change-IP link are stored encrypted. */
+export async function addEngineProxy(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const url = str(form, "url");
+  const rotate = str(form, "rotate_url");
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { error: "اكتب عنوان البروكسي كاملاً، مثل http://user:pass@host:port" };
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port)
+    return {
+      error:
+        "البروكسي يجب أن يبدأ بـ http:// أو https:// وفيه رقم المنفذ (SOCKS غير مدعوم في البرنامج)",
+    };
+  if (rotate && !/^https?:\/\//.test(rotate))
+    return { error: "رابط تغيير الـ IP يجب أن يبدأ بـ https://" };
+  const label = str(form, "label") || proxyLabel(url);
+  await (await getRuntime()).scrapers.addEngineProxy({
+    label,
+    urlEnc: seal(url),
+    rotateUrlEnc: rotate ? seal(rotate) : null,
+  });
+  await audit("engine.proxy.add", { label });
+  revalidatePath("/workers");
+  return { message: `أُضيف ${label}. يصل للبرنامج في زيارته التالية (خلال دقائق).` };
+}
+
+export async function updateEngineProxy(
+  id: string,
+  change: "enable" | "disable" | "rest" | "clear" | "delete" | "rotate",
+) {
+  await requireSession();
+  const rt = await getRuntime();
+  if (change === "delete") await rt.scrapers.deleteEngineProxy(id);
+  else if (change === "rotate")
+    await rt.scrapers.queueEngineCommand({ type: "rotate", proxyId: id });
+  else
+    await rt.scrapers.updateEngineProxy(id, {
+      ...(change === "enable" ? { enabled: true } : {}),
+      ...(change === "disable" ? { enabled: false } : {}),
+      ...(change === "rest" ? { rest: true } : {}),
+      ...(change === "clear" ? { clearError: true } : {}),
+    });
+  await audit("engine.proxy", { id, change });
+  revalidatePath("/workers");
+}
+
+export async function engineWorkerAction(id: string, change: "enable" | "disable" | "delete") {
+  await requireSession();
+  const rt = await getRuntime();
+  if (change === "delete") await rt.scrapers.deleteEngineWorker(id);
+  else await rt.scrapers.setEngineWorkerDisabled(id, change === "disable");
+  revalidatePath("/workers");
+}
+
+/** Every device checks its public address (and each proxy's) on its next visit. */
+export async function checkEngineIps() {
+  await requireSession();
+  await (await getRuntime()).scrapers.queueEngineCommand({ type: "check_ip" });
+  revalidatePath("/workers");
+}
+
+/** Ends the engine's rest now (after changing the network, the IP or a proxy). */
+export async function resumeEngine() {
+  await requireSession();
+  await (await getRuntime()).scrapers.clearEngineRest();
+  revalidatePath("/workers");
+  revalidatePath("/engine");
+}
+
+export async function setEngineUseDirect(useDirect: boolean) {
+  await requireSession();
+  await (await getRuntime()).scrapers.saveEngineSettings({ useDirect });
+  revalidatePath("/workers");
 }
