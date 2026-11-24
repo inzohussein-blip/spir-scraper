@@ -23,6 +23,7 @@ import { ownMethods } from "./features/own.js";
 import { placesMethods } from "./features/places.js";
 import { saverMethods } from "./features/saver.js";
 import { systemMethods } from "./features/system.js";
+import { toolsMethods } from "./features/tools.js";
 import { usageMethods } from "./features/usage.js";
 
 export * from "./core.js";
@@ -80,6 +81,7 @@ export function createScrapers(deps: ScrapersDeps) {
     ...competitorsMethods(core, self),
     ...backupMethods(core, self),
     ...systemMethods(core, self),
+    ...toolsMethods(core, self),
     async init() {
       await boss.createQueue(QUEUES.discover, {
         retryLimit: 2,

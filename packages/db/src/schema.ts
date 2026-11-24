@@ -752,3 +752,52 @@ export const usageSlots = pgTable(
   },
   (t) => [primaryKey({ columns: [t.day, t.slot] })],
 );
+
+/**
+ * One run of a tool from the «المتجر» window that does not produce leads
+ * directly (competitors' ads, YouTube or TikTok comments): its input, state
+ * and cost. Its results are the run's dataset (tool_items).
+ */
+export const toolRuns = pgTable(
+  "tool_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The tool's id in the store, e.g. fb-ads, youtube-comments. */
+    tool: text("tool").notNull(),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    input: jsonb("input").$type<Record<string, unknown>>().notNull().default({}),
+    /** running | done | failed */
+    status: text("status").notNull().default("running"),
+    items: integer("items").notNull().default(0),
+    /** Items flagged as worth a look (e.g. comments asking how to join). */
+    flagged: integer("flagged").notNull().default(0),
+    costUsd: numeric("cost_usd", { precision: 10, scale: 4 }).notNull().default("0"),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [index("tool_runs_started_idx").on(t.startedAt.desc())],
+);
+
+/** A tool run's dataset: one row per result, its fields as JSON. */
+export const toolItems = pgTable(
+  "tool_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => toolRuns.id, { onDelete: "cascade" }),
+    /** The result's own id (ad id, comment id), so a run keeps each once. */
+    key: text("key").notNull(),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+    flagged: boolean("flagged").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("tool_items_run_key_uq").on(t.runId, t.key),
+    index("tool_items_run_idx").on(t.runId),
+  ],
+);
+
+export type ToolRun = typeof toolRuns.$inferSelect;
+export type ToolItem = typeof toolItems.$inferSelect;

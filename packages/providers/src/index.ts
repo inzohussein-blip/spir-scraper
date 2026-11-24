@@ -1,4 +1,4 @@
-import type { Connector, Provider } from "@scrapers/core";
+import type { Connector, DataTools, Provider } from "@scrapers/core";
 import { ApifyProvider } from "./apify.js";
 import { TelegramConnector } from "./connectors/telegram.js";
 import { TikTokConnector } from "./connectors/tiktok.js";
@@ -65,6 +65,28 @@ export function providersFromEnv(env: NodeJS.ProcessEnv = process.env): Provider
  * Readers for other platforms, through official interfaces only:
  * YouTube Data API (YOUTUBE_API_KEY) and the Telegram Bot API (TELEGRAM_BOT_TOKEN).
  */
+/**
+ * Services the store's tool runs use: any Apify Actor (through the given
+ * provider, so the monthly cap applies) and YouTube comments (official API).
+ */
+export function toolsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  apify?: ApifyProvider,
+): DataTools {
+  const youtube = env.YOUTUBE_API_KEY ? new YouTubeConnector(env.YOUTUBE_API_KEY) : null;
+  return {
+    ...(apify
+      ? {
+          apifyActor: (actor: string, input: object, max: number) =>
+            apify.runActor(actor, input, max),
+        }
+      : {}),
+    ...(youtube
+      ? { youtubeComments: (videoId: string, max: number) => youtube.videoComments(videoId, max) }
+      : {}),
+  };
+}
+
 export function connectorsFromEnv(env: NodeJS.ProcessEnv = process.env): Connector[] {
   const list: Connector[] = [];
   if (env.YOUTUBE_API_KEY) list.push(new YouTubeConnector(env.YOUTUBE_API_KEY));

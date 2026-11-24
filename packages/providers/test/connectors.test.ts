@@ -37,6 +37,42 @@ describe("YouTube connector", () => {
     expect(urls[1]).toContain("id=UCabcdefghijklmnopqrstuv");
   });
 
+  it("reads a video's comments page by page, and none when comments are off", async () => {
+    const urls: string[] = [];
+    const page = (n: number, next?: string) =>
+      json({
+        ...(next ? { nextPageToken: next } : {}),
+        items: Array.from({ length: n }, (_, i) => ({
+          id: `t${next ?? "end"}${i}`,
+          snippet: {
+            topLevelComment: {
+              id: `c${next ?? "end"}${i}`,
+              snippet: {
+                authorDisplayName: "أحمد",
+                authorChannelUrl: "http://www.youtube.com/@ahmad",
+                textOriginal: "كيف أبدأ؟",
+                likeCount: 2,
+                publishedAt: "2026-11-01T00:00:00Z",
+              },
+            },
+          },
+        })),
+      });
+    const yt = new YouTubeConnector("k", async (url) => {
+      urls.push(url);
+      return url.includes("pageToken=p2") ? page(30) : page(100, "p2");
+    });
+    const list = await yt.videoComments("dQw4w9WgXcQ", 120);
+    expect(list).toHaveLength(120);
+    expect(list[0]).toMatchObject({ author: "أحمد", text: "كيف أبدأ؟", likes: 2 });
+    expect(urls[0]).toContain("videoId=dQw4w9WgXcQ");
+    expect(urls[1]).toContain("maxResults=20");
+    const off = new YouTubeConnector("k", async () =>
+      json({ error: { errors: [{ reason: "commentsDisabled" }] } }, 403),
+    );
+    expect(await off.videoComments("dQw4w9WgXcQ", 10)).toEqual([]);
+  });
+
   it("reports missing channels and API errors", async () => {
     await expect(
       new YouTubeConnector("k", async () => json({ items: [] })).getAccount("x"),

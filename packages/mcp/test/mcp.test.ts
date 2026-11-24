@@ -83,8 +83,14 @@ describe("MCP server over Streamable HTTP", () => {
         "market_index",
         "spir_engine",
         "spir_engine_start",
+        "store_tools",
+        "run_store_tool",
       ].sort(),
     );
+    // The store's catalog, with what each tool needs.
+    const store = await client.callTool({ name: "store_tools", arguments: {} });
+    const text = (store.content as { type: string; text: string }[])[0]?.text ?? "";
+    expect(JSON.parse(text).tools.some((t: { id: string }) => t.id === "fb-ads")).toBe(true);
     const prompts = (await client.listPrompts()).prompts.map((p) => p.name).sort();
     expect(prompts).toEqual(["audience_report", "find_partners"]);
   });

@@ -4,7 +4,14 @@ import type { PgBoss } from "pg-boss";
 import type { ResolveDeps } from "../extract/index.js";
 import type { NotificationSink } from "../notify.js";
 import type { Scorer } from "../scoring.js";
-import type { Connector, FollowingSource, OwnAccount, PlacesSearch, Source } from "../types.js";
+import type {
+  Connector,
+  DataTools,
+  FollowingSource,
+  OwnAccount,
+  PlacesSearch,
+  Source,
+} from "../types.js";
 import type { ProviderRouter } from "./router.js";
 
 export const QUEUES = {
@@ -174,6 +181,8 @@ export interface ScrapersDeps {
   following?: FollowingSource;
   /** Reads one public web page (for watching competitor sites). */
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
+  /** Services the «المتجر» tools run on (Apify Actors, YouTube API). */
+  tools?: DataTools;
 }
 
 /** The few public methods the pipeline itself calls (bound once the service exists). */

@@ -13,46 +13,73 @@ export type ShellData = {
   jobs: { id: string; label: string; status: string }[];
 };
 
-const NAV: { href: string; label: string; icon: IconName }[] = [
-  { href: "/", label: "نظرة عامة", icon: "home" },
-  { href: "/jobs/new", label: "مهمة جديدة", icon: "plus" },
-  { href: "/leads", label: "العملاء", icon: "users" },
-  { href: "/competitors", label: "المنافسون", icon: "radar" },
-  { href: "/places", label: "الشركات", icon: "folder" },
-  { href: "/engine", label: "محرك Spir", icon: "activity" },
-  { href: "/workers", label: "العامل المنزلي", icon: "plug" },
-  { href: "/usage", label: "الاستهلاك", icon: "chart" },
-  { href: "/insights", label: "العائد", icon: "chart" },
-  { href: "/partners", label: "الوكلاء", icon: "users" },
-  { href: "/own", label: "حسابي", icon: "chart" },
-  { href: "/inbox", label: "الرسائل", icon: "bell" },
-  { href: "/content", label: "المحتوى", icon: "sparkles" },
-  { href: "/market", label: "السوق", icon: "radar" },
-  { href: "/notifications", label: "الإشعارات", icon: "bell" },
-  { href: "/activity", label: "النشاط", icon: "activity" },
-  { href: "/extension", label: "إضافة المتصفح", icon: "plug" },
-  { href: "/settings", label: "الإعدادات", icon: "settings" },
+type NavItem = { href: string; label: string; icon: IconName };
+
+/**
+ * The menu in sections, from finding people to running the business:
+ * the store and its runs, the data they produce, analysis, then the account.
+ */
+const SECTIONS: { title: string | null; items: NavItem[] }[] = [
+  { title: null, items: [{ href: "/", label: "الرئيسية", icon: "home" }] },
+  {
+    title: "الأدوات",
+    items: [
+      { href: "/store", label: "المتجر", icon: "store" },
+      { href: "/runs", label: "التشغيلات", icon: "play" },
+      { href: "/schedules", label: "الجدولة", icon: "clock" },
+      { href: "/engine", label: "محرك Spir", icon: "activity" },
+    ],
+  },
+  {
+    title: "البيانات",
+    items: [
+      { href: "/leads", label: "العملاء", icon: "users" },
+      { href: "/places", label: "الشركات", icon: "folder" },
+      { href: "/competitors", label: "المنافسون", icon: "radar" },
+      { href: "/inbox", label: "الرسائل", icon: "bell" },
+    ],
+  },
+  {
+    title: "النمو",
+    items: [
+      { href: "/insights", label: "العائد", icon: "chart" },
+      { href: "/market", label: "السوق", icon: "radar" },
+      { href: "/content", label: "المحتوى", icon: "sparkles" },
+      { href: "/own", label: "حسابي", icon: "chart" },
+      { href: "/partners", label: "الوكلاء", icon: "users" },
+    ],
+  },
+  {
+    title: "الحساب",
+    items: [
+      { href: "/usage", label: "الاستهلاك", icon: "chart" },
+      { href: "/workers", label: "العامل المنزلي", icon: "plug" },
+      { href: "/extension", label: "إضافة المتصفح", icon: "plug" },
+      { href: "/notifications", label: "الإشعارات", icon: "bell" },
+      { href: "/activity", label: "النشاط", icon: "activity" },
+      { href: "/settings", label: "الإعدادات", icon: "settings" },
+    ],
+  },
 ];
 
+const NAV: NavItem[] = SECTIONS.flatMap((s) => s.items);
+
 const TITLES: Record<string, string> = {
-  "/": "نظرة عامة",
+  ...Object.fromEntries(NAV.map((n) => [n.href, n.label])),
   "/jobs/new": "مهمة جديدة",
-  "/leads": "العملاء",
-  "/competitors": "المنافسون",
-  "/places": "الشركات",
-  "/engine": "محرك Spir",
-  "/workers": "العامل المنزلي",
-  "/usage": "الاستهلاك",
-  "/insights": "العائد",
-  "/partners": "الوكلاء",
-  "/own": "حسابي",
-  "/inbox": "الرسائل",
-  "/content": "المحتوى",
-  "/market": "السوق",
-  "/notifications": "الإشعارات",
-  "/activity": "النشاط",
-  "/settings": "الإعدادات",
+  "/leads/board": "لوحة العملاء",
 };
+
+/** The page title, for nested pages too (a tool, a run, a job). */
+function titleFor(path: string): string {
+  if (TITLES[path]) return TITLES[path];
+  if (path.startsWith("/store/")) return "أداة";
+  if (path.startsWith("/runs/")) return "نتائج التشغيل";
+  if (path.startsWith("/jobs/")) return "تفاصيل المهمة";
+  if (path.startsWith("/engine/")) return "تشغيل المحرك";
+  const parent = NAV.filter((n) => n.href !== "/" && path.startsWith(n.href)).at(-1);
+  return parent?.label ?? "";
+}
 
 function ThemeToggle() {
   const [dark, setDark] = useState(false);
@@ -219,8 +246,7 @@ export function Shell({
   useEffect(() => setMenu(false), [path]);
 
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
-  const title =
-    path.startsWith("/jobs/") && path !== "/jobs/new" ? "تفاصيل المهمة" : (TITLES[path] ?? "");
+  const title = titleFor(path);
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[252px_1fr]">
@@ -236,28 +262,42 @@ export function Shell({
           </span>
           Scrapers
         </Link>
-        <nav className="grid gap-0.5">
-          {NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className={cx(
-                "flex items-center gap-2.5 rounded-[10px] px-2.5 py-2 font-medium",
-                active(n.href)
-                  ? "bg-accent-soft text-accent"
-                  : "text-fg-2 hover:bg-surface-2 hover:text-fg",
-              )}
-            >
-              <Icon name={n.icon} />
-              {n.label}
-              {n.href === "/notifications" && data.unread > 0 && (
-                <span className="ms-auto rounded-full bg-bad px-2 text-[11.5px] text-white">
-                  {data.unread}
-                </span>
-              )}
-            </Link>
-          ))}
-        </nav>
+        {SECTIONS.map((section) => (
+          <div key={section.title ?? "top"}>
+            {section.title && (
+              <div className="px-2.5 pt-3 pb-1 text-[11.5px] font-medium text-muted">
+                {section.title}
+              </div>
+            )}
+            <nav className="grid gap-0.5" aria-label={section.title ?? "الرئيسية"}>
+              {section.items.map((n) => (
+                <Link
+                  key={n.href}
+                  href={n.href}
+                  className={cx(
+                    "flex items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 font-medium",
+                    active(n.href)
+                      ? "bg-accent-soft text-accent"
+                      : "text-fg-2 hover:bg-surface-2 hover:text-fg",
+                  )}
+                >
+                  <Icon name={n.icon} />
+                  {n.label}
+                  {n.href === "/notifications" && data.unread > 0 && (
+                    <span className="ms-auto rounded-full bg-bad px-2 text-[11.5px] text-white">
+                      {data.unread}
+                    </span>
+                  )}
+                  {n.href === "/runs" && data.activeJobs > 0 && (
+                    <span className="ms-auto rounded-full bg-warn px-2 text-[11.5px] text-white">
+                      {data.activeJobs}
+                    </span>
+                  )}
+                </Link>
+              ))}
+            </nav>
+          </div>
+        ))}
         {data.projects.length > 0 && (
           <>
             <div className="px-2.5 pt-3.5 pb-1.5 text-[11.5px] text-muted">المشاريع</div>
@@ -325,6 +365,13 @@ export function Shell({
             بحث سريع
             <kbd className="ms-auto rounded-md border border-line px-1.5 text-[11px]">Ctrl K</kbd>
           </button>
+          <Link
+            href="/store"
+            className="hidden items-center gap-1.5 rounded-[10px] border border-accent bg-accent px-3 py-2 text-sm font-medium text-accent-text sm:flex"
+          >
+            <Icon name="store" className="size-4" />
+            تشغيل أداة
+          </Link>
           <Link
             href="/notifications"
             className="relative rounded-[10px] border border-line bg-surface p-2 hover:bg-surface-2"

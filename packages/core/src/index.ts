@@ -28,6 +28,13 @@ export {
 } from "./pipeline/features/engine.js";
 export { type SaverMeter, type SaverState, widerQuiet } from "./pipeline/features/saver.js";
 export {
+  mapAd,
+  mapTikTokComment,
+  TOOL_ACTORS,
+  TOOL_MAX_ITEMS,
+  type ToolRunInput,
+} from "./pipeline/features/tools.js";
+export {
   awakeMinutes,
   DEFAULT_USAGE_LIMITS,
   monthFraction,
@@ -39,5 +46,6 @@ export * from "./pipeline/router.js";
 export * from "./pipeline/service.js";
 export * from "./scoring.js";
 export * from "./source.js";
+export * from "./store.js";
 export * from "./suppression.js";
 export * from "./types.js";

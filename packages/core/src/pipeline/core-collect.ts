@@ -13,6 +13,7 @@ import {
   profileSnapshots,
   profiles,
   projects,
+  toolRuns,
   usageDaily,
   usageSlots,
 } from "@scrapers/db";
@@ -510,6 +511,8 @@ export function createCollector(deps: ScrapersDeps, prev: Store & LeadStore) {
     await db.delete(auditLog).where(lt(auditLog.at, daysAgo(180)));
     await db.delete(partnerClicks).where(lt(partnerClicks.at, daysAgo(365)));
     await db.delete(engineEvents).where(lt(engineEvents.at, daysAgo(30)));
+    // Store tool runs and their datasets (competitors' ads, comments) after 90 days.
+    await db.delete(toolRuns).where(lt(toolRuns.startedAt, daysAgo(90)));
     // Usage: slots for two months (the page shows this month), daily counts for a year.
     await db.delete(usageSlots).where(lt(usageSlots.day, daysAgo(62).toISOString().slice(0, 10)));
     await db.delete(usageDaily).where(lt(usageDaily.day, daysAgo(400).toISOString().slice(0, 10)));

@@ -213,3 +213,24 @@ export class BlockedError extends ProviderError {}
 export class NotFoundError extends ProviderError {}
 /** The spending cap for a paid provider has been reached. */
 export class BudgetExceededError extends ProviderError {}
+
+/** One top-level comment under a YouTube video (official API). */
+export interface YouTubeComment {
+  id: string;
+  author: string | null;
+  authorUrl: string | null;
+  text: string;
+  likes: number;
+  at: string | null;
+}
+
+/**
+ * Outside services the «المتجر» tools run on. Each is optional: a tool whose
+ * service is missing says what to add instead of running.
+ */
+export interface DataTools {
+  /** Runs an Apify Actor (within this month's remaining credit) and returns its results. */
+  apifyActor?(actor: string, input: object, maxItems: number): Promise<Record<string, unknown>[]>;
+  /** Top-level comments of a YouTube video, most relevant first (free API quota). */
+  youtubeComments?(videoId: string, max: number): Promise<YouTubeComment[]>;
+}

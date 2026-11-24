@@ -141,6 +141,13 @@
       "when": 1795516041069,
       "tag": "0019_chief_spirit",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795523401961,
+      "tag": "0020_confused_wild_pack",
+      "breakpoints": true
     }
   ]
 }

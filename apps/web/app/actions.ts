@@ -417,6 +417,7 @@ export async function addMonitor(_: ActionState, form: FormData): Promise<Action
   }
   await audit("monitor.create", { source: str(form, "source") });
   revalidatePath("/leads");
+  revalidatePath("/schedules");
   return { message: "أُضيفت المراقبة. تعمل مع المهمة اليومية وتجمع الحسابات الجديدة فقط." };
 }
 
@@ -424,6 +425,7 @@ export async function toggleMonitor(id: string, enabled: boolean) {
   await requireSession();
   await (await getRuntime()).scrapers.setMonitorEnabled(id, enabled);
   revalidatePath("/leads");
+  revalidatePath("/schedules");
 }
 
 export async function removeMonitor(id: string) {
@@ -431,6 +433,7 @@ export async function removeMonitor(id: string) {
   await (await getRuntime()).scrapers.deleteMonitor(id);
   await audit("monitor.delete", { id });
   revalidatePath("/leads");
+  revalidatePath("/schedules");
 }
 
 const STATUS_VALUES = ["new", "contacted", "interested", "customer", "rejected"] as const;
@@ -1066,4 +1069,37 @@ export async function setSaverAuto(auto: boolean) {
   await requireSession();
   await (await getRuntime()).scrapers.setSaverAuto(auto);
   revalidatePath("/usage");
+}
+
+/**
+ * Runs a store tool (competitors' ads, YouTube or TikTok comments) and opens
+ * its run. Waits for the results: an Apify run can take a few minutes.
+ */
+export async function runStoreTool(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  const tool = str(form, "tool");
+  let runId: string;
+  try {
+    const run = await (await getRuntime()).scrapers.runTool({
+      tool,
+      query: str(form, "query"),
+      country: str(form, "country") || "ALL",
+      limit: Number(str(form, "limit") || 100),
+      projectId: str(form, "project") || null,
+    });
+    runId = run.id;
+    await audit("tool.run", { tool, status: run.status, items: run.items });
+  } catch (err) {
+    return fail(err);
+  }
+  revalidatePath("/runs");
+  redirect(`/runs/${runId}`);
+}
+
+export async function deleteToolRun(id: string) {
+  await requireSession();
+  await (await getRuntime()).scrapers.deleteToolRun(id);
+  await audit("tool.delete", { id });
+  revalidatePath("/runs");
+  redirect("/runs");
 }

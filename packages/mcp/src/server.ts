@@ -1,5 +1,12 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
-import { checkMessage, parseSource, type Source, SourceError, uploadSource } from "@scrapers/core";
+import {
+  checkMessage,
+  parseSource,
+  type Source,
+  SourceError,
+  STORE_TOOLS,
+  uploadSource,
+} from "@scrapers/core";
 import type { Runtime } from "@scrapers/runtime";
 import { z } from "zod";
 
@@ -1031,6 +1038,61 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     guard(async (a) => json(await rt.readPage(a.url))),
+  );
+
+  server.registerTool(
+    "store_tools",
+    {
+      title: "List the store's tools",
+      description:
+        "Every collection tool of the platform («المتجر»): id, name, platform, what it gives, price and how it runs " +
+        "(job: leads into a project, use start_job; tool: a dataset, use run_store_tool; page: a dashboard window).",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async () =>
+      json({
+        tools: STORE_TOOLS.map((t) => ({
+          id: t.id,
+          name: t.name,
+          category: t.category,
+          summary: t.summary,
+          output: t.output,
+          pricing: t.pricing,
+          run: t.run,
+        })),
+        available: rt.scrapers.toolAvailability(),
+      }),
+    ),
+  );
+
+  server.registerTool(
+    "run_store_tool",
+    {
+      title: "Run a store tool (ads, YouTube or TikTok comments)",
+      description:
+        "Runs fb-ads (Meta Ad Library: who advertises trading in a country; query = keywords or a Facebook page URL), " +
+        "youtube-comments (free; query = video URL) or tiktok-comments (Apify; query = video URL). Waits for the " +
+        "results and returns the run with its first results, the ones showing interest (or ads still running) first. " +
+        "Paid tools spend the Apify credit: say the estimated cost before running. Nothing is sent to anyone.",
+      inputSchema: z.object({
+        tool: z.enum(["fb-ads", "youtube-comments", "tiktok-comments"]),
+        query: z.string().min(1).max(500),
+        country: z.string().max(3).optional().describe("fb-ads: 2-letter country code or ALL"),
+        limit: z.number().int().min(1).max(1000).default(100),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) => {
+      const run = await rt.scrapers.runTool({
+        tool: a.tool,
+        query: a.query,
+        limit: a.limit,
+        ...(a.country ? { country: a.country } : {}),
+      });
+      const items = await rt.scrapers.toolRunItems(run.id, { limit: 50 });
+      return json({ run, items: items.map((i) => ({ flagged: i.flagged, ...i.data })) });
+    }),
   );
 
   server.registerTool(

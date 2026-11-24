@@ -21,9 +21,11 @@ describe("encrypted backups and proxies", () => {
 
   it("keeps proxy passwords encrypted and labels them by host only", () => {
     process.env.AUTH_SECRET = "s";
-    const url = "http://user:pw@proxy.example:8000";
+    // A long password: a 2-letter one can appear in random base64 text by chance.
+    const url = "http://user:Very-Secret-Proxy-Pass@proxy.example:8000";
     const sealed = seal(url);
-    expect(sealed).not.toContain("pw");
+    expect(sealed).not.toContain("Very-Secret-Proxy-Pass");
+    expect(Buffer.from(sealed, "base64url").includes("Very-Secret-Proxy-Pass")).toBe(false);
     expect(open(sealed)).toBe(url);
     expect(proxyLabel(url)).toBe("proxy.example:8000");
   });
