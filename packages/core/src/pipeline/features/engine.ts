@@ -37,6 +37,11 @@ export interface EngineSettings {
    * instead of twice a minute: what keeps free plans free.
    */
   batchMinutes: number;
+  /**
+   * The pace adapts by itself: slower after Instagram asks for rests,
+   * a little faster again after calm days (never below 60 seconds).
+   */
+  adaptive: boolean;
 }
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
@@ -48,6 +53,7 @@ export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   quietTo: 7,
   useDirect: true,
   batchMinutes: 45,
+  adaptive: true,
 };
 
 /** Who is asking: the browser extension or the home program, with what it sees. */
@@ -816,6 +822,45 @@ export function engineMethods(ctx: FeatureContext) {
       for (const one of Array.isArray(r) ? r : [r]) sent += await report(one, now);
       const decision = await next(now, worker);
       return sent > 0 ? { ...decision, sent } : decision;
+    },
+
+    /**
+     * Adapts the pace once a day: two or more rests in the last 24 hours add
+     * 15 seconds between accounts (up to 5 minutes); three calm days with
+     * real reading take 10 seconds off (not below 60). Returns the change.
+     */
+    async tuneEnginePace(now = new Date()) {
+      const s = await settings();
+      if (!s.adaptive || !s.enabled) return null;
+      const since = new Date(now.getTime() - 86_400_000);
+      const [r] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(engineEvents)
+        .where(and(eq(engineEvents.kind, "rest"), gte(engineEvents.at, since)));
+      const rests = Number(r?.n ?? 0);
+      const reads = await readLastDay(now);
+      const last = (await getValue<number>("engine:tuned")) ?? 0;
+      let interval = s.intervalSec;
+      if (rests >= 2) interval = Math.min(300, s.intervalSec + 15);
+      else if (rests === 0 && reads >= 50 && now.getTime() - last >= 3 * 86_400_000)
+        interval = Math.max(60, s.intervalSec - 10);
+      if (interval === s.intervalSec) return null;
+      await setValue(SETTINGS_KEY, { ...s, intervalSec: interval }, 10 * YEAR);
+      await setValue("engine:tuned", now.getTime(), 30 * 86_400_000);
+      const text =
+        interval > s.intervalSec
+          ? `أبطأ المحرك إلى حساب كل ${interval} ثانية: إنستقرام طلب الاستراحة ${rests} مرات خلال يوم.`
+          : `أسرع المحرك قليلاً إلى حساب كل ${interval} ثانية بعد أيام هادئة.`;
+      await log(null, "tune", text);
+      await notify({
+        type: "system",
+        level: "info",
+        title: "تغيّرت سرعة محرك Spir",
+        body: `${text} يمكنك إيقاف التكيف من صفحة المحرك.`,
+        url: "/engine",
+        key: `engine-tune:${now.toISOString().slice(0, 10)}`,
+      });
+      return { from: s.intervalSec, to: interval, rests };
     },
 
     /** A device asked for work in the last hour and the engine is switched on. */

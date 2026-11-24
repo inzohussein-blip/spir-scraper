@@ -168,6 +168,10 @@ export default async function EnginePage() {
               <input type="checkbox" name="enabled" defaultChecked={s.enabled} />
               المحرك يعمل
             </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="adaptive" defaultChecked={s.adaptive} />
+              سرعة تتكيف وحدها (أبطأ بعد الاستراحات، وأسرع قليلاً بعد أيام هادئة)
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <Field label="ثوانٍ بين الحسابات" hint="20 على الأقل">
                 <Input

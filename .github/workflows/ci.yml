@@ -23,8 +23,9 @@ jobs:
       # Let both Node versions finish, so a failure on one does not hide the other.
       fail-fast: false
       matrix:
-        # 24 is what Vercel runs today; 26 is the newer LTS line.
-        node: [24, 26]
+        # 24 is what Vercel runs today; 26 is the newer LTS line, checked on main only
+        # (pull requests run one Node to save free Actions minutes).
+        node: ${{ github.event_name == 'pull_request' && fromJSON('[24]') || fromJSON('[24, 26]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

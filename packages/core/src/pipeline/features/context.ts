@@ -1,7 +1,7 @@
 import type { AnyDb } from "@scrapers/db";
 import type { NotificationInput } from "../../notify.js";
 import type { Scorer } from "../../scoring.js";
-import type { OwnAccount, RawProfile, Source } from "../../types.js";
+import type { Connector, OwnAccount, PlacesSearch, RawProfile, Source } from "../../types.js";
 
 /**
  * What a feature module needs from the service: the database, shared helpers
@@ -10,7 +10,15 @@ import type { OwnAccount, RawProfile, Source } from "../../types.js";
  */
 export interface FeatureContext {
   db: AnyDb;
-  deps: { own?: OwnAccount | undefined };
+  deps: {
+    own?: OwnAccount | undefined;
+    places?: PlacesSearch | undefined;
+    readPage?: ((url: string) => Promise<{ title: string | null; text: string }>) | undefined;
+  };
+  /** The largest job allowed (MAX_JOB_LIMIT). */
+  maxJobLimit: number;
+  /** Readers for other platforms, by platform. */
+  connectors: Map<string, Connector>;
   scorer: Scorer | undefined;
   pepper: string;
   notify(n: NotificationInput): Promise<boolean>;

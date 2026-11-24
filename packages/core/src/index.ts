@@ -19,6 +19,7 @@ export {
   keywordHits,
   restMinutes,
 } from "./pipeline/features/engine.js";
+export { type SaverMeter, type SaverState, widerQuiet } from "./pipeline/features/saver.js";
 export {
   awakeMinutes,
   DEFAULT_USAGE_LIMITS,

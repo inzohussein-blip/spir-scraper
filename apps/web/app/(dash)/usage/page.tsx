@@ -1,5 +1,5 @@
 import { USAGE_LABELS, type UsageCategory } from "@scrapers/core";
-import { saveUsageLimits } from "@/app/actions";
+import { saveUsageLimits, setSaverAuto, undoSaver } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Card, Field, fmtNum, Input, Notice } from "@/components/ui";
 import { getRuntime } from "@/lib/runtime";
@@ -27,7 +27,10 @@ function fmtUsed(m: Meter, n: number) {
 
 export default async function UsagePage() {
   const rt = await getRuntime();
-  const { report, limits, meters, neonConnected } = await usageMeters(rt);
+  const [{ report, limits, meters, neonConnected }, saver] = await Promise.all([
+    usageMeters(rt),
+    rt.scrapers.saverState(),
+  ]);
   const maxDay = Math.max(1, ...report.days.map((d) => d.awakeMinutes));
   const top = report.byCategory[0];
 
@@ -40,6 +43,45 @@ export default async function UsagePage() {
           عند 70% و90%، أو إن كان التوقع يتجاوز الحد. الأرقام المقدّرة تقريبية؛ عدّل الحدود حسب صفحة
           خطتك.
         </p>
+      </div>
+
+      {saver.active ? (
+        <Notice tone="warn">
+          <div className="space-y-1">
+            <b>وضع التوفير يعمل</b> منذ {saver.since?.slice(0, 10)}:
+            <ul className="list-inside list-disc">
+              {saver.actions.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+            <form action={undoSaver}>
+              <button
+                type="submit"
+                className="mt-1 rounded px-2 py-0.5 text-xs text-accent hover:bg-accent-soft"
+              >
+                ألغِ وضع التوفير وأعد الإعدادات
+              </button>
+            </form>
+          </div>
+        </Notice>
+      ) : null}
+      <div className="flex items-center gap-2 text-sm">
+        <span>التوفير التلقائي:</span>
+        <Badge tone={saver.auto ? "ok" : "plain"} dot={false}>
+          {saver.auto ? "يعمل" : "متوقف"}
+        </Badge>
+        <form action={setSaverAuto.bind(null, !saver.auto)}>
+          <button
+            type="submit"
+            className="rounded px-2 py-0.5 text-xs text-accent hover:bg-accent-soft"
+          >
+            {saver.auto ? "أوقفه" : "شغّله"}
+          </button>
+        </form>
+        <span className="text-xs text-muted">
+          حين يتجه عدّاد لتجاوز حده: دفعات محرك أطول وساعات راحة أطول، وإيقاف المراقبات المدفوعة.
+          يُلغى وحده أول الشهر.
+        </span>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

@@ -158,6 +158,14 @@ try {
   const ics = await (await fetch(calendarUrl.replace(/^https?:\/\/[^/]+/, B))).text();
   assert.match(ics, /^BEGIN:VCALENDAR/);
   assert.equal((await fetch(`${B}/api/calendar/wrong.ics`)).status, 404);
+  // A file that is not an encrypted backup of this platform is refused with a reason.
+  const junk = await page.request.post(`${B}/api/backup/decrypt`, {
+    multipart: {
+      file: { name: "x.enc", mimeType: "application/octet-stream", buffer: Buffer.from("nope") },
+    },
+  });
+  assert.equal(junk.status(), 400);
+  assert.match(await junk.text(), /تعذّر فك التشفير/);
   step("backup download and follow-up calendar feed");
 
   await page.goto(`${B}/competitors`);

@@ -59,3 +59,88 @@ describe("usage monitoring", () => {
     }
   });
 });
+
+describe("automatic saving", () => {
+  it("makes the engine lighter and pauses paid monitors, and undoes it on request or in a new month", async () => {
+    const t = await setup([
+      new FakeProvider("apify", ["profile", "account_followers"], { profile: fakeProfile }),
+    ]);
+    try {
+      const s = t.scrapers;
+      const p = await s.createProject({ name: "p", owner: "o" });
+      const { parseSource } = await import("../src/source.js");
+      const m = await s.createMonitor({
+        projectId: p.id,
+        source: parseSource("https://instagram.com/rival", "followers") as never,
+      });
+      await s.saveEngineSettings({ batchMinutes: 45, quietFrom: 2, quietTo: 7 });
+      const now = new Date("2030-01-20T03:00:00Z");
+
+      expect(await s.applySaver([], now)).toBeNull();
+      const on = await s.applySaver(["dbHours", "apify"], now);
+      expect(on?.active).toBe(true);
+      expect(on?.actions).toHaveLength(2);
+      expect(await s.engineSettings()).toMatchObject({
+        batchMinutes: 90,
+        quietFrom: 2,
+        quietTo: 10,
+      });
+      expect((await s.listMonitors()).find((x) => x.id === m.id)?.enabled).toBe(false);
+      // Applied once: a second day changes nothing more.
+      expect(await s.applySaver(["dbHours"], now)).toBeNull();
+
+      await s.undoSaver();
+      expect(await s.engineSettings()).toMatchObject({
+        batchMinutes: 45,
+        quietFrom: 2,
+        quietTo: 7,
+      });
+      expect((await s.listMonitors()).find((x) => x.id === m.id)?.enabled).toBe(true);
+      expect((await s.saverState()).active).toBe(false);
+
+      // A new month undoes it before deciding again; switched off, it does nothing.
+      await s.applySaver(["requests"], now);
+      await s.applySaver([], new Date("2030-02-01T03:00:00Z"));
+      expect((await s.engineSettings()).batchMinutes).toBe(45);
+      await s.setSaverAuto(false);
+      expect(await s.applySaver(["dbHours"], now)).toBeNull();
+    } finally {
+      await t.close();
+    }
+  });
+
+  it("slows the engine after rests and speeds it up after calm days", async () => {
+    const t = await setup([]);
+    try {
+      const s = t.scrapers;
+      await s.saveEngineSettings({ intervalSec: 60, quietFrom: 0, quietTo: 0 });
+      const p = await s.createProject({ name: "p", owner: "o" });
+      await s.createEngineRun({
+        name: "r",
+        projectId: p.id,
+        seeds: ["a1", "a2", "a3"],
+        maxDepth: 0,
+      });
+      const now = new Date("2030-01-01T12:00:00Z");
+      // Two refusals in a day.
+      for (let i = 0; i < 2; i++) {
+        const d = await s.engineNext(new Date(now.getTime() + i * 3600_000));
+        if (d.action === "read")
+          await s.engineReport(
+            { itemId: d.item.id, status: "rate_limited" },
+            new Date(now.getTime() + i * 3600_000),
+          );
+        await s.clearEngineRest();
+      }
+      // The rest log is written with the database clock: tune at the real time.
+      const slower = await s.tuneEnginePace(new Date());
+      expect(slower).toMatchObject({ from: 60, to: 75 });
+      // Calm, but not enough reading: no change.
+      expect(await s.tuneEnginePace(new Date(Date.now() + 5 * 86_400_000))).toBeNull();
+      await s.saveEngineSettings({ adaptive: false });
+      expect(await s.tuneEnginePace(now)).toBeNull();
+    } finally {
+      await t.close();
+    }
+  });
+});
