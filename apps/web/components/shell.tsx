@@ -64,6 +64,15 @@ const SECTIONS: { title: string | null; items: NavItem[] }[] = [
 
 const NAV: NavItem[] = SECTIONS.flatMap((s) => s.items);
 
+/** The phone's bottom bar: what is used most, within reach of the thumb. */
+const BOTTOM: NavItem[] = [
+  { href: "/", label: "الرئيسية", icon: "home" },
+  { href: "/store", label: "المتجر", icon: "store" },
+  { href: "/runs", label: "التشغيلات", icon: "play" },
+  { href: "/leads", label: "العملاء", icon: "users" },
+  { href: "/notifications", label: "الإشعارات", icon: "bell" },
+];
+
 const TITLES: Record<string, string> = {
   ...Object.fromEntries(NAV.map((n) => [n.href, n.label])),
   "/jobs/new": "مهمة جديدة",
@@ -385,8 +394,42 @@ export function Shell({
             )}
           </Link>
         </header>
-        <main className="w-full max-w-[1280px] space-y-4 px-4 pt-6 pb-12 md:px-7">{children}</main>
+        <main className="w-full max-w-[1280px] space-y-4 px-4 pt-6 pb-28 md:px-7 md:pb-12">
+          {children}
+        </main>
       </div>
+      <nav
+        aria-label="التنقل السريع"
+        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      >
+        {BOTTOM.map((n) => {
+          const badge =
+            n.href === "/notifications" ? data.unread : n.href === "/runs" ? data.activeJobs : 0;
+          return (
+            <Link
+              key={n.href}
+              href={n.href}
+              className={cx(
+                "relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium",
+                active(n.href) ? "text-accent" : "text-fg-2",
+              )}
+            >
+              <Icon name={n.icon} className="size-[22px]" />
+              {n.label}
+              {badge > 0 && (
+                <span
+                  className={cx(
+                    "absolute top-1 start-1/2 ms-2 min-w-4 rounded-full px-1 text-center text-[10px] leading-4 text-white",
+                    n.href === "/runs" ? "bg-warn" : "bg-bad",
+                  )}
+                >
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
+            </Link>
+          );
+        })}
+      </nav>
       <CommandPalette data={data} open={palette} onClose={closePalette} />
     </div>
   );

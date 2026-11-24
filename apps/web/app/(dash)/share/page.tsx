@@ -3,6 +3,7 @@ import Link from "next/link";
 import { addAccount, saveSharedAccount } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { Badge, Card, fmtNum, Input, Notice, Select } from "@/components/ui";
+import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 
 export const metadata = { title: "مشاركة" };
@@ -31,15 +32,18 @@ export default async function SharePage({
   const rt = await getRuntime();
   if (!url)
     return (
-      <Notice tone="info">
-        شارك رابط حساب أو صفحة من أي تطبيق واختر «Scrapers»، أو الصق الرابط هنا:
-        <form method="get" className="mt-3 flex gap-2">
-          <Input name="url" className="ltr" placeholder="https://…" aria-label="رابط" />
-          <button type="submit" className="rounded-lg border border-line px-3">
-            افتح
-          </button>
-        </form>
-      </Notice>
+      <>
+        <Notice tone="info">
+          شارك رابط حساب أو صفحة من أي تطبيق واختر «Scrapers»، أو الصق الرابط هنا:
+          <form method="get" className="mt-3 flex gap-2">
+            <Input name="url" className="ltr" placeholder="https://…" aria-label="رابط" />
+            <button type="submit" className="rounded-lg border border-line px-3">
+              افتح
+            </button>
+          </form>
+        </Notice>
+        <IphoneShortcut origin={appOrigin()} />
+      </>
     );
   const ref = parseAccountUrl(url);
   const projects = await rt.scrapers.listProjects();
@@ -140,6 +144,53 @@ export default async function SharePage({
           <p className="whitespace-pre-line text-muted">{page.text.slice(0, 1500)}</p>
         </div>
       )}
+    </Card>
+  );
+}
+
+/**
+ * iPhone has no «Share to web app»: a Shortcut in the share sheet opens this
+ * page with the shared link instead. Built once by the owner in the
+ * Shortcuts app (a ready-made file would need Apple's signing).
+ */
+function IphoneShortcut({ origin }: { origin: string }) {
+  const target = `${origin}/share?url=`;
+  return (
+    <Card
+      title="المشاركة من آيفون"
+      icon="plug"
+      description="آيفون لا يضع تطبيقات الويب في قائمة «مشاركة». هذا الاختصار يضيف Scrapers إليها مرة واحدة."
+    >
+      <ol className="list-decimal space-y-2 ps-5 text-sm text-fg-2" data-iphone-shortcut>
+        <li>
+          افتح تطبيق <b>الاختصارات</b> (Shortcuts) ← زر <b>+</b> ← سمّه <b>Scrapers</b>.
+        </li>
+        <li>
+          اضغط ⓘ (التفاصيل) ← فعّل <b>إظهار في ورقة المشاركة</b> (Show in Share Sheet)، واختر أنواع
+          الإدخال: <b>عناوين URL</b> و<b>النص</b>.
+        </li>
+        <li>
+          أضف إجراء <b>ترميز عنوان URL</b> (URL Encode) وضع فيه <b>مدخل الاختصار</b> (Shortcut
+          Input).
+        </li>
+        <li>
+          أضف إجراء <b>فتح عناوين URL</b> (Open URLs)، واكتب فيه هذا الرابط ثم أضف بعده مباشرة نتيجة
+          «ترميز عنوان URL»:
+          <Input
+            readOnly
+            value={target}
+            className="ltr mt-1.5 font-mono text-xs"
+            aria-label="رابط الاختصار"
+          />
+        </li>
+        <li>
+          من إنستقرام أو تيك توك أو يوتيوب: <b>مشاركة</b> ← <b>Scrapers</b>، فتفتح هذه الصفحة
+          بالحساب جاهزاً للحفظ.
+        </li>
+      </ol>
+      <p className="mt-3 text-xs text-muted">
+        على أندرويد لا تحتاج هذا: بعد تثبيت التطبيق يظهر «Scrapers» في قائمة المشاركة وحده.
+      </p>
     </Card>
   );
 }
