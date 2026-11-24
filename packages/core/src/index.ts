@@ -8,9 +8,12 @@ export * from "./normalize.js";
 export * from "./notify.js";
 export {
   DEFAULT_ENGINE_SETTINGS,
+  type EngineCommand,
+  type EngineConfig,
   type EngineDecision,
   type EngineReport,
   type EngineSettings,
+  type EngineWorkerInfo,
   engineCandidates,
   inQuietHours,
   keywordHits,

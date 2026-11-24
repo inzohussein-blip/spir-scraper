@@ -667,3 +667,55 @@ export const engineEvents = pgTable(
 
 export type EngineRun = typeof engineRuns.$inferSelect;
 export type EngineQueueItem = typeof engineQueue.$inferSelect;
+
+/** Machines that read for the Spir engine: the browser extension or the home program. */
+export const engineWorkers = pgTable("engine_workers", {
+  /** Chosen by the worker itself and kept between restarts. */
+  id: text("id").primaryKey(),
+  /** extension or program. */
+  kind: text("kind").notNull(),
+  name: text("name"),
+  version: text("version"),
+  /** The public address it last reported. */
+  ip: text("ip"),
+  /** Its exits (direct and proxies) as it last saw them. */
+  exits:
+    jsonb("exits").$type<
+      {
+        id: string;
+        label: string;
+        ok: boolean;
+        restingUntil?: string | null;
+        ip?: string | null;
+        error?: string | null;
+      }[]
+    >(),
+  disabled: boolean("disabled").notNull().default(false),
+  reads: integer("reads").notNull().default(0),
+  lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: createdAt(),
+});
+
+/**
+ * Proxies the home program reads through, managed from the dashboard. The
+ * address (with its password) and the optional "change IP" link are stored
+ * encrypted with a key derived from AUTH_SECRET.
+ */
+export const engineProxies = pgTable("engine_proxies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** host:port only, for display. */
+  label: text("label").notNull(),
+  urlEnc: text("url_enc").notNull(),
+  rotateUrlEnc: text("rotate_url_enc"),
+  enabled: boolean("enabled").notNull().default(true),
+  reads: integer("reads").notNull().default(0),
+  failures: integer("failures").notNull().default(0),
+  lastError: text("last_error"),
+  lastIp: text("last_ip"),
+  restingUntil: timestamp("resting_until", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type EngineWorker = typeof engineWorkers.$inferSelect;
+export type EngineProxy = typeof engineProxies.$inferSelect;

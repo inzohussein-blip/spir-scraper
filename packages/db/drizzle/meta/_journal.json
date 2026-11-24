@@ -127,6 +127,13 @@
       "when": 1795467782264,
       "tag": "0017_flippant_captain_midlands",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795500625142,
+      "tag": "0018_talented_norman_osborn",
+      "breakpoints": true
     }
   ]
 }

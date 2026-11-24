@@ -187,3 +187,76 @@ describe("Spir engine", () => {
     }
   });
 });
+
+describe("Spir engine workers and proxies", () => {
+  it("tracks workers, hands proxy settings to the program once, and delivers commands", async () => {
+    const t = await setup([]);
+    try {
+      const s = t.scrapers;
+      await s.saveEngineSettings({ quietFrom: 0, quietTo: 0, intervalSec: 20 });
+      const p = await s.createProject({ name: "p", owner: "o" });
+      await s.createEngineRun({ name: "r", projectId: p.id, seeds: ["a1", "a2"], maxDepth: 0 });
+      const proxy = await s.addEngineProxy({
+        label: "proxy.example:8000",
+        urlEnc: "ENC1",
+        rotateUrlEnc: "ENC2",
+      });
+      const program = { id: "pc-1", kind: "program" as const, name: "جهاز البيت", ip: "1.2.3.4" };
+      const now = new Date("2030-01-01T12:00:00Z");
+
+      const first = await s.engineNext(now, program);
+      expect(first.action).toBe("read");
+      expect(first.config?.proxies).toEqual([
+        { id: proxy?.id, urlEnc: "ENC1", rotateUrlEnc: "ENC2" },
+      ]);
+      const version = first.config?.version ?? null;
+      // Same version: not sent again. The extension never gets proxies.
+      const again = await s.engineNext(now, { ...program, configVersion: version });
+      expect(again.config).toBeUndefined();
+      expect((await s.engineNext(now, { id: "ext-1", kind: "extension" })).config).toBeUndefined();
+
+      // A refusal through the proxy rests that proxy and counts it.
+      await s.engineReport(
+        {
+          itemId: (first as { item: { id: string } }).item.id,
+          status: "rate_limited",
+          exitId: proxy?.id ?? null,
+          message: "429",
+        },
+        now,
+        { ...program, configVersion: version },
+      );
+      const [px] = await s.listEngineProxies();
+      expect(px).toMatchObject({ failures: 1, lastError: "429" });
+      expect(px?.restingUntil).not.toBeNull();
+
+      // "Change IP" goes to the program only, once.
+      await s.queueEngineCommand({ type: "rotate", proxyId: proxy?.id as string });
+      await s.queueEngineCommand({ type: "check_ip" });
+      expect((await s.engineNext(now, { id: "ext-1", kind: "extension" })).commands).toEqual([
+        expect.objectContaining({ type: "check_ip" }),
+      ]);
+      const cmds = (await s.engineNext(now, { ...program, configVersion: version })).commands;
+      expect(cmds?.map((c) => c.type)).toEqual(["rotate", "check_ip"]);
+      expect(
+        (await s.engineNext(now, { ...program, configVersion: version })).commands,
+      ).toBeUndefined();
+
+      // A worker switched off waits; the list shows both.
+      await s.setEngineWorkerDisabled("ext-1", true);
+      expect(await s.engineNext(now, { id: "ext-1", kind: "extension" })).toMatchObject({
+        reason: "worker_off",
+      });
+      const workers = await s.listEngineWorkers();
+      expect(workers.map((w) => w.id).sort()).toEqual(["ext-1", "pc-1"]);
+      expect(workers.find((w) => w.id === "pc-1")).toMatchObject({ ip: "1.2.3.4", reads: 1 });
+
+      // Disabling the proxy changes the version, so the program gets the new list.
+      await s.updateEngineProxy(proxy?.id as string, { enabled: false });
+      const fresh = await s.engineNext(now, { ...program, configVersion: version });
+      expect(fresh.config?.proxies).toEqual([]);
+    } finally {
+      await t.close();
+    }
+  });
+});

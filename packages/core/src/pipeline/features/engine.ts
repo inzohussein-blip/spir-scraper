@@ -1,4 +1,12 @@
-import { engineEvents, engineQueue, engineRuns, profiles } from "@scrapers/db";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  engineEvents,
+  engineProxies,
+  engineQueue,
+  engineRuns,
+  engineWorkers,
+  profiles,
+} from "@scrapers/db";
 import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { linkedAccounts, profileQuality } from "../../extract/index.js";
 import { mentionsIn } from "../../extract/mentions.js";
@@ -19,6 +27,8 @@ export interface EngineSettings {
   /** Local hours (the platform's time zone) when the engine sleeps; equal values: never. */
   quietFrom: number;
   quietTo: number;
+  /** With proxies set, the home program also reads through its own connection. */
+  useDirect: boolean;
 }
 
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
@@ -28,24 +38,60 @@ export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   dailyCap: 800,
   quietFrom: 2,
   quietTo: 7,
+  useDirect: true,
 };
 
-export type EngineDecision =
+/** Who is asking: the browser extension or the home program, with what it sees. */
+export interface EngineWorkerInfo {
+  id: string;
+  kind: "extension" | "program";
+  name?: string | null;
+  version?: string | null;
+  /** Its public address (the program checks each exit). */
+  ip?: string | null;
+  exits?: {
+    id: string;
+    label: string;
+    ok: boolean;
+    restingUntil?: string | null;
+    ip?: string | null;
+    error?: string | null;
+  }[];
+  /** The proxy settings version it already has. */
+  configVersion?: string | null;
+}
+
+/** Something the owner asked a worker to do from the dashboard. */
+export type EngineCommand =
+  | { id: string; type: "rotate"; proxyId: string; workerId?: string }
+  | { id: string; type: "check_ip"; workerId?: string };
+
+/** Proxies for the home program (addresses still encrypted; the web layer decrypts them). */
+export interface EngineConfig {
+  version: string;
+  useDirect: boolean;
+  proxies: { id: string; urlEnc: string; rotateUrlEnc: string | null }[];
+}
+
+export type EngineDecision = (
   | { action: "wait"; seconds: number; reason: string }
-  | { action: "read"; item: { id: string; username: string } };
+  | { action: "read"; item: { id: string; username: string } }
+) & { config?: EngineConfig; commands?: EngineCommand[] };
 
 export type EngineReport =
-  | { itemId: string; status: "ok"; profile: RawProfile }
+  | { itemId: string; status: "ok"; profile: RawProfile; exitId?: string | null }
   | {
       itemId: string;
       status: "not_found" | "rate_limited" | "blocked" | "error";
       message?: string;
+      exitId?: string | null;
     };
 
 const SETTINGS_KEY = "engine:settings";
 const REST_KEY = "engine:resting";
 const LAST_KEY = "engine:last";
 const WORKER_KEY = "engine:worker";
+const COMMANDS_KEY = "engine:commands";
 const YEAR = 365 * 86_400_000;
 /** Accepted accounts are sent to the project in groups of this size. */
 const SEND_EVERY = 25;
@@ -196,7 +242,91 @@ export function engineMethods(ctx: FeatureContext) {
     });
   }
 
-  async function next(now = new Date()): Promise<EngineDecision> {
+  /** Records the worker's visit; false when the owner switched this worker off. */
+  async function seen(w: EngineWorkerInfo, now: Date): Promise<boolean> {
+    const values = {
+      kind: w.kind,
+      name: w.name?.slice(0, 60) ?? null,
+      version: w.version?.slice(0, 30) ?? null,
+      lastSeen: now,
+      ...(w.ip ? { ip: w.ip.slice(0, 64) } : {}),
+      ...(w.exits ? { exits: w.exits.slice(0, 30) } : {}),
+    };
+    const [row] = await db
+      .insert(engineWorkers)
+      .values({ id: w.id.slice(0, 64), ...values })
+      .onConflictDoUpdate({ target: engineWorkers.id, set: values })
+      .returning({ disabled: engineWorkers.disabled });
+    // What the program sees of each proxy is kept with the proxy too.
+    for (const e of w.exits ?? []) {
+      if (e.id === "direct") continue;
+      await db
+        .update(engineProxies)
+        .set({
+          ...(e.ip ? { lastIp: e.ip.slice(0, 64) } : {}),
+          ...(e.error ? { lastError: e.error.slice(0, 200) } : {}),
+          restingUntil: !e.ok && e.restingUntil ? new Date(e.restingUntil) : null,
+        })
+        .where(sql`${engineProxies.id}::text = ${e.id}`);
+    }
+    return !row?.disabled;
+  }
+
+  async function config(s: EngineSettings): Promise<EngineConfig> {
+    const rows = await db
+      .select()
+      .from(engineProxies)
+      .where(eq(engineProxies.enabled, true))
+      .orderBy(asc(engineProxies.createdAt));
+    const proxies = rows.map((p) => ({ id: p.id, urlEnc: p.urlEnc, rotateUrlEnc: p.rotateUrlEnc }));
+    const version = createHash("sha256")
+      .update(JSON.stringify({ proxies, useDirect: s.useDirect }))
+      .digest("hex")
+      .slice(0, 16);
+    return { version, useDirect: s.useDirect, proxies };
+  }
+
+  /**
+   * Commands for this worker. One meant for a single worker is taken off the
+   * list once given; one for all is given to each worker once.
+   */
+  async function takeCommands(w: EngineWorkerInfo): Promise<EngineCommand[]> {
+    const all = (await getValue<(EngineCommand & { seenBy?: string[] })[]>(COMMANDS_KEY)) ?? [];
+    const mine = all.filter(
+      (c) =>
+        (c.workerId ? c.workerId === w.id : !c.seenBy?.includes(w.id)) &&
+        (c.type !== "rotate" || w.kind === "program"),
+    );
+    if (mine.length === 0) return [];
+    const left = all
+      .filter((c) => !(c.workerId && mine.includes(c)))
+      .map((c) =>
+        !c.workerId && mine.includes(c) ? { ...c, seenBy: [...(c.seenBy ?? []), w.id] } : c,
+      );
+    await setValue(COMMANDS_KEY, left, 86_400_000);
+    return mine.map(({ seenBy: _seen, ...c }) => c as EngineCommand);
+  }
+
+  async function next(now = new Date(), worker?: EngineWorkerInfo): Promise<EngineDecision> {
+    if (!worker) return decide(now);
+    if (!(await seen(worker, now))) return { action: "wait", seconds: 300, reason: "worker_off" };
+    const decision = await decide(now);
+    const commands = await takeCommands(worker);
+    const extra: { config?: EngineConfig; commands?: EngineCommand[] } = {};
+    if (worker.kind === "program") {
+      const c = await config(await settings());
+      if (c.version !== worker.configVersion) extra.config = c;
+    }
+    if (commands.length) extra.commands = commands;
+    if (decision.action === "read")
+      await db
+        .update(engineWorkers)
+        .set({ reads: sql`${engineWorkers.reads} + 1` })
+        .where(eq(engineWorkers.id, worker.id.slice(0, 64)));
+    return { ...decision, ...extra };
+  }
+
+  async function decide(now: Date): Promise<EngineDecision> {
     await setValue(WORKER_KEY, { lastSeen: now.toISOString() }, 30 * 86_400_000);
     const s = await settings();
     if (!s.enabled) return { action: "wait", seconds: 300, reason: "paused" };
@@ -260,6 +390,23 @@ export function engineMethods(ctx: FeatureContext) {
   }
 
   async function report(r: EngineReport, now = new Date()) {
+    if (r.exitId && r.exitId !== "direct") {
+      const refused = r.status === "rate_limited" || r.status === "blocked";
+      await db
+        .update(engineProxies)
+        .set(
+          refused
+            ? {
+                failures: sql`${engineProxies.failures} + 1`,
+                lastError: r.message?.slice(0, 200) ?? r.status,
+                restingUntil: new Date(now.getTime() + 30 * 60_000),
+              }
+            : r.status === "ok" || r.status === "not_found"
+              ? { reads: sql`${engineProxies.reads} + 1`, restingUntil: null }
+              : { lastError: r.message?.slice(0, 200) ?? null },
+        )
+        .where(sql`${engineProxies.id}::text = ${r.exitId}`);
+    }
     const [item] = await db.select().from(engineQueue).where(eq(engineQueue.id, r.itemId));
     if (!item) return;
     const [run] = await db.select().from(engineRuns).where(eq(engineRuns.id, item.runId));
@@ -564,9 +711,87 @@ export function engineMethods(ctx: FeatureContext) {
     engineNext: next,
 
     /** The home worker reports one account; the answer is what to do next. */
-    async engineReport(r: EngineReport, now = new Date()) {
+    async engineReport(r: EngineReport, now = new Date(), worker?: EngineWorkerInfo) {
       await report(r, now);
-      return next(now);
+      return next(now, worker);
+    },
+
+    // ---- workers and proxies (the «العامل المنزلي» page) ----
+    async listEngineWorkers() {
+      return db.select().from(engineWorkers).orderBy(desc(engineWorkers.lastSeen)).limit(50);
+    },
+
+    async setEngineWorkerDisabled(id: string, disabled: boolean) {
+      await db.update(engineWorkers).set({ disabled }).where(eq(engineWorkers.id, id));
+    },
+
+    async deleteEngineWorker(id: string) {
+      await db.delete(engineWorkers).where(eq(engineWorkers.id, id));
+    },
+
+    async listEngineProxies() {
+      return db.select().from(engineProxies).orderBy(asc(engineProxies.createdAt));
+    },
+
+    /** Adds a proxy; the address and the change-IP link arrive already encrypted. */
+    async addEngineProxy(input: { label: string; urlEnc: string; rotateUrlEnc: string | null }) {
+      const [row] = await db
+        .insert(engineProxies)
+        .values({
+          label: input.label.slice(0, 120),
+          urlEnc: input.urlEnc,
+          rotateUrlEnc: input.rotateUrlEnc,
+        })
+        .returning();
+      await log(null, "proxy", `أُضيف بروكسي ${input.label}.`);
+      return row;
+    },
+
+    async updateEngineProxy(
+      id: string,
+      input: { enabled?: boolean; rest?: boolean; clearError?: boolean },
+    ) {
+      await db
+        .update(engineProxies)
+        .set({
+          ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+          ...(input.rest ? { restingUntil: new Date(Date.now() + 60 * 60_000) } : {}),
+          ...(input.clearError ? { lastError: null, restingUntil: null } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(engineProxies.id, id));
+    },
+
+    async deleteEngineProxy(id: string) {
+      await db.delete(engineProxies).where(eq(engineProxies.id, id));
+    },
+
+    /**
+     * Asks the workers to do something on their next visit: change a proxy's
+     * IP (its provider's change link) or check their public addresses.
+     */
+    async queueEngineCommand(
+      cmd:
+        | { type: "rotate"; proxyId: string; workerId?: string }
+        | { type: "check_ip"; workerId?: string },
+    ) {
+      const all = (await getValue<EngineCommand[]>(COMMANDS_KEY)) ?? [];
+      const full = { ...cmd, id: randomUUID() } as EngineCommand;
+      await setValue(COMMANDS_KEY, [...all.slice(-20), full], 86_400_000);
+      if (cmd.type === "rotate") {
+        await db
+          .update(engineProxies)
+          .set({ restingUntil: null, lastError: null, updatedAt: new Date() })
+          .where(eq(engineProxies.id, cmd.proxyId));
+        await log(null, "rotate", "طُلب تغيير IP لبروكسي، ينفذه البرنامج في زيارته التالية.");
+      }
+      return full;
+    },
+
+    /** Clears the engine's rest (after the owner changed the IP or network). */
+    async clearEngineRest() {
+      await setValue(REST_KEY, { until: 0, strikes: 0 }, 7 * 86_400_000);
+      await log(null, "resume", "أُلغيت الاستراحة يدوياً.");
     },
   };
 }

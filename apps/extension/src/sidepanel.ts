@@ -557,6 +557,50 @@ async function checkForUpdate() {
   }
 }
 
+// ---------- Spir engine mode (the loop itself runs in the background worker) ----------
+
+type EngineView = {
+  enabled?: boolean;
+  ip?: string | null;
+  last?: { at: string; text: string } | null;
+  readToday?: number;
+};
+
+function showEngine(e: EngineView | undefined) {
+  $<HTMLInputElement>("#engineEnabled").checked = !!e?.enabled;
+  const parts: string[] = [];
+  if (e?.enabled) parts.push(`قرأ اليوم ${e.readToday ?? 0}`);
+  if (e?.ip) parts.push(`العنوان ${e.ip}`);
+  if (e?.last) parts.push(`${e.last.text} (${new Date(e.last.at).toLocaleTimeString("ar")})`);
+  $("#engineStatus").textContent = e?.enabled ? parts.join(" · ") : "متوقف";
+}
+
+$<HTMLInputElement>("#engineEnabled").addEventListener("change", async (ev) => {
+  const on = (ev.target as HTMLInputElement).checked;
+  if (on && (!settings.platformUrl || !settings.platformKey)) {
+    (ev.target as HTMLInputElement).checked = false;
+    $("#engineStatus").textContent = "احفظ رابط المنصة ومفتاحها أولاً";
+    return;
+  }
+  const cur = ((await chrome.storage.local.get("engine")).engine ?? {}) as Record<string, unknown>;
+  await chrome.storage.local.set({
+    engine: {
+      workerId: `ext-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+      ip: null,
+      last: null,
+      readToday: 0,
+      day: "",
+      ...cur,
+      enabled: on,
+    },
+  });
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.engine) showEngine(changes.engine.newValue as EngineView);
+});
+void chrome.storage.local.get("engine").then((r) => showEngine(r.engine as EngineView | undefined));
+
 fillSettings();
 if (needsSetup()) showTab("settings");
 void checkForUpdate();

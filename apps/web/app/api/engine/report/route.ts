@@ -1,6 +1,6 @@
 import type { EngineReport, RawProfile } from "@scrapers/core";
 import { scheduleDrain } from "@/lib/drain";
-import { isEngineWorker } from "@/lib/engine-auth";
+import { forWorker, isEngineWorker, workerInfo } from "@/lib/engine-auth";
 import { getRuntime } from "@/lib/runtime";
 
 export const runtime = "nodejs";
@@ -23,27 +23,29 @@ function asProfile(v: unknown): RawProfile | null {
 
 /** The home worker reports one account it read; the answer is what to do next. */
 export async function POST(req: Request) {
-  if (!isEngineWorker(req)) return new Response("not found", { status: 404 });
+  if (!(await isEngineWorker(req))) return new Response("not found", { status: 404 });
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   const itemId = typeof body?.itemId === "string" ? body.itemId : null;
   const status = typeof body?.status === "string" ? body.status : null;
   if (!itemId || !status || !STATUSES.has(status))
     return Response.json({ error: "bad report" }, { status: 400 });
+  const exitId = typeof body?.exitId === "string" ? body.exitId.slice(0, 64) : null;
   let report: EngineReport;
   if (status === "ok") {
     const profile = asProfile(body?.profile);
     if (!profile) return Response.json({ error: "bad profile" }, { status: 400 });
-    report = { itemId, status, profile };
+    report = { itemId, status, profile, exitId };
   } else {
     report = {
       itemId,
       status: status as "not_found" | "rate_limited" | "blocked" | "error",
+      exitId,
       ...(typeof body?.message === "string" ? { message: body.message.slice(0, 300) } : {}),
     };
   }
   const rt = await getRuntime();
-  const decision = await rt.scrapers.engineReport(report);
+  const decision = await rt.scrapers.engineReport(report, new Date(), workerInfo(body?.worker));
   // Accepted accounts may have become a project job: read them now.
   scheduleDrain({ origin: new URL(req.url).origin, force: true, routeMaxSeconds: maxDuration });
-  return Response.json(decision);
+  return Response.json(forWorker(decision));
 }
