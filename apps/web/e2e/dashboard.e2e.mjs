@@ -431,6 +431,29 @@ try {
   );
   step("no horizontal scroll on mobile");
 
+  // The phone app: bottom bar, installable icons, iPhone share guide, offline page.
+  const bottom = m.locator('nav[aria-label="التنقل السريع"]');
+  assert.ok(await bottom.isVisible());
+  await bottom.locator('a:has-text("المتجر")').click();
+  await m.waitForURL(/\/store$/);
+  const manifest = await (await fetch(`${B}/manifest.webmanifest`)).json();
+  const sizes = manifest.icons.map((i) => i.sizes);
+  assert.ok(sizes.includes("192x192") && sizes.includes("512x512"), "installable PNG icons");
+  assert.ok(manifest.icons.some((i) => i.purpose === "maskable"));
+  for (const f of ["/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/offline.html"])
+    assert.equal((await fetch(`${B}${f}`)).status, 200, f);
+  await m.goto(`${B}/share`);
+  await m.waitForSelector("[data-iphone-shortcut]");
+  assert.ok((await m.inputValue('input[aria-label="رابط الاختصار"]')).endsWith("/share?url="));
+  await m.evaluate(() => navigator.serviceWorker.ready);
+  await m.reload();
+  await m.evaluate(() => navigator.serviceWorker.ready);
+  await mobile.setOffline(true);
+  await m.goto(`${B}/leads`).catch(() => {});
+  await m.waitForSelector("text=لا يوجد اتصال بالإنترنت");
+  await mobile.setOffline(false);
+  step("phone app: bottom bar, icons, iPhone share guide, offline page");
+
   // Lockout last, so it does not affect the steps above.
   const anon = await (await browser.newContext()).newPage();
   for (let i = 0; i < 5; i++) {
