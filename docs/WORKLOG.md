@@ -389,6 +389,7 @@
 - **نافذة مستقلة** `/reverse-api-engineer` (بالإنجليزية مع ترجمة) تشغّل الأداة الأصلية [reverse-api-engineer](https://github.com/kalil0321/reverse-api-engineer) على جهاز المالك: صفحة ثابتة مبنية مسبقاً (بلا دالة ولا قاعدة بيانات)، والمتصفح يكلّم جسراً محلياً مباشرة.
 - **الجسر** `services/ig-worker/rae_bridge.py` (Python فقط، ويُنزَّل من النافذة): يشغّل أوامر الأداة نفسها (`agent --dry-run`، و `agent --json-stream`، و `engineer`، و `list`، و `show`) دون صلاحيات النظام، ويكتب إعداداتها في ملفها الأصلي. يستمع على 127.0.0.1 فقط، ويقبل موقع المنصة فقط برمز ربط، ويحفظ المفاتيح على الجهاز، ويرفض إنستقرام وتيك توك وMeta، ولا يشغّل الكود الناتج. وهو أيضاً خادم MCP محلي.
 - **المزوّدون:** OpenCode المجاني، و Anthropic Claude، و OpenAI (مفتاح أو Codex)، و Google Gemini، و DeepSeek، و xAI، و Mistral، و Groq، و OpenRouter، و GitHub Copilot، و Cursor، و Ollama.
+- **طريقتان في تبويبين:** «محلي» (صفر استهلاك)، و«عبر claude.ai» من أي متصفح أو الهاتف: أدوات MCP `rae_relay_capture` و `rae_relay_result` و `rae_relay_engineer` ترسل طلباً مشفّراً عبر ntfy.sh إلى الجسر (`--relay`)، والجسر يبلّغ المنصة مرتين فقط عبر `/api/rae/relay`؛ لا يسأل المنصة أبداً. السر `RAE_RELAY_SECRET`.
 - التفاصيل في [REVERSE-API.md](REVERSE-API.md).
 
 ## 6. الاختبارات التي نجحت قبل الدمج

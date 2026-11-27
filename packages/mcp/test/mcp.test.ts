@@ -86,6 +86,9 @@ describe("MCP server over Streamable HTTP", () => {
         "store_tools",
         "run_store_tool",
         "deep_contacts",
+        "rae_relay_capture",
+        "rae_relay_engineer",
+        "rae_relay_result",
       ].sort(),
     );
     // The store's catalog, with what each tool needs.

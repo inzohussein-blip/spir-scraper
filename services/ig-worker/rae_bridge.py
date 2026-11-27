@@ -23,12 +23,19 @@ Safety:
 
 Also a local MCP server for Claude Desktop / Claude Code:
     python rae_bridge.py mcp
+
+And, to use it from claude.ai in any browser, through a free ntfy topic:
+    python rae_bridge.py --origin https://your-app.vercel.app --relay <RAE_RELAY_SECRET>
+The bridge then waits on ntfy (never on the platform) for sealed requests the
+platform's MCP tools send, runs them here, and reports back twice per run.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
+import hashlib
 import hmac
 import json
 import os
@@ -44,6 +51,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 VERSION = "1.0.0"
 DEFAULT_PORT = 7466
@@ -382,6 +390,7 @@ class Bridge:
     def __init__(self, rae: Rae):
         self.rae = rae
         self.jobs = Jobs(rae)
+        self.relay: Relay | None = None
 
     def config_path(self) -> Path:
         return RAE_HOME / "config.json"
@@ -397,6 +406,7 @@ class Bridge:
                 name: bool(keys.get(name)) or bool(os.environ.get(name)) for name in KEY_NAMES
             },
             "running": self.jobs.running(),
+            "relay": dict(self.relay.state) if self.relay else {"enabled": False},
             "blocked_hosts": list(BLOCKED_HOSTS),
         }
 
@@ -532,6 +542,184 @@ class Bridge:
                 }
             )
         return {"run_id": run_id, "folder": str(folder), "files": out}
+
+
+# ---- relay through ntfy (claude.ai → platform MCP → ntfy → this bridge) ----
+
+DEFAULT_NTFY = "https://ntfy.sh"
+RELAY_MAX_AGE = 3600  # requests older than an hour are ignored
+
+
+def _h(label: str, secret: str) -> bytes:
+    return hashlib.sha256(f"{label}:{secret}".encode()).digest()
+
+
+def relay_keys(secret: str) -> dict:
+    """The same keys, topic and token as relayKeys() in the platform."""
+    if len(secret) < 24:
+        raise BridgeError(400, "RAE_RELAY_SECRET قصير: 24 حرفاً على الأقل")
+    return {
+        "enc": _h("rae-relay-enc", secret),
+        "mac": _h("rae-relay-mac", secret),
+        "topic": "spir-rae-" + _h("rae-relay-topic", secret).hex()[:32],
+        "token": _h("rae-relay-token", secret).hex(),
+    }
+
+
+def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    out = bytearray()
+    block = 0
+    while len(out) < length:
+        out += hmac.new(key, nonce + block.to_bytes(4, "big"), hashlib.sha256).digest()
+        block += 1
+    return bytes(out[:length])
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    text = text.strip()
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def seal_relay(keys: dict, value) -> str:
+    """HMAC-SHA256 counter-mode encryption with an encrypt-then-MAC tag."""
+    plain = json.dumps(value, ensure_ascii=False).encode()
+    nonce = secrets.token_bytes(16)
+    ct = bytes(a ^ b for a, b in zip(plain, _keystream(keys["enc"], nonce, len(plain))))
+    tag = hmac.new(keys["mac"], nonce + ct, hashlib.sha256).digest()
+    return _b64(nonce + tag + ct)
+
+
+def open_relay(keys: dict, sealed: str):
+    try:
+        raw = _unb64(sealed)
+    except (ValueError, TypeError):
+        return None
+    if len(raw) < 48:
+        return None
+    nonce, tag, ct = raw[:16], raw[16:48], raw[48:]
+    want = hmac.new(keys["mac"], nonce + ct, hashlib.sha256).digest()
+    if not hmac.compare_digest(tag, want):
+        return None
+    plain = bytes(a ^ b for a, b in zip(ct, _keystream(keys["enc"], nonce, len(ct))))
+    try:
+        return json.loads(plain.decode())
+    except ValueError:
+        return None
+
+
+class Relay:
+    """Waits on the ntfy topic for sealed requests and runs them on this computer."""
+
+    def __init__(self, bridge: Bridge, secret: str, platform: str, ntfy: str = DEFAULT_NTFY):
+        self.bridge = bridge
+        self.keys = relay_keys(secret)
+        self.platform = platform.rstrip("/")
+        self.ntfy = ntfy.rstrip("/")
+        self.seen_path = HOME / "relay-seen.json"
+        self.seen: list[str] = _read_json(self.seen_path, [])
+        self.state = {"enabled": True, "connected": False, "last": None, "error": None}
+
+    def report(self, message: dict) -> bool:
+        body = json.dumps({"sealed": seal_relay(self.keys, message)}).encode()
+        for attempt in range(3):
+            try:
+                req = Request(
+                    self.platform + "/api/rae/relay",
+                    data=body,
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer " + self.keys["token"],
+                    },
+                )
+                with urlopen(req, timeout=30) as r:
+                    return 200 <= r.status < 300
+            except Exception:  # noqa: BLE001 - retried, then given up
+                time.sleep(2 * (attempt + 1))
+        return False
+
+    def _remember(self, request_id: str) -> bool:
+        if request_id in self.seen:
+            return False
+        self.seen = (self.seen + [request_id])[-500:]
+        _write_private(self.seen_path, json.dumps(self.seen))
+        return True
+
+    def handle(self, text: str) -> None:
+        msg = open_relay(self.keys, text)
+        if not isinstance(msg, dict) or msg.get("v") != 1 or not msg.get("id"):
+            return  # not ours, or altered
+        if abs(time.time() - float(msg.get("at", 0)) / 1000) > RELAY_MAX_AGE:
+            return
+        if not self._remember(str(msg["id"])):
+            return
+        self.state["last"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        threading.Thread(target=self._run, args=(msg,), daemon=True).start()
+
+    def _run(self, msg: dict) -> None:
+        rid = msg["id"]
+        try:
+            if msg.get("kind") == "engineer":
+                job = self.bridge.start_engineer(str(msg.get("run_id", "")), msg)["job_id"]
+            else:
+                job = self.bridge.start_agent(msg)["job_id"]
+        except BridgeError as err:
+            self.report({"id": rid, "status": "failed", "error": str(err)})
+            return
+        self.report({"id": rid, "status": "accepted"})
+        done = _wait(self.bridge, job)
+        result = done.get("result") or {}
+        files = []
+        run_id = result.get("run_id") if isinstance(result, dict) else None
+        if run_id:
+            with contextlib.suppress(BridgeError):
+                files = [
+                    {"name": f["name"], "content": f["content"]}
+                    for f in self.bridge.files(str(run_id))["files"]
+                ]
+        ok = (
+            done.get("exit_code") == 0 and isinstance(result, dict) and result.get("status") == "ok"
+        )
+        self.report(
+            {
+                "id": rid,
+                "status": "done" if ok else "failed",
+                "result": result if isinstance(result, dict) else None,
+                "files": files,
+                "error": None
+                if ok
+                else (done.get("error") or "\n".join(done.get("log") or [])[-800:]),
+            }
+        )
+
+    def listen(self) -> None:
+        delay = 5
+        since = str(int(time.time()) - RELAY_MAX_AGE)
+        while True:
+            try:
+                url = f"{self.ntfy}/{self.keys['topic']}/json?since={since}"
+                with urlopen(
+                    Request(url, headers={"User-Agent": "spir-rae-bridge"}), timeout=90
+                ) as r:
+                    self.state.update(connected=True, error=None)
+                    delay = 5
+                    for line in r:
+                        event = json.loads(line or b"{}")
+                        if event.get("id"):
+                            since = event["id"]
+                        if event.get("event") == "message" and event.get("message"):
+                            self.handle(event["message"])
+            except Exception as err:  # noqa: BLE001 - reconnect with a growing pause
+                self.state.update(connected=False, error=f"{type(err).__name__}: {err}"[:200])
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+
+    def start(self) -> None:
+        threading.Thread(target=self.listen, daemon=True).start()
 
 
 # ---- HTTP server for the dashboard window ----
@@ -676,12 +864,17 @@ def serve(args) -> None:
         sys.exit("أضف عنوان منصتك: --origin https://your-app.vercel.app")
     token = load_token(args.token)
     bridge = Bridge(Rae(args.rae))
+    if args.relay:
+        bridge.relay = Relay(bridge, args.relay, args.platform or origins[0], args.ntfy)
+        bridge.relay.start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(bridge, token, origins))
     version = bridge.rae.version()
     print(f"spir reverse-api-engineer bridge {VERSION} on http://127.0.0.1:{args.port}")
     print(f"reverse-api-engineer: {version or 'غير مثبّت (uv tool install reverse-api-engineer)'}")
     print(f"allowed: {', '.join(origins)}")
     print(f"pairing token (paste it in the window): {token}")
+    if bridge.relay:
+        print(f"claude.ai relay: waiting on {args.ntfy} (sealed; the platform is never polled)")
     sys.stdout.flush()
     with contextlib.suppress(KeyboardInterrupt):
         server.serve_forever()
@@ -857,6 +1050,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--rae", default=os.environ.get("RAE_COMMAND", "reverse-api-engineer"))
     parser.add_argument("--token", default=os.environ.get("SPIR_RAE_TOKEN"))
+    parser.add_argument(
+        "--relay",
+        default=os.environ.get("RAE_RELAY_SECRET"),
+        help="the platform's RAE_RELAY_SECRET: also take requests from claude.ai through ntfy",
+    )
+    parser.add_argument(
+        "--platform", help="the platform's address for relay reports (default: --origin)"
+    )
+    parser.add_argument("--ntfy", default=os.environ.get("RAE_NTFY_URL", DEFAULT_NTFY))
     args = parser.parse_args(argv)
     if args.mode == "mcp":
         mcp(args)

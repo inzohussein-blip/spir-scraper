@@ -192,3 +192,138 @@ def test_local_mcp_server(tmp_path):
     finally:
         p.stdin.close()
         p.wait(timeout=10)
+
+
+def test_relay_seal_is_authenticated(tmp_path, monkeypatch):
+    mod = load(tmp_path, monkeypatch)
+    keys = mod.relay_keys("s" * 32)
+    assert keys["topic"].startswith("spir-rae-") and "s" * 8 not in keys["topic"]
+    sealed = mod.seal_relay(keys, {"id": "1", "text": "مرحبا"})
+    assert mod.open_relay(keys, sealed) == {"id": "1", "text": "مرحبا"}
+    assert mod.open_relay(mod.relay_keys("t" * 32), sealed) is None  # another secret
+    raw = bytearray(mod._unb64(sealed))
+    raw[-1] ^= 1
+    assert mod.open_relay(keys, mod._b64(bytes(raw))) is None  # altered
+
+
+def test_relay_runs_a_request_and_reports_twice(tmp_path, monkeypatch):
+    from http.server import BaseHTTPRequestHandler
+
+    mod = load(tmp_path, monkeypatch)
+    secret = "r" * 32
+    keys = mod.relay_keys(secret)
+    reports = []
+
+    class Platform(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert self.headers["Authorization"] == "Bearer " + keys["token"]
+            reports.append(mod.open_relay(keys, body["sealed"]))
+            self.send_response(200)
+            self.end_headers()
+
+    platform = ThreadingHTTPServer(("127.0.0.1", 0), Platform)
+    threading.Thread(target=platform.serve_forever, daemon=True).start()
+    try:
+        bridge = mod.Bridge(mod.Rae(FAKE))
+        relay = mod.Relay(bridge, secret, f"http://127.0.0.1:{platform.server_address[1]}")
+        now = int(time.time() * 1000)
+        message = {
+            "v": 1,
+            "id": "job-1",
+            "at": now,
+            "kind": "agent",
+            "url": "https://example.com",
+            "prompt": "items",
+        }
+        relay.handle(mod.seal_relay(keys, message))
+        relay.handle(mod.seal_relay(keys, message))  # the same request again is ignored
+        relay.handle(
+            mod.seal_relay(keys, {**message, "id": "old", "at": now - 2 * 3600_000})
+        )  # too old
+        relay.handle("not-sealed")
+        for _ in range(100):
+            if any(r and r["status"] == "done" for r in reports):
+                break
+            time.sleep(0.1)
+        assert [r["status"] for r in reports] == ["accepted", "done"]
+        done = reports[-1]
+        assert done["id"] == "job-1" and done["result"]["status"] == "ok"
+        assert any(f["name"] == "api_client.ts" for f in done["files"])
+
+        # A refused site is reported as failed, without running anything.
+        reports.clear()
+        relay.handle(
+            mod.seal_relay(keys, {**message, "id": "job-2", "url": "https://instagram.com/x"})
+        )
+        for _ in range(50):
+            if reports:
+                break
+            time.sleep(0.1)
+        assert reports[0]["status"] == "failed" and "instagram.com" in reports[0]["error"]
+    finally:
+        platform.shutdown()
+
+
+def test_relay_listens_on_the_ntfy_stream(tmp_path, monkeypatch):
+    """The ntfy JSON stream: one line per event, as https://ntfy.sh/<topic>/json sends it."""
+    from http.server import BaseHTTPRequestHandler
+
+    mod = load(tmp_path, monkeypatch)
+    secret = "n" * 32
+    keys = mod.relay_keys(secret)
+    reports, paths = [], []
+    sealed = mod.seal_relay(
+        keys,
+        {
+            "v": 1,
+            "id": "s1",
+            "at": int(time.time() * 1000),
+            "kind": "agent",
+            "url": "https://example.com",
+            "prompt": "items",
+        },
+    )
+
+    class Both(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):  # noqa: N802 - the ntfy subscription
+            paths.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            for event in (
+                {"id": "o1", "event": "open", "topic": keys["topic"]},
+                {"id": "k1", "event": "keepalive"},
+                {"id": "m1", "event": "message", "topic": keys["topic"], "message": sealed},
+            ):
+                self.wfile.write((json.dumps(event) + "\n").encode())
+                self.wfile.flush()
+            time.sleep(1)
+
+        def do_POST(self):  # noqa: N802 - the platform's report route
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            reports.append(mod.open_relay(keys, body["sealed"]))
+            self.send_response(200)
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Both)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        relay = mod.Relay(mod.Bridge(mod.Rae(FAKE)), secret, base, ntfy=base)
+        relay.start()
+        for _ in range(100):
+            if any(r and r["status"] == "done" for r in reports):
+                break
+            time.sleep(0.1)
+        assert [r["status"] for r in reports][:2] == ["accepted", "done"]
+        assert paths[0].startswith(f"/{keys['topic']}/json?since=")
+        assert relay.state["last"]
+    finally:
+        server.shutdown()

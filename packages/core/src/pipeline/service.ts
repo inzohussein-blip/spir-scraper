@@ -22,6 +22,7 @@ import { marketMethods } from "./features/market.js";
 import { opsMethods } from "./features/ops.js";
 import { ownMethods } from "./features/own.js";
 import { placesMethods } from "./features/places.js";
+import { relayMethods } from "./features/relay.js";
 import { saverMethods } from "./features/saver.js";
 import { systemMethods } from "./features/system.js";
 import { toolsMethods } from "./features/tools.js";
@@ -84,6 +85,7 @@ export function createScrapers(deps: ScrapersDeps) {
     ...systemMethods(core, self),
     ...toolsMethods(core, self),
     ...contactsMethods(core, self),
+    ...relayMethods(core, self),
     async init() {
       await boss.createQueue(QUEUES.discover, {
         retryLimit: 2,

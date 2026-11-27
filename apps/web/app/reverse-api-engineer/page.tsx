@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Icon } from "@/components/icons";
-import { RaeApp } from "@/components/rae-app";
+import { RaeTabs } from "@/components/rae-tabs";
 
 export const metadata = { title: "reverse-api-engineer" };
 
@@ -45,7 +45,7 @@ export default function ReverseApiEngineer() {
           </a>{" "}
           (رخصة MIT). لا يُستهلك شيء من Vercel أو قاعدة البيانات.
         </p>
-        <RaeApp />
+        <RaeTabs />
       </main>
     </div>
   );

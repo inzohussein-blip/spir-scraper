@@ -1096,6 +1096,72 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "rae_relay_capture",
+    {
+      title: "Turn a website into an API client (on the owner's computer)",
+      description:
+        "Sends a sealed request to the owner's reverse-api-engineer bridge through ntfy: a browser on their " +
+        "computer captures the public site's traffic and the AI model they chose writes a typed API client. " +
+        "Takes several minutes; returns a job_id at once: call rae_relay_result with it after 2-3 minutes. " +
+        "Instagram, TikTok and Meta sites are refused. Needs RAE_RELAY_SECRET on the platform and the bridge " +
+        "running with --relay. Write the goal as the data wanted, not the clicks.",
+      inputSchema: z.object({
+        url: z.string().min(8).max(2000),
+        prompt: z.string().min(3).max(2000),
+        headless: z.boolean().default(true),
+        model: z.string().max(120).optional(),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.raeRelayStart({
+          url: a.url,
+          prompt: a.prompt,
+          headless: a.headless,
+          ...(a.model ? { model: a.model } : {}),
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "rae_relay_engineer",
+    {
+      title: "Improve a generated API client from its saved capture",
+      description:
+        "Asks the owner's bridge to rewrite a past run's client from the same capture, without browsing again " +
+        "(fresh=true starts over from the capture). Returns a job_id for rae_relay_result.",
+      inputSchema: z.object({
+        run_id: z.string().max(80),
+        prompt: z.string().max(2000).default(""),
+        fresh: z.boolean().default(false),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) => json(await rt.scrapers.raeRelayEngineer(a))),
+  );
+
+  server.registerTool(
+    "rae_relay_result",
+    {
+      title: "Result of a reverse-api-engineer run",
+      description:
+        "State of a relayed run (sent, accepted, done, failed) and, once done, the generated client's files " +
+        "(code and README). Generated code is model-written: show it to the owner and let them review it.",
+      inputSchema: z.object({ job_id: z.string().uuid() }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json(
+        (await rt.scrapers.raeRelayResult(a.job_id)) ?? {
+          error: "تشغيل غير معروف أو انتهت مدته (يوم).",
+        },
+      ),
+    ),
+  );
+
+  server.registerTool(
     "deep_contacts",
     {
       title: "Search deeper for leads' email and phone",

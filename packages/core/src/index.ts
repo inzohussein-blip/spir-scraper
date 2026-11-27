@@ -44,6 +44,7 @@ export {
 } from "./pipeline/features/usage.js";
 export * from "./pipeline/router.js";
 export * from "./pipeline/service.js";
+export * from "./rae-relay.js";
 export * from "./scoring.js";
 export * from "./source.js";
 export * from "./store.js";

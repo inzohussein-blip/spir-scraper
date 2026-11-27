@@ -465,7 +465,18 @@ try {
   await page.click('button:has-text("اعرض الكود")');
   await page.waitForSelector("[data-rae-code]");
   assert.match(await page.textContent("[data-rae-code]"), /fetch\(/);
-  step("reverse-api-engineer window: pairing, provider key, refused sites, capture, code");
+  // The second tab: claude.ai through ntfy, explained, with the shared secret made in the browser.
+  await page.click('[role="tab"]:has-text("عبر claude.ai")');
+  await page.waitForSelector("text=rae_relay_capture");
+  await page.waitForSelector("[data-rae-relay-state]:has-text('--relay')");
+  await page.click('button:has-text("اصنع سراً جديداً")');
+  const relayCmd = await page.textContent('pre:has-text("--relay")');
+  assert.match(relayCmd, /--origin http:\/\/localhost:3100 --relay [\w-]{40,}/);
+  await page.click('[role="tab"]:has-text("محلي")');
+  await page.waitForSelector("[data-rae-guide]");
+  step(
+    "reverse-api-engineer window: pairing, provider key, refused sites, capture, code, two tabs",
+  );
 
   const mobile = await browser.newContext({ ...devices["iPhone 13"] });
   await mobile.addCookies(await ctx.cookies());
