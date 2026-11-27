@@ -24,7 +24,7 @@ build-backend = "uv_build"
 line-length = 100
 target-version = "py314"
 # The standalone worker runs on any Python 3.9+.
-per-file-target-version = { "spir_worker.py" = "py39" }
+per-file-target-version = { "spir_worker.py" = "py39", "rae_bridge.py" = "py39", "tests/fake_rae.py" = "py39" }
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
