@@ -21,7 +21,8 @@ export * from "./phones.js";
 export * from "./quality.js";
 export * from "./resolve.js";
 
-export type ContactSource = "business_button" | "bio" | "link";
+/** Where a contact came from (the last two from the deep search). */
+export type ContactSource = "business_button" | "bio" | "link" | "website" | "account";
 
 export interface ExtractedContact {
   email: string | null;

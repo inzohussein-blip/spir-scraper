@@ -31,7 +31,17 @@ export const sourceType = pgEnum("source_type", [
   "similar",
 ]);
 export const jobStatus = pgEnum("job_status", ["queued", "running", "done", "failed", "cancelled"]);
-export const contactSource = pgEnum("contact_source", ["business_button", "bio", "link"]);
+/**
+ * Where a lead's email or number came from: the public contact button, the
+ * bio, the bio link, their own website, or one of their other accounts.
+ */
+export const contactSource = pgEnum("contact_source", [
+  "business_button",
+  "bio",
+  "link",
+  "website",
+  "account",
+]);
 export const providerId = pgEnum("provider_id", ["graph", "apify", "worker", "upload"]);
 /** Where the owner is with each lead (idea from the Spir bot's review page). */
 export const leadStatus = pgEnum("lead_status", [
@@ -123,6 +133,8 @@ export const profiles = pgTable("profiles", {
   /** The person this Instagram account belongs to (see accounts for their other platforms). */
   personId: uuid("person_id").references(() => people.id, { onDelete: "set null" }),
   username: text("username").notNull().unique(),
+  /** Last deep contact search (website, other accounts, a second reader); not repeated for 30 days. */
+  contactCheckedAt: timestamp("contact_checked_at", { withTimezone: true }),
   fullName: text("full_name"),
   bio: text("bio"),
   followers: integer("followers"),

@@ -1,7 +1,7 @@
 import { JobNotFoundError } from "@scrapers/core";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { buildReport, cancelJob, exportToSheet, scoreJob } from "@/app/actions";
+import { buildReport, cancelJob, deepContacts, exportToSheet, scoreJob } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { Icon, type IconName } from "@/components/icons";
@@ -16,6 +16,7 @@ import {
   Notice,
   Progress,
   Select,
+  Stat,
   StatusBadge,
   Textarea,
 } from "@/components/ui";
@@ -70,7 +71,12 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
     if (err instanceof JobNotFoundError) notFound();
     throw err;
   }
-  const project = await rt.scrapers.getProject(job.projectId);
+  const [project, contacts, waiting, deepResult] = await Promise.all([
+    rt.scrapers.getProject(job.projectId),
+    rt.scrapers.jobContactCounts(job.id),
+    rt.scrapers.deepContactCandidates({ jobId: job.id }),
+    rt.scrapers.jobDeepResult(job.id),
+  ]);
   const running = job.status === "queued" || job.status === "running";
   const active = running || !!job.counts.aiBatchId;
   const c = job.counts;
@@ -183,6 +189,39 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
           {job.error && <Notice tone="error">{job.error}</Notice>}
         </div>
       </Card>
+
+      {contacts.total > 0 && (
+        <Card
+          title="الإيميل والرقم"
+          icon="users"
+          description="وسائل التواصل العامة لعملاء هذه المهمة، والبحث العميق لمن ليس له شيء."
+        >
+          <div className="grid grid-cols-3 gap-3">
+            <Stat label="العملاء" value={contacts.total} />
+            <Stat label="لهم إيميل" value={contacts.email} />
+            <Stat label="لهم رقم" value={contacts.phone} />
+          </div>
+          {deepResult && (
+            <p className="mt-3 text-sm text-fg-2">
+              البحث العميق التلقائي: بُحث عن {deepResult.checked} حساب، ووُجد {deepResult.emails}{" "}
+              إيميل و{deepResult.phones} رقم.
+            </p>
+          )}
+          {!running && waiting > 0 && (
+            <ActionForm action={deepContacts} submit={`ابحث عن الإيميل والرقم (${waiting})`}>
+              <input type="hidden" name="job" value={job.id} />
+              <p className="text-sm text-fg-2">
+                {waiting} حساب تجاري أو كبير بلا إيميل ولا رقم: يُبحث في موقعه وصفحة «تواصل معنا»
+                وحساباته الأخرى.
+              </p>
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="reread" className="mt-1" />
+                <span>قراءة ثانية عبر Apify أولاً (≈ ${((waiting * 1.6) / 1000).toFixed(2)})</span>
+              </label>
+            </ActionForm>
+          )}
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card title="تصدير" icon="download">

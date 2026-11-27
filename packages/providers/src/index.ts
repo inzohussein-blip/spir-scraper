@@ -5,6 +5,7 @@ import { TikTokConnector } from "./connectors/tiktok.js";
 import { WebsiteConnector } from "./connectors/website.js";
 import { YouTubeConnector } from "./connectors/youtube.js";
 import { GraphProvider } from "./graph.js";
+import { analyzeSite } from "./web/site.js";
 import { WorkerProvider } from "./worker.js";
 
 export * from "./apify.js";
@@ -83,6 +84,16 @@ export function toolsFromEnv(
       : {}),
     ...(youtube
       ? { youtubeComments: (videoId: string, max: number) => youtube.videoComments(videoId, max) }
+      : {}),
+    ...(apify ? { rereadProfiles: (usernames: string[]) => apify.getProfiles(usernames) } : {}),
+    // Public websites need no key; off with WEBSITE_READER=off, like the website connector.
+    ...(env.WEBSITE_READER !== "off"
+      ? {
+          siteContacts: async (url: string) => {
+            const site = await analyzeSite(new URL(url).hostname, { extraPages: 3 });
+            return { emails: site.emails, phones: site.phones };
+          },
+        }
       : {}),
   };
 }

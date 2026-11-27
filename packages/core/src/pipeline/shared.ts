@@ -187,6 +187,12 @@ export interface ScrapersDeps {
 
 /** The few public methods the pipeline itself calls (bound once the service exists). */
 export interface LateApi {
+  deepContactSearch(input: {
+    jobId?: string;
+    reread?: boolean;
+    limit?: number;
+    budgetMs?: number;
+  }): Promise<{ checked: number; found: number; emails: number; phones: number; costUsd: number }>;
   createEngineRun(input: {
     name: string;
     projectId: string;

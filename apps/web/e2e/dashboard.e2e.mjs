@@ -392,7 +392,7 @@ try {
     await page
       .locator("[data-pinned]")
       .evaluateAll((els) => els.map((e) => e.getAttribute("data-pinned"))),
-    ["ig-commenters", "ig-followers"],
+    ["ig-commenters", "ig-followers", "ig-contacts"],
   );
   assert.ok(await page.locator("text=ابدأ من هنا").isVisible());
   assert.ok(await page.locator('nav[aria-label="الأدوات"] >> text=التشغيلات').isVisible());
@@ -419,6 +419,13 @@ try {
   assert.equal(await page.inputValue('input[name="type"]'), "followers");
   await page.goto(`${B}/schedules`);
   await page.waitForSelector("text=التشغيلات المجدولة");
+  // The deep contact search: its own tool, and on by default in collection forms.
+  await page.goto(`${B}/store/ig-contacts`);
+  await page.click('button:has-text("ابدأ البحث")');
+  await page.waitForSelector("text=/بُحث عن|لا يوجد عملاء ينتظرون/");
+  await page.goto(`${B}/store/ig-commenters`);
+  assert.equal(await page.isChecked('input[name="deep_contacts"]'), true);
+  assert.equal(await page.isChecked('input[name="deep_reread"]'), false);
   step("store, tool page, run results, runs list and schedules");
 
   const mobile = await browser.newContext({ ...devices["iPhone 13"] });

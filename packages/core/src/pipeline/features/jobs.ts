@@ -51,6 +51,12 @@ export function jobsMethods(core: Core, api: () => CoreSelf) {
        * been in touch in the last hour.
        */
       readVia?: "auto" | "providers" | "engine";
+      /**
+       * After the job: search deeper for the email and number of leads that
+       * have neither (their website, other accounts; reread: a second read
+       * through Apify, paid).
+       */
+      deepContacts?: { reread: boolean };
     }) {
       const limit = Math.min(Math.max(1, Math.floor(input.limit)), maxLimit);
       const [job] = await db
@@ -71,6 +77,8 @@ export function jobsMethods(core: Core, api: () => CoreSelf) {
             ? "engine"
             : "providers";
       if (via === "engine") await setValue(`job-read:${job.id}`, "engine", 30 * 86_400_000);
+      if (input.deepContacts)
+        await setValue(`job-deep:${job.id}`, input.deepContacts, 30 * 86_400_000);
       const payload: DiscoverPayload = { jobId: job.id };
       if (input.source.type === "upload")
         payload.usernames = input.source.usernames.slice(0, limit);

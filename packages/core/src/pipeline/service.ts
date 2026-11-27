@@ -12,6 +12,7 @@ import { accountsMethods } from "./features/accounts.js";
 import { backupMethods } from "./features/backup.js";
 import { brokerMethods } from "./features/broker.js";
 import { competitorsMethods } from "./features/competitors.js";
+import { contactsMethods } from "./features/contacts.js";
 import type { CoreSelf, FeatureContext } from "./features/context.js";
 import { crmMethods } from "./features/crm.js";
 import { engineMethods } from "./features/engine.js";
@@ -82,6 +83,7 @@ export function createScrapers(deps: ScrapersDeps) {
     ...backupMethods(core, self),
     ...systemMethods(core, self),
     ...toolsMethods(core, self),
+    ...contactsMethods(core, self),
     async init() {
       await boss.createQueue(QUEUES.discover, {
         retryLimit: 2,

@@ -1096,6 +1096,36 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "deep_contacts",
+    {
+      title: "Search deeper for leads' email and phone",
+      description:
+        "For leads with no email and no phone (business, verified or 10k+ accounts only): reads their own website " +
+        "(home, contact and about pages) and their other accounts' descriptions, and with reread=true first reads " +
+        "the profiles again through Apify (≈ $1.60 per 1,000, say the cost first). Public information only; the " +
+        "do-not-contact list is respected; each account is searched once per 30 days. Run again while remaining > 0.",
+      inputSchema: z.object({
+        project_id: z.string().uuid().optional(),
+        job_id: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(300).default(60),
+        reread: z.boolean().default(false),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.deepContactSearch({
+          ...(a.project_id ? { projectId: a.project_id } : {}),
+          ...(a.job_id ? { jobId: a.job_id } : {}),
+          limit: a.limit,
+          reread: a.reread,
+          budgetMs: 200_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
     "add_account",
     {
       title: "Add a lead's account on another platform",

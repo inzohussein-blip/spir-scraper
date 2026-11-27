@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { startJob } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
+import { DeepContactsFields } from "@/components/deep-contacts-fields";
 import { Card, Field, Input, Notice, Select, Textarea } from "@/components/ui";
 import { integrationStatus } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
@@ -114,6 +115,7 @@ export default async function NewJob({
         <Field label="الحد الأقصى للحسابات">
           <Input name="limit" type="number" min={1} max={10000} defaultValue={100} />
         </Field>
+        <DeepContactsFields />
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" name="accept_cost" />
           أوافق على التكلفة التقديرية إن وُجدت (Apify)

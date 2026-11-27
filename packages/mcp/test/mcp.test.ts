@@ -85,6 +85,7 @@ describe("MCP server over Streamable HTTP", () => {
         "spir_engine_start",
         "store_tools",
         "run_store_tool",
+        "deep_contacts",
       ].sort(),
     );
     // The store's catalog, with what each tool needs.

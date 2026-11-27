@@ -174,6 +174,9 @@ export async function startJob(_: ActionState, form: FormData): Promise<ActionSt
       source,
       limit,
       readVia,
+      ...(form.get("deep_contacts") === "on"
+        ? { deepContacts: { reread: form.get("deep_reread") === "on" } }
+        : {}),
     });
     jobId = job.id;
     await audit("job.start", { jobId, source: source.url, limit });
@@ -1102,4 +1105,41 @@ export async function deleteToolRun(id: string) {
   await audit("tool.delete", { id });
   revalidatePath("/runs");
   redirect("/runs");
+}
+
+/**
+ * Searches deeper for the email and number of leads that have neither (their
+ * website, other accounts and, if chosen, a second read through Apify).
+ */
+export async function deepContacts(_: ActionState, form: FormData): Promise<ActionState> {
+  await requireSession();
+  try {
+    const rt = await getRuntime();
+    const reread = form.get("reread") === "on";
+    const projectId = str(form, "project") || undefined;
+    const jobId = str(form, "job") || undefined;
+    const limit = Math.max(1, Math.min(Number(str(form, "limit") || 60), 300));
+    const r = await rt.scrapers.deepContactSearch({
+      ...(projectId ? { projectId } : {}),
+      ...(jobId ? { jobId } : {}),
+      limit,
+      reread,
+      budgetMs: 200_000,
+    });
+    await audit("contacts.deep", { projectId, jobId, ...r });
+    revalidatePath("/leads");
+    if (jobId) revalidatePath(`/jobs/${jobId}`);
+    if (r.checked === 0)
+      return {
+        message: "لا يوجد عملاء ينتظرون البحث: كلهم لهم وسيلة تواصل أو بُحث عنهم خلال 30 يوماً.",
+      };
+    return {
+      message:
+        `بُحث عن ${r.checked} حساب: وُجد ${r.emails} إيميل و${r.phones} رقم (${r.found} عميل).` +
+        (r.costUsd > 0 ? ` تكلفة القراءة الثانية ≈ $${r.costUsd.toFixed(2)}.` : "") +
+        (r.remaining > 0 ? ` بقي ${r.remaining}: اضغط مرة أخرى للمتابعة.` : ""),
+    };
+  } catch (err) {
+    return fail(err);
+  }
 }
