@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { EXE } from "@/lib/downloads";
 
 /** One collapsible section of the operating guide (native <details>: works without JavaScript). */
 function Section({
@@ -75,6 +76,17 @@ export function RaeGuide({ origin }: { origin: string }) {
             مرة واحدة، ثم افتح نافذة الأوامر في مجلده وشغّل:
           </p>
           <Cmd>{`python rae-bridge.py --origin ${origin}`}</Cmd>
+          <p>
+            <b>أو على ويندوز بلا Python للجسر (اختياري):</b> نزّل{" "}
+            <a href={EXE.bridge} data-exe="bridge" className="text-accent underline">
+              rae-bridge.exe
+            </a>{" "}
+            وافتحه بنقرة مزدوجة: يسأل مرة واحدة عن عنوان المنصة وعن RAE_RELAY_SECRET (Enter للتخطي)
+            ويتذكرهما في مجلد <span className="ltr font-mono text-xs">.spir-rae</span>. أو شغّله
+            بالخيارات نفسها:{" "}
+            <span className="ltr font-mono text-xs">rae-bridge.exe --origin {origin}</span>. الأداة
+            نفسها (الخطوة 1) تبقى مطلوبة. ويندوز قد يحذّر لأن الملف غير موقّع: More info ← Run anyway.
+          </p>
           <p>
             يطبع الجسر <b>رمز الربط</b>: الصقه في أعلى النافذة واضغط «اتصل». الرمز ثابت، فيكفي لصقه
             مرة على هذا المتصفح. اترك نافذة الأوامر مفتوحة أثناء العمل، وأوقف الجسر بـ <b>Ctrl+C</b>

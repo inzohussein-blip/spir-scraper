@@ -392,6 +392,12 @@
 - **طريقتان في تبويبين:** «محلي» (صفر استهلاك)، و«عبر claude.ai» من أي متصفح أو الهاتف: أدوات MCP `rae_relay_capture` و `rae_relay_result` و `rae_relay_engineer` ترسل طلباً مشفّراً عبر ntfy.sh إلى الجسر (`--relay`)، والجسر يبلّغ المنصة مرتين فقط عبر `/api/rae/relay`؛ لا يسأل المنصة أبداً. السر `RAE_RELAY_SECRET`.
 - التفاصيل في [REVERSE-API.md](REVERSE-API.md).
 
+## 5-ز. ملفات exe لويندوز (خيار إضافي)
+
+- workflow جديد `.github/workflows/home-programs.yml` يبني على ويندوز بـ PyInstaller ملفين: `spir-worker.exe` (العامل المنزلي) و `rae-bridge.exe` (الجسر)، ويفحص أنهما يعملان، وينشرهما مع `SHA256SUMS.txt` في [إصدار home-programs](https://github.com/inzohussein-blip/spir-scraper/releases/tag/home-programs) عند كل تغيير على `main`.
+- زر «تنزيل exe» بجانب كل زر py في صفحة العامل المنزلي ونافذة reverse-api-engineer (التبويبان والدليل وقسم MCP). أزرار الـ py وأوامرها لم تتغير.
+- الـ exe وحده، حين يُفتح بنقرة مزدوجة بلا خيارات، يسأل مرة واحدة ويتذكر، ويبقي النافذة مفتوحة عند الخطأ. سر ربط غير صالح يوقف ربط claude.ai فقط ولا يوقف الجسر.
+
 ## 6. الاختبارات التي نجحت قبل الدمج
 
 | الاختبار | النتيجة |

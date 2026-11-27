@@ -26,6 +26,7 @@
    ```bash
    python rae-bridge.py --origin https://<موقعك>.vercel.app
    ```
+   **أو على ويندوز (اختياري):** `rae-bridge.exe` من النافذة أو من [إصدار home-programs](https://github.com/inzohussein-blip/spir-scraper/releases/tag/home-programs). افتحه بنقرة مزدوجة فيسأل مرة واحدة عن عنوان المنصة و `RAE_RELAY_SECRET` (Enter للتخطي) ويحفظهما في `~/.spir-rae`، أو شغّله بالخيارات نفسها (`rae-bridge.exe --origin ... --relay ...`، و `rae-bridge.exe mcp` لـ Claude). الأداة نفسها (الخطوة 2) تبقى مطلوبة. ملف الـ py باقٍ كما هو.
 4. الصق **رمز الربط** الذي يطبعه في النافذة واضغط «اتصل».
 
 الأجهزة المدعومة من الأداة الأصلية: ويندوز 64 بت، وماك بمعالج Apple، ولينكس. استعمل Chrome أو Edge (Safari قد يمنع الاتصال بالجهاز المحلي). لا يعمل من الهاتف.

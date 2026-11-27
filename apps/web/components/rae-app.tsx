@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EXE } from "@/lib/downloads";
 import { RaeGuide } from "./rae-guide";
 import { Badge, Card, cx, Notice } from "./ui";
 
@@ -517,7 +518,11 @@ export function RaeApp() {
               <a href="/downloads/rae-bridge.py" download className="text-accent underline">
                 rae-bridge.py
               </a>{" "}
-              (Python فقط، بلا مكتبات إضافية).
+              (Python فقط، بلا مكتبات إضافية)، أو لويندوز{" "}
+              <a href={EXE.bridge} data-exe="bridge" className="text-accent underline">
+                rae-bridge.exe
+              </a>{" "}
+              (اختياري: افتحه بنقرة مزدوجة، يسأل عن عنوان المنصة مرة واحدة ويتذكره).
             </li>
             <li>
               ثبّت الأداة مرة واحدة (Python 3.11 فما فوق، و Node.js 20 فما فوق):
@@ -876,6 +881,14 @@ export function RaeApp() {
             <pre className="ltr mt-1 overflow-x-auto rounded-lg bg-bg-2 p-2 text-xs">
               claude mcp add reverse-api-engineer -- python /path/to/rae-bridge.py mcp
             </pre>
+            <p className="mt-2 text-xs text-muted">
+              بملف exe بدل Python:{" "}
+              <span className="ltr font-mono">
+                claude mcp add reverse-api-engineer -- C:\path\to\rae-bridge.exe mcp
+              </span>
+              ، وفي JSON اجعل command مسار الملف و args{" "}
+              <span className="ltr font-mono">[&quot;mcp&quot;]</span>.
+            </p>
             <p className="mt-3 text-sm text-fg-2">Claude Desktop (claude_desktop_config.json):</p>
             <pre className="ltr mt-1 overflow-x-auto rounded-lg bg-bg-2 p-2 text-xs">{mcpJson}</pre>
           </Card>

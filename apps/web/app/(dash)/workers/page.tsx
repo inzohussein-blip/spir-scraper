@@ -21,6 +21,7 @@ import {
   LinkButton,
   Notice,
 } from "@/components/ui";
+import { EXE } from "@/lib/downloads";
 import { appOrigin } from "@/lib/env";
 import { getRuntime } from "@/lib/runtime";
 
@@ -364,6 +365,9 @@ export default async function WorkersPage() {
               <LinkButton href="/downloads/spir-worker.py" download>
                 تنزيل spir-worker.py
               </LinkButton>
+              <LinkButton href={EXE.worker} data-exe="worker">
+                تنزيل spir-worker.exe (ويندوز، بلا Python)
+              </LinkButton>
               <ActionForm action={createKey} submit="أنشئ مفتاحاً للبرنامج">
                 <input type="hidden" name="name" value="العامل المنزلي" />
                 <input type="hidden" name="write" value="on" />
@@ -371,6 +375,20 @@ export default async function WorkersPage() {
             </div>
             <p className="mb-3 text-xs text-muted">
               المفتاح يظهر مرة واحدة: احفظه. رابط المنصة: <CopyText text={origin} />
+            </p>
+            <p className="mb-3 text-xs text-muted">
+              <b>ملف exe (اختياري):</b> لا يحتاج تثبيت Python. افتحه بنقرة مزدوجة، فيسألك مرة واحدة
+              عن رابط المنصة والمفتاح ويتذكرهما. ويندوز قد يقول «Windows protected your PC» لأنه غير
+              موقّع: More info ← Run anyway. أو شغّله بنفس خيارات الأمر في الأسفل. الملفات وبصماتها في{" "}
+              <a
+                href={EXE.release}
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent hover:underline"
+              >
+                صفحة الإصدار
+              </a>
+              .
             </p>
 
             <details className="mb-2 rounded-lg border border-line p-3" open>

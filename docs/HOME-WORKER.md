@@ -97,6 +97,8 @@ curl -H "x-worker-secret: $WORKER_SHARED_SECRET" https://worker.نطاقك.com/s
 python spir-worker.py --platform https://spir-scraper.vercel.app --key sk_...
 ```
 
+**أو ملف exe لويندوز (خيار إضافي، بلا تثبيت Python):** زر «تنزيل spir-worker.exe» بجانب زر الـ py في الصفحة نفسها، والملفات وبصماتها (SHA256SUMS.txt) في [إصدار home-programs](https://github.com/inzohussein-blip/spir-scraper/releases/tag/home-programs). افتحه بنقرة مزدوجة فيسأل مرة واحدة عن رابط المنصة والمفتاح ويحفظهما في `~/.spir-worker-exe.json`، أو شغّله بالخيارات نفسها: `spir-worker.exe --platform ... --key ...`. الملف غير موقّع، فقد يقول ويندوز «Windows protected your PC»: More info ← Run anyway. يُبنى تلقائياً من `main` كلما تغيّر البرنامج (workflow «Home programs»). ملف الـ py باقٍ كما هو.
+
 الصفحة تشرح تشغيله تلقائياً على Windows (مجلد startup) و Mac (nohup) و Linux (خدمة systemd).
 
 **البروكسيات وتغيير الـ IP:**
