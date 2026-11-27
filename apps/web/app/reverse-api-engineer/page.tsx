@@ -11,13 +11,6 @@ export const metadata = { title: "reverse-api-engineer" };
  */
 export const dynamic = "force-static";
 
-function origin(): string {
-  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL)
-    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
-  return "https://your-app.vercel.app";
-}
-
 export default function ReverseApiEngineer() {
   return (
     <div className="min-h-dvh">
@@ -52,7 +45,7 @@ export default function ReverseApiEngineer() {
           </a>{" "}
           (رخصة MIT). لا يُستهلك شيء من Vercel أو قاعدة البيانات.
         </p>
-        <RaeApp origin={origin()} />
+        <RaeApp />
       </main>
     </div>
   );

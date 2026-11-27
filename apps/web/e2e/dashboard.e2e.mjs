@@ -435,6 +435,12 @@ try {
   // Built once as a static file: opening it runs no server function and no database query.
   assert.ok(existsSync(".next/server/app/reverse-api-engineer.html"), "the window is prerendered");
   await page.goto(`${B}/reverse-api-engineer`);
+  // The operating guide sits at the bottom in collapsible sections, even before connecting.
+  await page.click('[data-rae-guide] summary:has-text("2. تشغيل الجسر")');
+  assert.match(
+    await page.textContent("[data-rae-guide]"),
+    /rae-bridge\.py --origin http:\/\/localhost:3100/,
+  );
   await page.fill('input[aria-label="رمز الربط"]', "wrong-token");
   await page.click('button:has-text("اتصل")');
   await page.waitForSelector("text=رمز الربط غير صحيح");

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RaeGuide } from "./rae-guide";
 import { Badge, Card, cx, Notice } from "./ui";
 
 /**
@@ -209,7 +210,11 @@ const primary = `${btn} border-accent bg-accent text-accent-text`;
 const secondary = `${btn} border-line bg-surface hover:bg-surface-2`;
 const input = "w-full rounded-[10px] border border-line bg-surface px-3 py-2 text-sm";
 
-export function RaeApp({ origin }: { origin: string }) {
+export function RaeApp() {
+  // The address the bridge must allow is this page's own (known only in the browser:
+  // the window is built once, before any deployment address exists).
+  const [origin, setOrigin] = useState("https://<موقعك>");
+  useEffect(() => setOrigin(window.location.origin), []);
   const [conn, setConn] = useState<{ url: string; token: string }>({ url: DEFAULT_URL, token: "" });
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -876,6 +881,8 @@ export function RaeApp({ origin }: { origin: string }) {
           </Card>
         </>
       )}
+
+      <RaeGuide origin={origin} />
     </div>
   );
 }
