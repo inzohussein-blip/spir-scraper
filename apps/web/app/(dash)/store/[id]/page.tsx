@@ -1,8 +1,9 @@
 import { STORE_CATEGORIES, storeTool } from "@scrapers/core";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { runStoreTool, startJob } from "@/app/actions";
+import { deepContacts, runStoreTool, startJob } from "@/app/actions";
 import { ActionForm } from "@/components/action-form";
+import { DeepContactsFields } from "@/components/deep-contacts-fields";
 import { Icon } from "@/components/icons";
 import {
   Badge,
@@ -49,6 +50,7 @@ export default async function StoreTool({ params }: { params: Promise<{ id: stri
   const run = tool.run;
   const toolRuns =
     run.kind === "tool" ? await rt.scrapers.listToolRuns({ tool: tool.id, limit: 10 }) : [];
+  const waiting = run.kind === "contacts" ? await rt.scrapers.deepContactCandidates() : 0;
   const jobs =
     run.kind === "job"
       ? (await rt.scrapers.listJobs({ limit: 100 }))
@@ -204,6 +206,7 @@ export default async function StoreTool({ params }: { params: Promise<{ id: stri
               <Field label="الحد الأقصى للحسابات">
                 <Input name="limit" type="number" min={1} max={10000} defaultValue={100} />
               </Field>
+              <DeepContactsFields />
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" name="accept_cost" />
                 أوافق على التكلفة التقديرية إن وُجدت (Apify)
@@ -211,6 +214,25 @@ export default async function StoreTool({ params }: { params: Promise<{ id: stri
             </ActionForm>
           </Card>
         ))}
+
+      {run.kind === "contacts" && (
+        <Card
+          title="الإدخال"
+          icon="play"
+          description={`${waiting} حساب ينتظر البحث الآن. كل ضغطة تبحث عن دفعة (حتى ثلاث دقائق)، واضغط مرة أخرى للمتابعة.`}
+        >
+          <ActionForm action={deepContacts} submit="ابدأ البحث">
+            {projectField(true)}
+            <Field label="عدد الحسابات في هذه الدفعة">
+              <Input name="limit" type="number" min={1} max={300} defaultValue={60} />
+            </Field>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" name="reread" className="mt-1" />
+              <span>قراءة ثانية عبر Apify أولاً (≈ $1.60 لكل 1000 حساب، من رصيدك)</span>
+            </label>
+          </ActionForm>
+        </Card>
+      )}
 
       {run.kind === "tool" && (
         <Card

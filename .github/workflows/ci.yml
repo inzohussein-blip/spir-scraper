@@ -125,6 +125,7 @@ jobs:
       - name: Start the fake worker and the dashboard
         run: |
           node apps/web/e2e/fake-worker.mjs > /tmp/worker.log 2>&1 &
+          python3 services/ig-worker/rae_bridge.py --origin http://localhost:3100 --token e2e-rae-pairing-token-0123456789 --rae services/ig-worker/tests/fake_rae.py > /tmp/rae-bridge.log 2>&1 &
           (cd apps/web && pnpm exec next start -p 3100 > /tmp/next.log 2>&1 &)
           for i in $(seq 1 30); do curl -sf http://localhost:3100/login > /dev/null && break; sleep 1; done
       - name: Dashboard end to end
@@ -132,7 +133,7 @@ jobs:
         env:
           BASE_URL: http://localhost:3100
       - if: failure()
-        run: tail -n 100 /tmp/next.log /tmp/worker.log
+        run: tail -n 100 /tmp/next.log /tmp/worker.log /tmp/rae-bridge.log
 
   extension:
     runs-on: ubuntu-latest

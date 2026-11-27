@@ -48,7 +48,7 @@ import {
 /** Leads and people: saving profiles, linked accounts, the own model, personas, scoring, job completion and lead pages. */
 export function createLeadStore(deps: ScrapersDeps, prev: Store) {
   const { db, scorer } = deps;
-  const { connectors, notify, jobLabel, bump } = prev;
+  const { connectors, notify, jobLabel, bump, getValue, setValue, lateApi } = prev;
   /** Marks a running job done once every discovered account is accounted for. */
   async function finishIfComplete(jobId: string) {
     const finished = await db
@@ -80,6 +80,31 @@ export function createLeadStore(deps: ScrapersDeps, prev: Store) {
 
   /** Scores the job when its project has AI criteria, then hands it over for export. */
   async function afterJobDone(jobId: string) {
+    // The owner asked for a deeper contact search when the job ends.
+    const deep = await getValue<{ reread: boolean }>(`job-deep:${jobId}`);
+    if (deep) {
+      try {
+        const r = await lateApi().deepContactSearch({
+          jobId,
+          reread: deep.reread,
+          // Within the processing call's time limit; the rest continues from the job page.
+          limit: 150,
+          budgetMs: 45_000,
+        });
+        await setValue(`job-deep-result:${jobId}`, r, 30 * 86_400_000);
+        if (r.checked > 0)
+          await notify({
+            type: "job",
+            level: "info",
+            title: `بحث التواصل العميق: ${r.found} من ${r.checked}`,
+            body: `وُجد ${r.emails} إيميل و${r.phones} رقم إضافي${r.costUsd > 0 ? ` (≈ $${r.costUsd.toFixed(2)} من Apify)` : ""}.`,
+            url: `/jobs/${jobId}`,
+            key: `job-deep:${jobId}`,
+          });
+      } catch (err) {
+        console.error("[deep-contacts]", redactSecrets((err as Error).message));
+      }
+    }
     const [row] = await db
       .select({ criteria: projects.aiCriteria })
       .from(jobs)

@@ -13,6 +13,7 @@ import {
   type ProviderHealthEvent,
   ProviderRouter,
   type ResolveDeps,
+  relayKeys,
   type Scorer,
   type Scrapers,
 } from "@scrapers/core";
@@ -101,6 +102,8 @@ export interface RuntimeOverrides {
   providers?: Provider[];
   /** Readers for other platforms; defaults to the ones configured in the environment. */
   connectors?: Connector[];
+  /** The reverse-api-engineer relay (defaults to RAE_RELAY_SECRET and ntfy.sh). */
+  relay?: { secret: string; publish(message: string): Promise<void> };
   /** Services for the store's tool runs (defaults to Apify and YouTube from the environment). */
   tools?: DataTools;
   /** Web page reader for watched competitor sites; defaults to the safe reader. */
@@ -232,6 +235,11 @@ export async function createRuntime(
         ...(o.places ? { places: o.places } : apify ? { places: apify } : {}),
         ...(o.following ? { following: o.following } : apify ? { following: apify } : {}),
         tools: o.tools ?? toolsFromEnv(env, apify),
+        ...(o.relay
+          ? { relay: o.relay }
+          : env.RAE_RELAY_SECRET && env.RAE_RELAY_SECRET.length >= 24
+            ? { relay: ntfyRelay(env.RAE_RELAY_SECRET, env.RAE_NTFY_URL || "https://ntfy.sh") }
+            : {}),
       };
     })(),
     config: {
@@ -468,6 +476,26 @@ export function lazyBoss(raw: PgBoss) {
     started: () => startP !== null,
     ready: (fn: () => Promise<void>) => {
       init = fn;
+    },
+  };
+}
+
+/**
+ * Publishes sealed reverse-api-engineer requests to the bridge's ntfy topic
+ * (one short request per run; the bridge listens on ntfy, never on the platform).
+ */
+export function ntfyRelay(secret: string, server: string) {
+  const { topic } = relayKeys(secret);
+  return {
+    secret,
+    async publish(message: string) {
+      const res = await fetch(`${server.replace(/\/$/, "")}/${topic}`, {
+        method: "POST",
+        body: message,
+        headers: { "Content-Type": "text/plain" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) throw new Error(`ntfy: HTTP ${res.status}`);
     },
   };
 }

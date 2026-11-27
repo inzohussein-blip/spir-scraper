@@ -13,7 +13,7 @@ export type ShellData = {
   jobs: { id: string; label: string; status: string }[];
 };
 
-type NavItem = { href: string; label: string; icon: IconName };
+type NavItem = { href: string; label: string; icon: IconName; hint?: string };
 
 /**
  * The menu in sections, from finding people to running the business:
@@ -28,6 +28,12 @@ const SECTIONS: { title: string | null; items: NavItem[] }[] = [
       { href: "/runs", label: "التشغيلات", icon: "play" },
       { href: "/schedules", label: "الجدولة", icon: "clock" },
       { href: "/engine", label: "محرك Spir", icon: "activity" },
+      {
+        href: "/reverse-api-engineer",
+        label: "reverse-api-engineer",
+        hint: "تحويل موقع إلى API · محلي",
+        icon: "plug",
+      },
     ],
   },
   {
@@ -291,7 +297,16 @@ export function Shell({
                   )}
                 >
                   <Icon name={n.icon} />
-                  {n.label}
+                  {n.hint ? (
+                    <span className="min-w-0 leading-tight">
+                      <span className="ltr block truncate text-start text-[13px]">{n.label}</span>
+                      <span className="block truncate text-[11px] font-normal text-muted">
+                        {n.hint}
+                      </span>
+                    </span>
+                  ) : (
+                    n.label
+                  )}
                   {n.href === "/notifications" && data.unread > 0 && (
                     <span className="ms-auto rounded-full bg-bad px-2 text-[11.5px] text-white">
                       {data.unread}

@@ -1,6 +1,7 @@
 // End-to-end check of the dashboard against a running server (see the e2e job in .github/workflows/ci.yml).
 // Env: BASE_URL, DASHBOARD_PASSWORD; CHROMIUM_PATH to use an already installed Chromium.
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { chromium, devices } from "playwright";
 
@@ -392,7 +393,7 @@ try {
     await page
       .locator("[data-pinned]")
       .evaluateAll((els) => els.map((e) => e.getAttribute("data-pinned"))),
-    ["ig-commenters", "ig-followers"],
+    ["ig-commenters", "ig-followers", "ig-contacts"],
   );
   assert.ok(await page.locator("text=ابدأ من هنا").isVisible());
   assert.ok(await page.locator('nav[aria-label="الأدوات"] >> text=التشغيلات').isVisible());
@@ -419,7 +420,63 @@ try {
   assert.equal(await page.inputValue('input[name="type"]'), "followers");
   await page.goto(`${B}/schedules`);
   await page.waitForSelector("text=التشغيلات المجدولة");
+  // The deep contact search: its own tool, and on by default in collection forms.
+  await page.goto(`${B}/store/ig-contacts`);
+  await page.click('button:has-text("ابدأ البحث")');
+  await page.waitForSelector("text=/بُحث عن|لا يوجد عملاء ينتظرون/");
+  await page.goto(`${B}/store/ig-commenters`);
+  assert.equal(await page.isChecked('input[name="deep_contacts"]'), true);
+  assert.equal(await page.isChecked('input[name="deep_reread"]'), false);
   step("store, tool page, run results, runs list and schedules");
+
+  // «reverse-api-engineer»: a static window that talks only to the local bridge.
+  const rae = await page.request.get(`${B}/reverse-api-engineer`);
+  assert.equal(rae.status(), 200);
+  // Built once as a static file: opening it runs no server function and no database query.
+  assert.ok(existsSync(".next/server/app/reverse-api-engineer.html"), "the window is prerendered");
+  await page.goto(`${B}/reverse-api-engineer`);
+  // The operating guide sits at the bottom in collapsible sections, even before connecting.
+  await page.click('[data-rae-guide] summary:has-text("2. تشغيل الجسر")');
+  assert.match(
+    await page.textContent("[data-rae-guide]"),
+    /rae-bridge\.py --origin http:\/\/localhost:3100/,
+  );
+  await page.fill('input[aria-label="رمز الربط"]', "wrong-token");
+  await page.click('button:has-text("اتصل")');
+  await page.waitForSelector("text=رمز الربط غير صحيح");
+  await page.fill('input[aria-label="رمز الربط"]', "e2e-rae-pairing-token-0123456789");
+  await page.click('button:has-text("اتصل")');
+  await page.waitForSelector("text=reverse-api-engineer 9.9.9");
+  await page.selectOption('select[aria-label="المزوّد"]', "anthropic");
+  await page.fill('input[aria-label="مفتاح المزوّد"]', "sk-ant-e2e");
+  await page.click('button:has-text("احفظ")');
+  await page.waitForSelector("text=محفوظ على جهازك");
+  // Meta and TikTok sites are refused by the bridge.
+  await page.fill('input[aria-label="رابط الموقع"]', "https://www.instagram.com/someone/");
+  await page.fill('textarea[aria-label="الهدف"]', "followers");
+  await page.click('button:has-text("ابدأ التشغيل")');
+  await page.waitForSelector("text=instagram.com غير مسموح");
+  await page.fill('input[aria-label="رابط الموقع"]', "https://example.com/brokers");
+  await page.fill('textarea[aria-label="الهدف"]', "licensed brokers with name and website");
+  await page.click('button:has-text("فحص مسبق")');
+  await page.waitForSelector("text=would_run");
+  await page.click('button:has-text("ابدأ التشغيل")');
+  await page.waitForSelector("text=انتهى التشغيل", { timeout: 20_000 });
+  await page.click('button:has-text("اعرض الكود")');
+  await page.waitForSelector("[data-rae-code]");
+  assert.match(await page.textContent("[data-rae-code]"), /fetch\(/);
+  // The second tab: claude.ai through ntfy, explained, with the shared secret made in the browser.
+  await page.click('[role="tab"]:has-text("عبر claude.ai")');
+  await page.waitForSelector("text=rae_relay_capture");
+  await page.waitForSelector("[data-rae-relay-state]:has-text('--relay')");
+  await page.click('button:has-text("اصنع سراً جديداً")');
+  const relayCmd = await page.textContent('pre:has-text("--relay")');
+  assert.match(relayCmd, /--origin http:\/\/localhost:3100 --relay [\w-]{40,}/);
+  await page.click('[role="tab"]:has-text("محلي")');
+  await page.waitForSelector("[data-rae-guide]");
+  step(
+    "reverse-api-engineer window: pairing, provider key, refused sites, capture, code, two tabs",
+  );
 
   const mobile = await browser.newContext({ ...devices["iPhone 13"] });
   await mobile.addCookies(await ctx.cookies());

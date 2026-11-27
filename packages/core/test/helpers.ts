@@ -33,6 +33,7 @@ export async function setup(
     following?: FollowingSource;
     own?: OwnAccount;
     tools?: DataTools;
+    relay?: { secret: string; publish(message: string): Promise<void> };
   } = {},
 ) {
   const pg = new PGlite({ extensions: { pg_trgm } });
@@ -61,6 +62,7 @@ export async function setup(
     ...(opts.following ? { following: opts.following } : {}),
     ...(opts.own ? { own: opts.own } : {}),
     ...(opts.tools ? { tools: opts.tools } : {}),
+    ...(opts.relay ? { relay: opts.relay } : {}),
   });
   await scrapers.init();
   return {

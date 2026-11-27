@@ -1096,6 +1096,102 @@ export function buildMcpServer(rt: Runtime, opts: McpOptions = {}): McpServer {
   );
 
   server.registerTool(
+    "rae_relay_capture",
+    {
+      title: "Turn a website into an API client (on the owner's computer)",
+      description:
+        "Sends a sealed request to the owner's reverse-api-engineer bridge through ntfy: a browser on their " +
+        "computer captures the public site's traffic and the AI model they chose writes a typed API client. " +
+        "Takes several minutes; returns a job_id at once: call rae_relay_result with it after 2-3 minutes. " +
+        "Instagram, TikTok and Meta sites are refused. Needs RAE_RELAY_SECRET on the platform and the bridge " +
+        "running with --relay. Write the goal as the data wanted, not the clicks.",
+      inputSchema: z.object({
+        url: z.string().min(8).max(2000),
+        prompt: z.string().min(3).max(2000),
+        headless: z.boolean().default(true),
+        model: z.string().max(120).optional(),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.raeRelayStart({
+          url: a.url,
+          prompt: a.prompt,
+          headless: a.headless,
+          ...(a.model ? { model: a.model } : {}),
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "rae_relay_engineer",
+    {
+      title: "Improve a generated API client from its saved capture",
+      description:
+        "Asks the owner's bridge to rewrite a past run's client from the same capture, without browsing again " +
+        "(fresh=true starts over from the capture). Returns a job_id for rae_relay_result.",
+      inputSchema: z.object({
+        run_id: z.string().max(80),
+        prompt: z.string().max(2000).default(""),
+        fresh: z.boolean().default(false),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) => json(await rt.scrapers.raeRelayEngineer(a))),
+  );
+
+  server.registerTool(
+    "rae_relay_result",
+    {
+      title: "Result of a reverse-api-engineer run",
+      description:
+        "State of a relayed run (sent, accepted, done, failed) and, once done, the generated client's files " +
+        "(code and README). Generated code is model-written: show it to the owner and let them review it.",
+      inputSchema: z.object({ job_id: z.string().uuid() }),
+      annotations: { readOnlyHint: true },
+    },
+    guard(async (a) =>
+      json(
+        (await rt.scrapers.raeRelayResult(a.job_id)) ?? {
+          error: "تشغيل غير معروف أو انتهت مدته (يوم).",
+        },
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "deep_contacts",
+    {
+      title: "Search deeper for leads' email and phone",
+      description:
+        "For leads with no email and no phone (business, verified or 10k+ accounts only): reads their own website " +
+        "(home, contact and about pages) and their other accounts' descriptions, and with reread=true first reads " +
+        "the profiles again through Apify (≈ $1.60 per 1,000, say the cost first). Public information only; the " +
+        "do-not-contact list is respected; each account is searched once per 30 days. Run again while remaining > 0.",
+      inputSchema: z.object({
+        project_id: z.string().uuid().optional(),
+        job_id: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(300).default(60),
+        reread: z.boolean().default(false),
+      }),
+      annotations: { openWorldHint: true },
+    },
+    guard(async (a) =>
+      json(
+        await rt.scrapers.deepContactSearch({
+          ...(a.project_id ? { projectId: a.project_id } : {}),
+          ...(a.job_id ? { jobId: a.job_id } : {}),
+          limit: a.limit,
+          reread: a.reread,
+          budgetMs: 200_000,
+        }),
+      ),
+    ),
+  );
+
+  server.registerTool(
     "add_account",
     {
       title: "Add a lead's account on another platform",

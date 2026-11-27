@@ -98,6 +98,8 @@ const SOURCE: Record<string, string> = {
   business_button: "زر التواصل",
   bio: "البايو",
   link: "الرابط",
+  website: "موقعه",
+  account: "حساب آخر له",
 };
 const FLAGS: Record<string, string> = {
   low_engagement: "تفاعل منخفض",

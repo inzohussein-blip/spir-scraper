@@ -233,4 +233,8 @@ export interface DataTools {
   apifyActor?(actor: string, input: object, maxItems: number): Promise<Record<string, unknown>[]>;
   /** Top-level comments of a YouTube video, most relevant first (free API quota). */
   youtubeComments?(videoId: string, max: number): Promise<YouTubeComment[]>;
+  /** Reads a website's home, contact and about pages for its public emails and numbers. */
+  siteContacts?(url: string): Promise<{ emails: string[]; phones: string[] }>;
+  /** Reads public profiles again through a second reader (Apify), for the contact button. */
+  rereadProfiles?(usernames: string[]): Promise<RawProfile[]>;
 }

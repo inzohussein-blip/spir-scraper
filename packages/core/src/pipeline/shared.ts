@@ -183,10 +183,21 @@ export interface ScrapersDeps {
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
   /** Services the «المتجر» tools run on (Apify Actors, YouTube API). */
   tools?: DataTools;
+  /**
+   * The reverse-api-engineer relay: the shared secret (RAE_RELAY_SECRET) and
+   * how to publish a sealed message to the bridge's ntfy topic.
+   */
+  relay?: { secret: string; publish(message: string): Promise<void> };
 }
 
 /** The few public methods the pipeline itself calls (bound once the service exists). */
 export interface LateApi {
+  deepContactSearch(input: {
+    jobId?: string;
+    reread?: boolean;
+    limit?: number;
+    budgetMs?: number;
+  }): Promise<{ checked: number; found: number; emails: number; phones: number; costUsd: number }>;
   createEngineRun(input: {
     name: string;
     projectId: string;

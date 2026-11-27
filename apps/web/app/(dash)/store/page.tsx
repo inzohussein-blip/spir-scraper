@@ -103,7 +103,7 @@ export default async function Store({
               ضع رابط أي صفحة إنستقرام فتستخلص عملاءها مع إيميلاتهم وأرقامهم الظاهرة للعامة.
             </p>
           </div>
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
             {pinned.map((t) => (
               <div
                 key={t.id}
