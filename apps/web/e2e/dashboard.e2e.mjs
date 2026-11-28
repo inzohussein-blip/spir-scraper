@@ -326,6 +326,12 @@ try {
   // The program file is offered for download.
   const py = await (await fetch(`${B}/downloads/spir-worker.py`)).text();
   assert.match(py, /Spir home worker/);
+  // The Windows .exe is an extra choice next to it, from the home-programs release.
+  assert.match(
+    await page.getAttribute('[data-exe="worker"]', "href"),
+    /releases\/download\/home-programs\/spir-worker\.exe$/,
+  );
+  assert.ok(await page.$('a[href="/downloads/spir-worker.py"]'), "the .py download stays");
   step("home worker page: devices, encrypted proxy, change IP, program download");
 
   // Usage: every page visit and engine call above was counted by source.
@@ -440,6 +446,10 @@ try {
   assert.match(
     await page.textContent("[data-rae-guide]"),
     /rae-bridge\.py --origin http:\/\/localhost:3100/,
+  );
+  assert.match(
+    await page.getAttribute('[data-rae-guide] [data-exe="bridge"]', "href"),
+    /releases\/download\/home-programs\/rae-bridge\.exe$/,
   );
   await page.fill('input[aria-label="رمز الربط"]', "wrong-token");
   await page.click('button:has-text("اتصل")');

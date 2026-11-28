@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { EXE } from "@/lib/downloads";
 import { Badge, Card, Notice } from "./ui";
 
 type RelayState = {
@@ -175,7 +176,14 @@ export function RaeRelay() {
           <li>
             <b>شغّل الجسر بخيار الربط</b> (يبقى يعمل محلياً أيضاً كما في تبويب «محلي»):
             <Cmd>{`python rae-bridge.py --origin ${origin} --relay ${shown}`}</Cmd>
-            يكتب الجسر «claude.ai relay: waiting on https://ntfy.sh» حين يستمع.
+            أو بملف{" "}
+            <a href={EXE.bridge} data-exe="bridge" className="text-accent underline">
+              rae-bridge.exe
+            </a>{" "}
+            (اختياري):{" "}
+            <span className="ltr font-mono text-xs">{`rae-bridge.exe --origin ${origin} --relay ${shown}`}</span>
+            ، أو افتحه بنقرة مزدوجة والصق السر حين يسأل. يكتب الجسر «claude.ai relay: waiting on
+            https://ntfy.sh» حين يستمع.
           </li>
           <li>
             <b>في claude.ai:</b> منصتك مضافة أصلاً كـ connector (خادم MCP{" "}

@@ -1,0 +1,69 @@
+name: Home programs (Windows .exe)
+
+# Packages the two home programs as single Windows .exe files (an extra choice;
+# the .py downloads stay as they are):
+#   spir-worker.exe  the «العامل المنزلي» home worker (services/ig-worker/spir_worker.py)
+#   rae-bridge.exe   the reverse-api-engineer bridge (services/ig-worker/rae_bridge.py)
+# On main they are published to the «home-programs» release, which the
+# dashboard links to; on pull requests they are only built and checked.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - services/ig-worker/spir_worker.py
+      - services/ig-worker/rae_bridge.py
+      - .github/workflows/home-programs.yml
+  pull_request:
+    paths:
+      - services/ig-worker/spir_worker.py
+      - services/ig-worker/rae_bridge.py
+      - .github/workflows/home-programs.yml
+  workflow_dispatch:
+
+concurrency:
+  group: home-programs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Build the two .exe files
+        shell: bash
+        run: |
+          for pair in spir_worker:spir-worker rae_bridge:rae-bridge; do
+            src="${pair%%:*}"; out="${pair##*:}"
+            uv run --no-project --python 3.12 --with pyinstaller==6.16.0 \
+              pyinstaller --onefile --console --noconfirm --name "$out" \
+              "services/ig-worker/$src.py"
+          done
+      - name: Check they start
+        shell: bash
+        run: |
+          ./dist/spir-worker.exe --help
+          ./dist/rae-bridge.exe --help
+          cd dist && sha256sum spir-worker.exe rae-bridge.exe > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: home-programs
+          path: |
+            dist/spir-worker.exe
+            dist/rae-bridge.exe
+            dist/SHA256SUMS.txt
+      - name: Publish to the home-programs release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view home-programs >/dev/null 2>&1 || gh release create home-programs \
+            --title "Home programs (Windows .exe)" --latest=false \
+            --notes "The «العامل المنزلي» home worker and the reverse-api-engineer bridge as single Windows .exe files. Rebuilt from main whenever either program changes. The .py versions are on the dashboard."
+          gh release upload home-programs dist/spir-worker.exe dist/rae-bridge.exe dist/SHA256SUMS.txt --clobber
+          gh release edit home-programs --notes "Built from ${GITHUB_SHA::7} on $(date -u +%Y-%m-%d). The «العامل المنزلي» home worker and the reverse-api-engineer bridge as single Windows .exe files (unsigned: Windows may ask «Run anyway»). Checksums in SHA256SUMS.txt. The .py versions are on the dashboard."

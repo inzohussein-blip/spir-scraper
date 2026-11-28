@@ -854,19 +854,59 @@ def make_handler(bridge: Bridge, token: str, origins: list[str]):
     return Handler
 
 
+def _frozen() -> bool:
+    """True inside the packaged .exe (PyInstaller); the .py script never asks anything."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _ask_once(name: str, question: str, valid=None) -> str:
+    """
+    Double-clicked .exe: ask once and remember the answer in ~/.spir-rae. An
+    empty answer to an optional question (valid given) is remembered too, so
+    it is not asked again; delete the file to be asked again.
+    """
+    path = HOME / name
+    if path.exists():
+        with contextlib.suppress(OSError):
+            return path.read_text(encoding="utf-8").strip()
+    while True:
+        try:
+            answer = input(question).strip().rstrip("/")
+        except EOFError:
+            answer = ""
+        if valid is None or not answer or valid(answer):
+            break
+        print("القيمة غير صالحة، أعد المحاولة أو اضغط Enter للتخطي.")
+    if answer or valid is not None:
+        _write_private(path, answer)
+    return answer
+
+
 def serve(args) -> None:
     origins = [o.rstrip("/") for o in (args.origin or []) if o]
     if not origins:
         env_origin = os.environ.get("SPIR_PLATFORM", "").rstrip("/")
         if env_origin:
             origins = [env_origin]
+    if not origins and _frozen():
+        origins = [_ask_once("origin", "عنوان منصتك (مثل https://your-app.vercel.app): ")]
+        if not args.relay:
+            args.relay = _ask_once(
+                "relay-secret",
+                "RAE_RELAY_SECRET للربط مع claude.ai (اختياري، Enter للتخطي): ",
+                valid=lambda v: len(v) >= 24,
+            )
     if not origins:
         sys.exit("أضف عنوان منصتك: --origin https://your-app.vercel.app")
     token = load_token(args.token)
     bridge = Bridge(Rae(args.rae))
     if args.relay:
-        bridge.relay = Relay(bridge, args.relay, args.platform or origins[0], args.ntfy)
-        bridge.relay.start()
+        try:
+            bridge.relay = Relay(bridge, args.relay, args.platform or origins[0], args.ntfy)
+            bridge.relay.start()
+        except BridgeError as err:
+            # A wrong secret disables the claude.ai relay only; the window keeps working.
+            print(f"claude.ai relay off: {err}")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(bridge, token, origins))
     version = bridge.rae.version()
     print(f"spir reverse-api-engineer bridge {VERSION} on http://127.0.0.1:{args.port}")
@@ -1067,4 +1107,12 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as exc:
+        # Keep a double-clicked .exe window open long enough to read why it stopped.
+        if _frozen() and exc.code not in (0, None):
+            print(exc.code)
+            with contextlib.suppress(EOFError):
+                input("اضغط Enter للإغلاق")
+        raise

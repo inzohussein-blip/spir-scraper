@@ -453,12 +453,38 @@ def worker_id(path: Path) -> str:
         return wid
 
 
+def _frozen() -> bool:
+    """True inside the packaged .exe (PyInstaller); the .py script never asks anything."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _ask_once(args) -> None:
+    """Double-clicked .exe: ask for the address and key once, and remember them."""
+    saved_path = Path.home() / ".spir-worker-exe.json"
+    try:
+        saved = json.loads(saved_path.read_text())
+    except (OSError, ValueError):
+        saved = {}
+    if not args.platform:
+        args.platform = (
+            saved.get("platform")
+            or input("عنوان المنصة (مثل https://your-app.vercel.app): ").strip()
+        )
+    if not args.key and not os.environ.get("WORKER_SHARED_SECRET"):
+        args.key = saved.get("key") or input("مفتاح العامل (من صفحة «العامل المنزلي»): ").strip()
+    with contextlib.suppress(OSError):
+        saved_path.write_text(json.dumps({"platform": args.platform, "key": args.key}))
+        os.chmod(saved_path, 0o600)
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(description="Spir home worker")
     ap.add_argument("--platform", default=os.environ.get("PLATFORM_URL", ""))
     ap.add_argument("--key", default=os.environ.get("SPIR_KEY", ""))
     ap.add_argument("--name", default=os.environ.get("WORKER_NAME", socket.gethostname()))
     args = ap.parse_args(argv)
+    if _frozen():
+        _ask_once(args)
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(message)s",
@@ -488,4 +514,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as exc:
+        # Keep a double-clicked .exe window open long enough to read why it stopped.
+        if _frozen() and exc.code not in (0, None):
+            print(exc.code)
+            with contextlib.suppress(EOFError):
+                input("اضغط Enter للإغلاق")
+        raise
